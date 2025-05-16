@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - "main"
+      - 'main'
     tags:
-      - "v*"
+      - 'v*'
   pull_request:
     branches:
-      - "master"
+      - 'main'
 
 # Defines two custom environment variables for the workflow. These are used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -53,7 +53,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != "pull_request" }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       
