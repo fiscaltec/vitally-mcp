@@ -1,5 +1,5 @@
 {
-  "name": "vitally mcp",
+  "name": "vitally-mcp",
   "version": "0.1.0",
   "description": "MCP for vitally",
   "private": true,
@@ -14,7 +14,7 @@
     "build"
   ],
   "scripts": {
-    "build": "tsc && node --eval \"import('fs').then(fs => fs.chmodSync('build/index.js', '755'))\"",
+    "build": "tsc",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
