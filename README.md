@@ -65,14 +65,42 @@ This will open the MCP Inspector interface where you can interact with your serv
    - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
    - On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-2. Edit the config file to add the Vitally MCP server:
+2. Edit the config file to add the Vitally MCP server (for use localy):
    ```json
    {
      "mcpServers": {
-       "vitally-api": {
+       "vitally-mcp": {
          "command": "node",
          "args": ["--experimental-modules", "--experimental-specifier-resolution=node", "/Users/johnjung/nylas/vitally/vitally/build/index.js"]
        }
+     }
+   }
+   ```
+
+3. Edit the config file to add the Vitally MCP server (for use with Docker):
+   ```json
+   {
+     "mcpServers": {
+       "vitally-mcp": {
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "-i",
+                "-e",
+                "VITALLY_API_SUBDOMAIN",
+                "-e",
+                "VITALLY_API_KEY",
+                "-e",
+                "VITALLY_DATA_CENTER",
+                "ghcr.io/fiscaltec/vitally-mcp"
+            ],
+            "env": {
+                "VITALLY_API_SUBDOMAIN": "VITALLY_API_SUBDOMAIN",
+                "VITALLY_API_KEY": "VITALLY_API_KEY",
+                "VITALLY_DATA_CENTER": "VITALLY_DATA_CENTER"
+            }
+        }
      }
    }
    ```
