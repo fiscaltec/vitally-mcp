@@ -62,7 +62,7 @@ npm run inspector
 
 This will open the MCP Inspector interface where you can interact with your server.
 
-### Running the MCP Locally
+### Running the MCP locally
 
 1. First, find your Claude Desktop configuration file:
    - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -83,7 +83,7 @@ This will open the MCP Inspector interface where you can interact with your serv
 
 3. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
 
-### Runninf the MCP via Docker
+### Running the MCP via Docker
 
 1. Edit the config file to add the Vitally MCP server from the GitHub package repository:
 
@@ -169,4 +169,4 @@ All rightts go to [John Jung](<https://github.com/johnjjung/vitally-mcp>).
 
 ## Notes
 
-Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>)., if you find an issue or if you would like an improvement.
+Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>) if you find an issue or if you would like an improvement.
