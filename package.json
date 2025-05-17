@@ -1,7 +1,7 @@
 {
   "name": "vitally-mcp",
-  "version": "0.1.0",
-  "description": "MCP for vitally",
+  "version": "1.0.1",
+  "description": "MCP for Vitally",
   "private": true,
   "type": "module",
   "author": "John Jung & Dan Searle",
