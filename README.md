@@ -169,4 +169,5 @@ All rightts go to [John Jung](<https://github.com/johnjjung/vitally-mcp>).
 
 ## Notes
 
-Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>) if you find an issue or if you would like an improvement.
+- This has only been tested with Claude Desktop as of this moment however, is likely to woth with others but the configuration may not translate and is untested.
+- Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>) if you find an issue or if you would like an improvement.
