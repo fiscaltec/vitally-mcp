@@ -73,7 +73,7 @@ This will open the MCP Inspector interface where you can interact with your serv
    ```json
    {
      "mcpServers": {
-       "vitally-mcp": {
+       "vitally": {
          "command": "node",
          "args": ["--experimental-modules", "--experimental-specifier-resolution=node", "/Users/johnjung/nylas/vitally/vitally/build/index.js"]
        }
@@ -90,7 +90,7 @@ This will open the MCP Inspector interface where you can interact with your serv
    ```json
    {
      "mcpServers": {
-       "vitally-mcp": {
+       "vitally": {
             "command": "docker",
             "args": [
                 "run",
