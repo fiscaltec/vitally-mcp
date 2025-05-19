@@ -1,12 +1,12 @@
 {
   "name": "vitally-mcp",
-  "version": "0.1.0",
-  "description": "MCP for vitally",
+  "version": "1.0.1",
+  "description": "MCP for Vitally",
   "private": true,
   "type": "module",
-  "author": "John Jung",
+  "author": "John Jung & Dan Searle",
   "license": "MIT",
-  "copyright": "Copyright (c) 2024 John Jung",
+  "copyright": "Copyright (c) 2024 John Jung & Dan Searle",
   "bin": {
     "vitally mcp": "./build/index.js"
   },
