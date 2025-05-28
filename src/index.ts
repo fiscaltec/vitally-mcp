@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Copyright (c) 2024 John Jung
+ * Copyright (c) 2024 John Jung & Dan Searle
  * 
- * Vitally MCP Server
+ * Vitally MCP Server - Enhanced with Improved Pagination
  * 
  * This MCP server connects to the Vitally API to provide customer information.
  * It allows:
@@ -11,6 +11,8 @@
  * - Reading account details
  * - Searching for users
  * - Querying account health scores
+ * 
+ * Enhanced with robust pagination support, better error handling, and user control
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -87,6 +89,18 @@ interface VitallyNote {
   [key: string]: any;
 }
 
+// Enhanced pagination options interface
+interface PaginationOptions {
+  /** Maximum number of items per page request */
+  pageLimit?: number;
+  /** Maximum total items to fetch across all pages */
+  maxItems?: number;
+  /** Maximum number of pages to fetch */
+  maxPages?: number;
+  /** Whether to fetch all available data */
+  fetchAll?: boolean;
+}
+
 // Load environment variables
 const envPath = path.resolve(process.cwd(), '.env');
 if (fs.existsSync(envPath)) {
@@ -106,6 +120,11 @@ const API_BASE_URL = VITALLY_DATA_CENTER === 'EU'
   ? 'https://rest.vitally-eu.io'
   : `https://${VITALLY_SUBDOMAIN}.rest.vitally.io`;
 
+// Default pagination limits - more conservative and user-friendly
+const DEFAULT_PAGE_LIMIT = 50;
+const DEFAULT_MAX_ITEMS = 200;
+const MAX_PAGES_TO_FETCH = 10;
+
 // Validation
 if (!VITALLY_API_KEY || VITALLY_API_KEY === 'your_api_key_here') {
   console.error('Error: VITALLY_API_KEY is not set or is using the default placeholder value');
@@ -124,15 +143,20 @@ if (!VITALLY_API_KEY || VITALLY_API_KEY === 'your_api_key_here') {
 const AUTH_HEADER = `Basic ${Buffer.from(`${VITALLY_API_KEY}:`).toString('base64')}`;
 
 /**
- * Helper function to make authenticated requests to the Vitally API
+ * Enhanced helper function to make authenticated requests to the Vitally API
+ * Now handles both relative endpoints and absolute URLs
  */
-async function callVitallyAPI<T>(endpoint: string, method = 'GET', body?: any): Promise<T> {
+async function callVitallyAPI<T>(urlOrEndpoint: string, method = 'GET', body?: any): Promise<T> {
   // Check if we're in demo mode due to missing API key
   if (!VITALLY_API_KEY || VITALLY_API_KEY === 'your_api_key_here') {
-    return mockApiResponse(endpoint, method, body);
+    return mockApiResponse(urlOrEndpoint, method, body);
   }
 
-  const url = `${API_BASE_URL}${endpoint}`;
+  // Handle both absolute URLs and relative endpoints
+  const url = urlOrEndpoint.startsWith('http')
+    ? urlOrEndpoint
+    : `${API_BASE_URL}${urlOrEndpoint}`;
+
   const options: any = {
     method,
     headers: {
@@ -161,35 +185,176 @@ async function callVitallyAPI<T>(endpoint: string, method = 'GET', body?: any): 
 }
 
 /**
- * Mock API response for demo mode when API key is not available
+ * Improved helper function to fetch paginated results with better control
+ * @param initialEndpoint The initial API endpoint to call
+ * @param options Pagination configuration options
+ * @returns Paginated results with metadata
+ */
+async function fetchPaginatedResults<T>(
+  initialEndpoint: string,
+  options: PaginationOptions = {}
+): Promise<{
+  results: T[];
+  totalFetched: number;
+  pagesFetched: number;
+  hasMoreData: boolean;
+  lastNextUrl: string | null;
+}> {
+  const {
+    pageLimit = DEFAULT_PAGE_LIMIT,
+    maxItems = DEFAULT_MAX_ITEMS,
+    maxPages = MAX_PAGES_TO_FETCH,
+    fetchAll = false
+  } = options;
+
+  // Build initial endpoint with limit parameter
+  const separator = initialEndpoint.includes('?') ? '&' : '?';
+  let nextUrl: string | null = `${initialEndpoint}${separator}limit=${pageLimit}`;
+
+  let allResults: T[] = [];
+  let pageCount = 0;
+  const startTime = Date.now();
+
+  try {
+    while (nextUrl && pageCount < maxPages && allResults.length < maxItems) {
+      console.error(`Fetching page ${pageCount + 1}: ${nextUrl.length > 100 ? nextUrl.substring(0, 100) + '...' : nextUrl}`);
+
+      const response: VitallyPaginatedResponse<T> = await callVitallyAPI<VitallyPaginatedResponse<T>>(nextUrl);
+
+      if (response.results && response.results.length > 0) {
+        // Respect maxItems limit
+        const remainingSlots = maxItems - allResults.length;
+        const resultsToAdd = response.results.slice(0, remainingSlots);
+        allResults = [...allResults, ...resultsToAdd];
+      }
+
+      nextUrl = response.next;
+      pageCount++;
+
+      // If not fetching all data and we have some results, consider stopping early
+      if (!fetchAll && allResults.length >= pageLimit) {
+        break;
+      }
+
+      // Add small delay to respect rate limits (only after first page)
+      if (nextUrl && pageCount > 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.error(`Pagination complete: ${pageCount} pages, ${allResults.length} items in ${duration}ms`);
+
+    if (nextUrl && pageCount >= maxPages) {
+      console.error(`Warning: Reached maximum page limit (${maxPages}). Some data may be missing.`);
+    }
+
+    return {
+      results: allResults,
+      totalFetched: allResults.length,
+      pagesFetched: pageCount,
+      hasMoreData: nextUrl !== null,
+      lastNextUrl: nextUrl
+    };
+
+  } catch (error) {
+    console.error(`Pagination failed after ${pageCount} pages with ${allResults.length} items:`, error);
+
+    // Return partial results if we have some data
+    if (allResults.length > 0) {
+      console.error(`Returning ${allResults.length} partial results due to error`);
+      return {
+        results: allResults,
+        totalFetched: allResults.length,
+        pagesFetched: pageCount,
+        hasMoreData: true, // Assume more data exists since we failed
+        lastNextUrl: nextUrl
+      };
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Generate simplified mock paginated response using opaque page tokens
+ */
+function generateMockPaginatedResponse<T>(
+  allData: T[],
+  endpoint: string,
+  defaultPageSize: number = 10
+): VitallyPaginatedResponse<T> {
+  const url = new URL(`http://example.com${endpoint}`);
+  const pageToken = url.searchParams.get('pageToken') || '0';
+  const limit = parseInt(url.searchParams.get('limit') || defaultPageSize.toString());
+
+  const startIndex = parseInt(pageToken);
+  const endIndex = Math.min(startIndex + limit, allData.length);
+  const hasNext = endIndex < allData.length;
+
+  const results = allData.slice(startIndex, endIndex);
+
+  // Generate opaque next token (simulating real API behavior)
+  let nextUrl: string | null = null;
+  if (hasNext) {
+    const nextToken = btoa(`${endpoint}:${endIndex}`).substring(0, 12);
+    const baseEndpoint = endpoint.split('?')[0];
+    const existingParams = new URLSearchParams(url.search);
+    existingParams.set('pageToken', nextToken);
+    existingParams.set('limit', limit.toString());
+    nextUrl = `${baseEndpoint}?${existingParams.toString()}`;
+  }
+
+  return {
+    results,
+    next: nextUrl
+  };
+}
+
+/**
+ * Enhanced mock API response for demo mode
  */
 function mockApiResponse<T>(endpoint: string, method = 'GET', body?: any): T {
   console.error(`DEMO MODE: Mock API call to ${endpoint} [${method}]`);
 
-  // Mock accounts
-  const mockAccounts = [
-    { id: "1", name: "Acme Corporation", externalId: "acme-corp" },
-    { id: "2", name: "Globex Industries", externalId: "globex" },
-    { id: "3", name: "Initech Technologies", externalId: "initech" },
-    { id: "4", name: "Umbrella Corporation", externalId: "umbrella" },
-    { id: "5", name: "Stark Industries", externalId: "stark" }
-  ];
-
-  // Mock users
-  const mockUsers = [
-    { id: "101", name: "John Doe", email: "john@acme-corp.com", externalId: "user-101", accountId: "1" },
-    { id: "102", name: "Jane Smith", email: "jane@globex.com", externalId: "user-102", accountId: "2" },
-    { id: "103", name: "Mike Johnson", email: "mike@initech.com", externalId: "user-103", accountId: "3" }
-  ];
-
-  // Handle different endpoints
-  if (endpoint === '/resources/accounts') {
-    return {
-      results: mockAccounts,
-      next: null
-    } as unknown as T;
+  // Generate comprehensive mock data for testing
+  const mockAccounts: VitallyAccount[] = [];
+  for (let i = 1; i <= 50; i++) {
+    mockAccounts.push({
+      id: i.toString(),
+      name: i <= 5 ?
+        ['Acme Corporation', 'Globex Industries', 'Initech Technologies', 'Umbrella Corporation', 'Stark Industries'][i - 1] :
+        `Test Company ${i}`,
+      externalId: i <= 5 ?
+        ['acme-corp', 'globex', 'initech', 'umbrella', 'stark'][i - 1] :
+        `test-${i}`
+    });
   }
 
+  const mockUsers: VitallyUser[] = [];
+  for (let i = 101; i <= 150; i++) {
+    mockUsers.push({
+      id: i.toString(),
+      name: `Test User ${i}`,
+      email: `user${i}@example.com`,
+      externalId: `user-${i}`,
+      accountId: Math.ceil((i - 100) / 3).toString()
+    });
+  }
+
+  // Handle accounts endpoint
+  if (endpoint === '/resources/accounts' || endpoint.startsWith('/resources/accounts?')) {
+    return generateMockPaginatedResponse(mockAccounts, endpoint, 10) as unknown as T;
+  }
+
+  // Handle individual account lookup
+  if (endpoint.startsWith('/resources/accounts/') && !endpoint.includes('/', 20)) {
+    const accountId = endpoint.split('/')[3];
+    const account = mockAccounts.find(a => a.id === accountId);
+    return account as unknown as T;
+  }
+
+  // Handle health scores
   if (endpoint.startsWith('/resources/accounts/') && endpoint.endsWith('/healthScores')) {
     const accountId = endpoint.split('/')[3];
     return {
@@ -203,44 +368,120 @@ function mockApiResponse<T>(endpoint: string, method = 'GET', body?: any): T {
     } as unknown as T;
   }
 
-  if (endpoint.startsWith('/resources/accounts/') && !endpoint.includes('/')) {
-    const accountId = endpoint.split('/')[3];
-    const account = mockAccounts.find(a => a.id === accountId);
-    return account as unknown as T;
-  }
-
+  // Handle user search
   if (endpoint.startsWith('/resources/users/search')) {
-    return {
-      results: mockUsers,
-      next: null
-    } as unknown as T;
+    const url = new URL(`http://example.com${endpoint}`);
+    const email = url.searchParams.get('email');
+    const externalId = url.searchParams.get('externalId');
+    const emailSubdomain = url.searchParams.get('emailSubdomain');
+
+    let filteredUsers = [...mockUsers];
+
+    if (email) {
+      filteredUsers = filteredUsers.filter(user => user.email && user.email.includes(email));
+    }
+    if (externalId) {
+      filteredUsers = filteredUsers.filter(user => user.externalId === externalId);
+    }
+    if (emailSubdomain) {
+      filteredUsers = filteredUsers.filter(user =>
+        user.email && user.email.split('@')[1].startsWith(emailSubdomain)
+      );
+    }
+
+    return generateMockPaginatedResponse(filteredUsers, endpoint, 10) as unknown as T;
   }
 
+  // Handle conversations
   if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/conversations')) {
-    return {
-      results: [
-        { id: "c1", subject: "Product Feedback", createdAt: "2023-01-15T10:30:00Z", updatedAt: "2023-01-16T15:45:00Z" },
-        { id: "c2", subject: "Support Question", createdAt: "2023-02-22T09:15:00Z", updatedAt: "2023-02-23T11:30:00Z" }
-      ],
-      next: null
-    } as unknown as T;
+    const accountId = endpoint.split('/')[3];
+    const mockConversations: VitallyConversation[] = [];
+
+    for (let i = 1; i <= 30; i++) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+
+      mockConversations.push({
+        id: `c${accountId}-${i}`,
+        subject: `Conversation ${i} for Account ${accountId}`,
+        createdAt: date.toISOString(),
+        updatedAt: date.toISOString()
+      });
+    }
+
+    return generateMockPaginatedResponse(mockConversations, endpoint, 10) as unknown as T;
   }
 
+  // Handle tasks
   if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/tasks')) {
-    return {
-      results: [
-        { id: "t1", title: "Follow-up Call", description: "Schedule follow-up for new feature", status: "open", createdAt: "2023-03-10T14:20:00Z", updatedAt: "2023-03-10T14:20:00Z" },
-        { id: "t2", title: "Renewal Discussion", description: "Discuss upcoming renewal", status: "completed", createdAt: "2023-02-05T11:00:00Z", updatedAt: "2023-02-28T16:45:00Z" }
-      ],
-      next: null
-    } as unknown as T;
+    const accountId = endpoint.split('/')[3];
+    const url = new URL(`http://example.com${endpoint}`);
+    const status = url.searchParams.get('status');
+
+    const mockTasks: VitallyTask[] = [];
+
+    for (let i = 1; i <= 40; i++) {
+      const isCompleted = i % 3 === 0;
+      const taskStatus = isCompleted ? 'completed' : 'open';
+
+      if (status && status !== taskStatus) {
+        continue;
+      }
+
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+
+      mockTasks.push({
+        id: `t${accountId}-${i}`,
+        title: `Task ${i} for Account ${accountId}`,
+        description: `Description for task ${i}`,
+        status: taskStatus,
+        dueDate: new Date(date.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        createdAt: date.toISOString(),
+        updatedAt: date.toISOString()
+      });
+    }
+
+    return generateMockPaginatedResponse(mockTasks, endpoint, 10) as unknown as T;
   }
 
+  // Handle notes (GET)
+  if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/notes') && method === 'GET') {
+    const accountId = endpoint.split('/')[3];
+    const mockNotes: VitallyNote[] = [];
+
+    for (let i = 1; i <= 25; i++) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+
+      mockNotes.push({
+        id: `n${accountId}-${i}`,
+        content: `This is note ${i} for account ${accountId}. Sample content for testing.`,
+        createdAt: date.toISOString(),
+        updatedAt: date.toISOString()
+      });
+    }
+
+    return generateMockPaginatedResponse(mockNotes, endpoint, 10) as unknown as T;
+  }
+
+  // Handle note creation (POST)
   if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/notes') && method === 'POST') {
     return {
-      id: "n1",
+      id: `n${Date.now()}`,
       content: body.content,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    } as unknown as T;
+  }
+
+  // Handle individual note lookup
+  if (endpoint.startsWith('/resources/notes/')) {
+    const noteId = endpoint.split('/')[3];
+    return {
+      id: noteId,
+      content: `Content for note ${noteId}`,
+      createdAt: new Date(Date.now() - 86400000).toISOString(),
       updatedAt: new Date().toISOString()
     } as unknown as T;
   }
@@ -248,9 +489,32 @@ function mockApiResponse<T>(endpoint: string, method = 'GET', body?: any): T {
   return {} as T;
 }
 
-// In-memory cache for accounts and users
+// In-memory cache for accounts
 let accountsCache: VitallyAccount[] = [];
-let usersCache: VitallyUser[] = [];
+let accountsCacheTimestamp: number = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Get cached accounts or fetch fresh data if cache is stale
+ */
+async function getCachedAccounts(forceRefresh: boolean = false): Promise<VitallyAccount[]> {
+  const now = Date.now();
+  const cacheIsStale = (now - accountsCacheTimestamp) > CACHE_TTL;
+
+  if (forceRefresh || accountsCache.length === 0 || cacheIsStale) {
+    console.error('Refreshing accounts cache...');
+    const result = await fetchPaginatedResults<VitallyAccount>('/resources/accounts', {
+      fetchAll: true,
+      maxItems: 1000,
+      pageLimit: 100
+    });
+    accountsCache = result.results;
+    accountsCacheTimestamp = now;
+    console.error(`Cached ${accountsCache.length} accounts`);
+  }
+
+  return accountsCache;
+}
 
 /**
  * Create an MCP server with capabilities for resources and tools
@@ -258,23 +522,13 @@ let usersCache: VitallyUser[] = [];
 const server = new Server(
   {
     name: "vitally-api",
-    version: "0.1.0",
-    transport: {
-      type: "http-stream",
-      options: {
-        port: 1337,
-        cors: {
-          allowOrigin: "*"
-        }
-      }
-    },
+    version: "0.3.0", // Updated version for improved pagination
   },
   {
     capabilities: {
       resources: {},
       tools: {},
     },
-
   }
 );
 
@@ -283,14 +537,10 @@ const server = new Server(
  */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
   try {
-    // Fetch accounts from Vitally API if not cached
-    if (accountsCache.length === 0) {
-      const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-      accountsCache = response.results || [];
-    }
+    const accounts = await getCachedAccounts();
 
     return {
-      resources: accountsCache.map(account => ({
+      resources: accounts.map(account => ({
         uri: `vitally://account/${account.id}`,
         mimeType: "application/json",
         name: account.name,
@@ -365,6 +615,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           emailSubdomain: {
             type: "string",
             description: "Email subdomain to search for"
+          },
+          maxResults: {
+            type: "number",
+            description: "Maximum number of results to return (default: 200)"
           }
         }
       }
@@ -385,7 +639,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           limit: {
             type: "number",
-            description: "Maximum number of results (default: 10)"
+            description: "Maximum number of results (default: 50)"
           }
         }
       }
@@ -430,7 +684,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           limit: {
             type: "number",
-            description: "Maximum number of conversations to return (default: 10)"
+            description: "Maximum number of conversations to return (default: 50)"
+          },
+          fetchAll: {
+            type: "boolean",
+            description: "Whether to fetch all available conversations (default: false)"
           }
         },
         required: ["accountId"]
@@ -452,7 +710,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           limit: {
             type: "number",
-            description: "Maximum number of tasks to return (default: 10)"
+            description: "Maximum number of tasks to return (default: 50)"
+          },
+          fetchAll: {
+            type: "boolean",
+            description: "Whether to fetch all available tasks (default: false)"
           }
         },
         required: ["accountId"]
@@ -470,7 +732,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           limit: {
             type: "number",
-            description: "Maximum number of notes to return (default: 10)"
+            description: "Maximum number of notes to return (default: 50)"
+          },
+          fetchAll: {
+            type: "boolean",
+            description: "Whether to fetch all available notes (default: false)"
           }
         },
         required: ["accountId"]
@@ -514,9 +780,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       inputSchema: {
         type: "object",
         properties: {
-          limit: {
-            type: "number",
-            description: "Maximum number of accounts to fetch (default: 100)"
+          forceRefresh: {
+            type: "boolean",
+            description: "Force refresh even if cache is not stale (default: false)"
           }
         }
       }
@@ -588,7 +854,7 @@ const AVAILABLE_TOOLS = [
 ];
 
 /**
- * Handler for tool calls
+ * Handler for tool calls with enhanced pagination support
  */
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (request.params.name) {
@@ -598,7 +864,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Keyword is required");
       }
 
-      // Filter tools by keyword from our predefined list
       const matchingTools = AVAILABLE_TOOLS.filter(tool =>
         tool.name.toLowerCase().includes(keyword) ||
         tool.description.toLowerCase().includes(keyword)
@@ -628,23 +893,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const email = request.params.arguments?.email as string | undefined;
       const externalId = request.params.arguments?.externalId as string | undefined;
       const emailSubdomain = request.params.arguments?.emailSubdomain as string | undefined;
+      const maxResults = request.params.arguments?.maxResults as number || DEFAULT_MAX_ITEMS;
 
       if (!email && !externalId && !emailSubdomain) {
         throw new Error("At least one search parameter (email, externalId, or emailSubdomain) is required");
       }
 
-      // Build query parameters
       const queryParams = new URLSearchParams();
       if (email) queryParams.append('email', email);
       if (externalId) queryParams.append('externalId', externalId);
       if (emailSubdomain) queryParams.append('emailSubdomain', emailSubdomain);
 
       try {
-        const users = await callVitallyAPI<VitallyPaginatedResponse<VitallyUser>>(`/resources/users/search?${queryParams}`);
+        const result = await fetchPaginatedResults<VitallyUser>(`/resources/users/search?${queryParams}`, {
+          maxItems: maxResults,
+          fetchAll: false
+        });
+
         return {
           content: [{
             type: "text",
-            text: JSON.stringify(users, null, 2)
+            text: JSON.stringify({
+              count: result.totalFetched,
+              hasMoreData: result.hasMoreData,
+              pagesFetched: result.pagesFetched,
+              users: result.results
+            }, null, 2)
           }]
         };
       } catch (error) {
@@ -655,21 +929,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "search_accounts": {
       const name = request.params.arguments?.name as string | undefined;
       const externalId = request.params.arguments?.externalId as string | undefined;
-      const limit = request.params.arguments?.limit as number || 10;
+      const limit = request.params.arguments?.limit as number || DEFAULT_PAGE_LIMIT;
 
       if (!name && !externalId) {
         throw new Error("At least one search parameter (name or externalId) is required");
       }
 
       try {
-        // Ensure accounts are loaded
-        if (accountsCache.length === 0) {
-          const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-          accountsCache = response.results || [];
-        }
-
-        // Filter accounts by criteria
-        let filteredAccounts = [...accountsCache];
+        const accounts = await getCachedAccounts();
+        let filteredAccounts = [...accounts];
 
         if (name) {
           const nameToMatch = name.toLowerCase();
@@ -684,7 +952,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
 
-        // Limit results
         const limitedAccounts = filteredAccounts.slice(0, limit);
 
         if (limitedAccounts.length === 0) {
@@ -742,15 +1009,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        // Ensure accounts are loaded
-        if (accountsCache.length === 0) {
-          const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-          accountsCache = response.results || [];
-        }
-
-        // Search for accounts with matching names (case insensitive)
+        const accounts = await getCachedAccounts();
         const nameToMatch = name.toLowerCase();
-        const matchingAccounts = accountsCache.filter(account =>
+        const matchingAccounts = accounts.filter(account =>
           account.name.toLowerCase().includes(nameToMatch)
         );
 
@@ -763,7 +1024,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Return formatted account information
         return {
           content: [{
             type: "text",
@@ -785,26 +1045,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_account_conversations": {
       const accountId = request.params.arguments?.accountId as string;
-      const limit = request.params.arguments?.limit as number || 10;
+      const limit = request.params.arguments?.limit as number || DEFAULT_PAGE_LIMIT;
+      const fetchAll = request.params.arguments?.fetchAll as boolean || false;
 
       if (!accountId) {
         throw new Error("Account ID is required");
       }
 
       try {
-        const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
-
-        const conversations = await callVitallyAPI<VitallyPaginatedResponse<VitallyConversation>>(
-          `/resources/accounts/${accountId}/conversations?${queryParams}`
+        const result = await fetchPaginatedResults<VitallyConversation>(
+          `/resources/accounts/${accountId}/conversations`,
+          {
+            maxItems: fetchAll ? 1000 : limit,
+            fetchAll,
+            pageLimit: DEFAULT_PAGE_LIMIT
+          }
         );
 
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              count: conversations.results.length,
-              conversations: conversations.results.map(conv => ({
+              count: result.totalFetched,
+              hasMoreData: result.hasMoreData,
+              pagesFetched: result.pagesFetched,
+              conversations: result.results.map(conv => ({
                 id: conv.id,
                 subject: conv.subject,
                 createdAt: conv.createdAt,
@@ -821,7 +1086,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "get_account_tasks": {
       const accountId = request.params.arguments?.accountId as string;
       const status = request.params.arguments?.status as string | undefined;
-      const limit = request.params.arguments?.limit as number || 10;
+      const limit = request.params.arguments?.limit as number || DEFAULT_PAGE_LIMIT;
+      const fetchAll = request.params.arguments?.fetchAll as boolean || false;
 
       if (!accountId) {
         throw new Error("Account ID is required");
@@ -829,21 +1095,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
         if (status) {
           queryParams.append('status', status);
         }
 
-        const tasks = await callVitallyAPI<VitallyPaginatedResponse<VitallyTask>>(
-          `/resources/accounts/${accountId}/tasks?${queryParams}`
+        const result = await fetchPaginatedResults<VitallyTask>(
+          `/resources/accounts/${accountId}/tasks?${queryParams}`,
+          {
+            maxItems: fetchAll ? 1000 : limit,
+            fetchAll,
+            pageLimit: DEFAULT_PAGE_LIMIT
+          }
         );
 
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              count: tasks.results.length,
-              tasks: tasks.results.map(task => ({
+              count: result.totalFetched,
+              hasMoreData: result.hasMoreData,
+              pagesFetched: result.pagesFetched,
+              tasks: result.results.map(task => ({
                 id: task.id,
                 title: task.title,
                 description: task.description,
@@ -862,26 +1134,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_account_notes": {
       const accountId = request.params.arguments?.accountId as string;
-      const limit = request.params.arguments?.limit as number || 10;
+      const limit = request.params.arguments?.limit as number || DEFAULT_PAGE_LIMIT;
+      const fetchAll = request.params.arguments?.fetchAll as boolean || false;
 
       if (!accountId) {
         throw new Error("Account ID is required");
       }
 
       try {
-        const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
-
-        const notes = await callVitallyAPI<VitallyPaginatedResponse<VitallyNote>>(
-          `/resources/accounts/${accountId}/notes?${queryParams}`
+        const result = await fetchPaginatedResults<VitallyNote>(
+          `/resources/accounts/${accountId}/notes`,
+          {
+            maxItems: fetchAll ? 1000 : limit,
+            fetchAll,
+            pageLimit: DEFAULT_PAGE_LIMIT
+          }
         );
 
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              count: notes.results.length,
-              notes: notes.results.map(note => ({
+              count: result.totalFetched,
+              hasMoreData: result.hasMoreData,
+              pagesFetched: result.pagesFetched,
+              notes: result.results.map(note => ({
                 id: note.id,
                 content: note.content,
                 createdAt: note.createdAt,
@@ -949,19 +1226,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "refresh_accounts": {
       try {
-        const limit = request.params.arguments?.limit as number || 100;
-        const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>(`/resources/accounts?limit=${limit}`);
-        accountsCache = response.results || [];
+        const forceRefresh = request.params.arguments?.forceRefresh as boolean || false;
+        const accounts = await getCachedAccounts(forceRefresh);
 
-        // Format summary information about accounts
         const summary = {
-          count: accountsCache.length,
-          accounts: accountsCache.map(account => ({
+          count: accounts.length,
+          cacheRefreshed: forceRefresh || accountsCache.length === 0,
+          accounts: accounts.slice(0, 20).map(account => ({
             id: account.id,
             name: account.name,
             externalId: account.externalId
           }))
         };
+
+        if (accounts.length > 20) {
+          summary.accounts.push({
+            id: "...",
+            name: `... and ${accounts.length - 20} more accounts`,
+            externalId: "..."
+          } as any);
+        }
 
         return {
           content: [{
@@ -985,6 +1269,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  console.error('Vitally MCP Server v0.3.0 started with enhanced pagination support');
 }
 
 main().catch((error) => {
