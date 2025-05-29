@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "jest",
-    "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+    "inspector": "npx @modelcontextprotocol/inspector dist/index.js"
   },
   "keywords": [
     "mcp",
