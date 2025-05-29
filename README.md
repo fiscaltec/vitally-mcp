@@ -1,173 +1,377 @@
-<!-- Copyright (c) 2024 John Jung -->
-
 # Vitally MCP Server
 
-An MCP (Model Context Protocol) server that provides access to Vitally customer data via the Vitally API.
+A Model Context Protocol (MCP) server that provides seamless integration with the Vitally customer success platform. This server enables you to query and interact with your Vitally data through standardised MCP tools, resources, and prompts.
 
 ## Features
 
-- List customer accounts as resources
-- Read account details
-- Search for users by email or external ID
-- Find accounts by name
-- Query account health scores
-- View account conversations and tasks
-- Create notes for accounts
-- Search through available tools
-- Demo mode with mock data when no API key is provided
+### Tools
 
-## Setup for running locally
+- **Account Management**: List, search, and retrieve account information with full pagination support
+- **User Management**: Access user data and associated records  
+- **Task Management**: List, create, and manage tasks with filtering and pagination
+- **Notes**: Access and create customer notes with pagination
+- **Conversations**: Retrieve customer conversation history with pagination
+- **Organizations & Projects**: Access organizational data and project information with pagination
+- **NPS Responses**: Query Net Promoter Score feedback with pagination
+- **Pagination Helper**: Advanced tool to automatically fetch multiple pages of data
 
-1. Install dependencies:
+### Pagination Features
 
-   ```node
-   npm install
-   ```
+- **Cursor-based pagination**: Efficient pagination using Vitally's cursor system
+- **Rate limit awareness**: Automatic rate limit monitoring and reporting
+- **Configurable limits**: Support for 1-100 items per page (API maximum)
+- **Sort options**: Sort by `updatedAt` (default) or `createdAt`
+- **Bulk fetching**: `paginate-all` tool for fetching multiple pages automatically
+- **Pagination metadata**: Detailed pagination information in responses
 
-2. Create a `.env` file in the root directory with the following:
+### Resources
 
-   ```text
-   # Vitally API Configuration
-   VITALLY_API_SUBDOMAIN=nylas  # Your Vitally subdomain
-   VITALLY_API_KEY=your_api_key_here  # Your Vitally API key
-   VITALLY_DATA_CENTER=US  # or EU depending on your data center
-   ```
+- **Account Summary**: Comprehensive account overview with recent activity
+- **Organization Summary**: Organization details with associated accounts and activity
+- **Health Check**: Server status and API connectivity verification
 
-3. Build the project:
+### Prompts
 
-   ```node
-   npm run build
-   ```
+- **Account Health Check**: Automated account health analysis
+- **Weekly Account Report**: Structured weekly account reporting
 
-> **Note:** If you don't have a Vitally API key yet, the server will run in demo mode with mock data.
+## Prerequisites
 
-## Getting your Vitally API Key
+- Node.js 18 or higher
+- A Vitally account with API access
+- Vitally API credentials (subdomain and API key)
 
-1. Navigate to your Vitally account
-2. Go to Settings (⚙️) > Integrations > (new page) Vitally REST API
-3. Toggle the switch to enable the integration
-4. Copy the API Key (Secret Token)
+## Installation
+
+1. **Clone or create the project structure**:
+
+```bash
+mkdir vitally-mcp-server
+cd vitally-mcp-server
+```
+
+2. **Install dependencies**:
+
+```bash
+npm install
+```
+
+3. **Build the project**:
+
+```bash
+npm run build
+```
+
+## Configuration
+
+### 1. Obtain Vitally API Credentials
+
+1. Log into your Vitally account
+2. Navigate to Settings → Integrations → Vitally REST API
+   - Alternatively use Quick Jump: `⌘ + j` (Mac) or `Alt + j` (Windows)
+3. Toggle the integration switch to enable
+4. Copy your API key and note your subdomain
+
+### 2. Set Environment Variables
+
+Create a `.env` file in your project root:
+
+```bash
+VITALLY_SUBDOMAIN=your-company-subdomain
+VITALLY_API_KEY=your-api-key-here
+```
+
+**Important**: Your subdomain is found in your Vitally URL (e.g., `https://yoursubdomain.vitally.io`)
 
 ## Usage
 
-There are three ways to use this MCP server:
+### Development Mode
 
-### Using the MCP Inspector
-
-Run the MCP Inspector to test and debug the server:
-
-```
-npm run inspector
+```bash
+npm run dev
 ```
 
-This will open the MCP Inspector interface where you can interact with your server.
+### Production Mode
 
-### Running the MCP locally
+```bash
+npm start
+```
 
-1. First, find your Claude Desktop configuration file:
-   - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+### With MCP Client
 
-2. Edit the config file to add the Vitally MCP server:
+Configure your MCP client to connect to this server via stdio transport.
 
-   ```json
-   {
-     "mcpServers": {
-       "vitally": {
-         "command": "node",
-         "args": ["--experimental-modules", "--experimental-specifier-resolution=node", "/Users/johnjung/nylas/vitally/vitally/build/index.js"]
-       }
-     }
-   }
-   ```
+## API Reference
 
-3. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
+### Account Tools
 
-### Running the MCP via Docker
+#### `list-accounts`
 
-1. Edit the config file to add the Vitally MCP server from the GitHub package repository:
+List accounts with comprehensive pagination support.
 
-   ```json
-   {
-     "mcpServers": {
-       "vitally": {
-            "command": "docker",
-            "args": [
-                "run",
-                "--rm",
-                "-i",
-                "-e",
-                "VITALLY_API_SUBDOMAIN",
-                "-e",
-                "VITALLY_API_KEY",
-                "-e",
-                "VITALLY_DATA_CENTER",
-                "ghcr.io/fiscaltec/vitally-mcp"
-            ],
-            "env": {
-                "VITALLY_API_SUBDOMAIN": "VITALLY_API_SUBDOMAIN",
-                "VITALLY_API_KEY": "VITALLY_API_KEY",
-                "VITALLY_DATA_CENTER": "VITALLY_DATA_CENTER"
-            }
-        }
-     }
-   }
-   ```
+```typescript
+{
+  limit?: number (1-100, default: 50),    // Max items per page
+  from?: string,                          // Cursor from previous request
+  sortBy?: "updatedAt" | "createdAt"      // Sort order (default: updatedAt)
+}
+```
 
-2. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
+**Response includes:**
 
-## Available Tools
+- `results`: Array of account objects
+- `next`: Cursor for next page (null if no more pages)
+- `_pagination`: Metadata including hasMore, nextCursor, currentLimit, sortBy
+- `_rateLimitInfo`: Current rate limit status
 
-### Tool Discovery
+#### `search-accounts`
 
-- `search_tools` - Search for available tools by keyword
+Search accounts by name or external ID with pagination.
 
-### Account Management
+```typescript
+{
+  name?: string,                          // Search by name (partial match)
+  externalId?: string,                    // Get by external ID
+  limit?: number (1-100, default: 50)    // Max items to return
+}
+```
 
-- `search_accounts` - Search for accounts using multiple criteria (name, externalId)
-- `find_account_by_name` - Find accounts by their name (partial matching supported)
-- `refresh_accounts` - Refresh the cached list of accounts
-- `get_account_health` - Get health scores for a specific account
+### Pagination Tools
 
-### User Management
+#### `paginate-all`
 
-- `search_users` - Search for users by email, external ID, or email subdomain
+Automatically fetch multiple pages of data from any endpoint.
 
-### Communication & Tasks
+```typescript
+{
+  endpoint: "accounts" | "users" | "tasks" | "notes" | "conversations" | "organizations" | "projects" | "npsResponses",
+  accountId?: string,                     // Filter by account (supported endpoints)
+  organizationId?: string,                // Filter by organization (supported endpoints)  
+  userId?: string,                        // Filter by user (NPS responses only)
+  maxPages?: number (1-10, default: 5),   // Safety limit on pages to fetch
+  pageSize?: number (1-100, default: 100), // Items per page
+  sortBy?: "updatedAt" | "createdAt"      // Sort order
+}
+```
 
-- `get_account_conversations` - Get recent conversations for an account
-- `get_account_tasks` - Get tasks for an account (can filter by status)
-- `create_account_note` - Create a new note for an account
+**Example Usage:**
 
-## Example Questions to Ask
+```typescript
+// Fetch all tasks for an account (up to 5 pages of 100 items each)
+{
+  "endpoint": "tasks",
+  "accountId": "account-123",
+  "maxPages": 5,
+  "pageSize": 100
+}
+```
 
-When connected to an MCP client like Claude, you can ask questions such as:
+**Response includes:**
 
-- "List all our customers"
-- "Find accounts with 'Acme' in their name"
-- "What's the health score for account X?"
-- "Find user with email <example@company.com>"
-- "Show me details about customer Y"
-- "Get recent conversations for account Z"
-- "What tasks are open for account A?"
-- "Add a note to account B about our recent call"
-- "What tools can I use for account management?"
+- `results`: Combined array of all fetched items
+- `summary`: Detailed information about the pagination process
+  - `totalFetched`: Total number of items retrieved
+  - `pagesFetched`: Number of pages processed
+  - `hasMorePages`: Whether more data is available
+  - `nextCursor`: Cursor to continue from (if stopped at maxPages limit)
+
+### Pagination Best Practices
+
+1. **Use appropriate page sizes**: Start with smaller limits (50) for exploration, use larger limits (100) for bulk operations
+2. **Monitor rate limits**: Check `_rateLimitInfo` in responses to avoid hitting API limits
+3. **Choose the right sort order**:
+   - Use `updatedAt` (default) for recent activity
+   - Use `createdAt` when you need consistent ordering during data sync
+4. **Use `paginate-all` for bulk operations**: When you need all data from an endpoint
+5. **Save cursors**: Store the `next` cursor to resume pagination later
+
+#### `create-task`
+
+Create a new task.
+
+```typescript
+{
+  name: string,
+  accountId?: string,
+  organizationId?: string,
+  externalId?: string,
+  description?: string,
+  assignedToId?: string,
+  dueDate?: string,
+  categoryId?: string,
+  traits?: Record<string, any>
+}
+```
+
+### Note Tools
+
+#### `list-notes`
+
+List notes with optional filtering.
+
+```typescript
+{
+  accountId?: string,
+  organizationId?: string,
+  limit?: number (default: 50),
+  from?: string
+}
+```
+
+#### `create-note`
+
+Create a new note.
+
+```typescript
+{
+  subject: string,
+  note: string,
+  accountId?: string,
+  organizationId?: string,
+  externalId?: string,
+  authorId?: string,
+  noteDate?: string,
+  categoryId?: string,
+  traits?: Record<string, any>,
+  tags?: string[]
+}
+```
+
+### Resources
+
+#### `vitally://accounts/{accountId}/summary`
+
+Provides a comprehensive account summary including:
+
+- Account details
+- Recent tasks (last 10)
+- Recent notes (last 5)
+- Recent conversations (last 5)
+
+#### `vitally://organizations/{organizationId}/summary`
+
+Provides organization overview including:
+
+- Organization details
+- Associated accounts (up to 20)
+- Recent tasks (last 10)
+- Recent notes (last 5)
+
+#### `vitally://health`
+
+Server health check and API connectivity status.
+
+### Prompts
+
+#### `account-health-check`
+
+Analyzes account health including task completion, communication frequency, and engagement patterns.
+
+```typescript
+{
+  accountId: string
+}
+```
+
+#### `weekly-account-report`
+
+Generates comprehensive weekly account reports.
+
+```typescript
+{
+  accountId: string,
+  startDate?: string
+}
+```
+
+## Error Handling
+
+The server includes comprehensive error handling for:
+
+- Authentication failures
+- Network connectivity issues
+- Invalid parameters
+- API rate limiting
+- Malformed requests
+
+All errors are returned with descriptive messages to help with troubleshooting.
+
+## Rate Limiting
+
+Vitally's API has a default rate limit of 1,000 requests per minute using a sliding window. The server respects these limits and includes rate limiting information in response headers.
+
+## Development
+
+### Available Scripts
+
+- `npm run build` - Build TypeScript to JavaScript
+- `npm run dev` - Run in development mode with auto-reload
+- `npm run lint` - Run ESLint code analysis
+- `npm test` - Run test suite
+
+### Project Structure
+
+```
+src/
+  index.ts          # Main server implementation
+dist/               # Compiled JavaScript (generated)
+package.json        # Dependencies and scripts
+tsconfig.json       # TypeScript configuration
+.eslintrc.js        # ESLint configuration
+jest.config.js      # Test configuration
+```
 
 ## Troubleshooting
 
-- If you encounter JSON parsing errors, ensure you've removed all console.log statements from the code
-- Make sure your `.env` file contains the correct API credentials
-- Check that you've built the project (`npm run build`) after making changes
-- Verify the path in claude_desktop_config.json is absolute and correct for your system
-- If you don't have a valid API key, the server will run in demo mode with mock data
+### Common Issues
 
-## Attibution
+1. **Authentication Errors**
+   - Verify your API key is correct
+   - Ensure your subdomain matches your Vitally URL
+   - Check that the API integration is enabled in Vitally
 
-As mentioned previously and in other files, this MCP has been created with original code from John Jung and containerised by Dan Searle.
+2. **Network Errors**
+   - Verify internet connectivity
+   - Check if your firewall blocks outbound HTTPS requests
+   - Ensure your Vitally subdomain is accessible
 
-All rightts go to [John Jung](<https://github.com/johnjjung/vitally-mcp>).
+3. **Data Not Found**
+   - Verify the IDs you're using exist in Vitally
+   - Check if you have the necessary permissions for the data
+   - Ensure you're using the correct ID type (internal vs external)
 
-## Notes
+### Debug Mode
 
-- This has only been tested with Claude Desktop as of this moment however, is likely to woth with others but the configuration may not translate and is untested.
-- Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>) if you find an issue or if you would like an improvement.
+Set `NODE_ENV=development` for detailed logging and error information.
+
+## Security Considerations
+
+- Store API credentials securely using environment variables
+- Never commit API keys to version control
+- Regularly rotate your API keys in Vitally
+- Monitor API usage and set up alerts for unusual activity
+- Use HTTPS for all communications
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes with tests
+4. Run the test suite
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Support
+
+For issues related to:
+
+- **MCP Server**: Create an issue in this repository
+- **Vitally API**: Consult the [Vitally API documentation](https://docs.vitally.io/)
+- **MCP Protocol**: See the [Model Context Protocol documentation](https://modelcontextprotocol.io)
+
+---
+
+**Note**: This server is designed for the Vitally REST API and requires valid API credentials. Ensure you have the necessary permissions and comply with your organization's data access policies.
