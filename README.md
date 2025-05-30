@@ -85,21 +85,71 @@ VITALLY_API_KEY=your-api-key-here
 
 ## Usage
 
-### Development Mode
+### MCP Inspector
+
+#### Run the MCP Inspector to test and debug the server
 
 ```bash
-npm run dev
+npm run inspector
 ```
 
-### Production Mode
+This will open the MCP Inspector interface where you can interact with your server.
 
-```bash
-npm start
-```
+### MCP Client
 
-### With MCP Client
+#### Running the MCP locally
 
-Configure your MCP client to connect to this server via stdio transport.
+1. First, find your Claude Desktop configuration file:
+   - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+2. Edit the config file to add the Vitally MCP server:
+
+   ```jsonc
+   {
+     "mcpServers": {
+       "vitally": {
+         "command": "node",
+         "args": [
+          "--env-file=C:/Users/dsearle/Downloads/vitally-mcp/.env", # Location of you environment variable files
+          "C:/Users/dsearle/Downloads/vitally-mcp/build/index.js" # Location of the build folder under the cloned repository
+          ]
+       }
+     }
+   }
+   ```
+
+3. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
+
+#### Running the MCP via Docker
+
+1. Edit the config file to add the Vitally MCP server from the GitHub package repository:
+
+   ```json
+   {
+     "mcpServers": {
+       "vitally": {
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "-i",
+                "-e",
+                "VITALLY_SUBDOMAIN",
+                "-e",
+                "VITALLY_API_KEY",
+                "ghcr.io/fiscaltec/vitally-mcp"
+            ],
+            "env": {
+                "VITALLY_SUBDOMAIN": "VITALLY_API_SUBDOMAIN",
+                "VITALLY_API_KEY": "VITALLY_API_KEY",
+            }
+        }
+     }
+   }
+   ```
+
+2. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
 
 ## API Reference
 
