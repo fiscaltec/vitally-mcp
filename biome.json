@@ -1,0 +1,33 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.6/schema.json",
+	"files": {
+		"includes": ["**", "!worker-configuration.d.ts"]
+	},
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"formatter": {
+		"formatWithErrors": true
+	},
+	"css": {
+		"formatter": {
+			"enabled": false
+		},
+		"linter": {
+			"enabled": false
+		},
+		"assist": {
+			"enabled": false
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
+}

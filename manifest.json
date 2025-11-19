@@ -1,0 +1,95 @@
+{
+	"manifest_version": "0.2",
+	"name": "vitally-mcp",
+	"display_name": "Vitally",
+	"version": "2.0.0",
+	"description": "MCP for Vitally integration",
+	"author": {
+		"name": "Dan Searle"
+	},
+	"server": {
+		"type": "node",
+		"entry_point": "dist/index.js",
+		"mcp_config": {
+			"command": "node",
+			"args": ["${__dirname}/dist/index.js"],
+			"env": {
+				"VITALLY_API_KEY": "${user_config.VITALLY_API_KEY}",
+				"VITALLY_SUBDOMAIN": "${user_config.VITALLY_SUBDOMAIN}"
+			}
+		}
+	},
+	"tools": [
+		{
+			"name": "List accounts"
+		},
+		{
+			"name": "Get account"
+		},
+		{
+			"name": "Search accounts"
+		},
+		{
+			"name": "List users"
+		},
+		{
+			"name": "Get user"
+		},
+		{
+			"name": "List tasks"
+		},
+		{
+			"name": "Get task"
+		},
+		{
+			"name": "Create task"
+		},
+		{
+			"name": "List notes"
+		},
+		{
+			"name": "Get note"
+		},
+		{
+			"name": "Create note"
+		},
+		{
+			"name": "List conversations"
+		},
+		{
+			"name": "Get conversation"
+		},
+		{
+			"name": "List organizations"
+		},
+		{
+			"name": "Get organization"
+		},
+		{
+			"name": "List projects"
+		},
+		{
+			"name": "List NPS responses"
+		},
+		{
+			"name": "Paginate all"
+		}
+	],
+	"user_config": {
+		"VITALLY_API_KEY": {
+			"type": "string",
+			"title": "API Key",
+			"description": "API key used to authenticate with the Vitally API",
+			"required": true,
+			"sensitive": true
+		},
+		"VITALLY_SUBDOMAIN": {
+			"type": "string",
+			"title": "Subdomain",
+			"description": "Subdomain of the Vitally instance to connect to",
+			"required": true,
+			"sensitive": false
+		}
+	},
+	"license": "MIT"
+}
