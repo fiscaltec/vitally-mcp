@@ -1,5 +1,26 @@
-# Copyright (c) 2024 John Jung
-node_modules/
-build/
-*.log
-.env*
+# Build results
+bin/
+obj/
+*.user
+*.userosscache
+*.suo
+
+# MCPB packaging
+*.mcpb
+mcpb/server/
+
+# API credentials - DO NOT COMMIT
+appsettings.json
+.env
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db

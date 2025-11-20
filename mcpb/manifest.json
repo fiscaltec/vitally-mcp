@@ -1,0 +1,104 @@
+{
+  "manifest_version": "0.3",
+  "name": "Vitally",
+  "version": "1.0.0",
+  "description": "MCP server for integrating with Vitally customer success platform. Provides read-only access to accounts, organizations, users, conversations, notes, projects, tasks, and admins.",
+  "author": {
+    "name": "Dan Searle"
+  },
+  "license": "Proprietary",
+  "icon": "logo.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/VitallyMcp.exe",
+    "mcp_config": {
+      "command": "server/VitallyMcp.exe",
+      "env": {
+        "VITALLY_API_KEY": "${user_config.VITALLY_API_KEY}",
+        "VITALLY_SUBDOMAIN": "${user_config.VITALLY_SUBDOMAIN}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "List accounts",
+      "description": "List Vitally accounts with optional pagination and field selection"
+    },
+    {
+      "name": "Get account",
+      "description": "Get a single Vitally account by ID"
+    },
+    {
+      "name": "List organizations",
+      "description": "List Vitally organizations with optional pagination and field selection"
+    },
+    {
+      "name": "Get organization",
+      "description": "Get a single Vitally organization by ID"
+    },
+    {
+      "name": "List users",
+      "description": "List Vitally users with optional pagination and field selection"
+    },
+    {
+      "name": "Get user",
+      "description": "Get a single Vitally user by ID"
+    },
+    {
+      "name": "List conversations",
+      "description": "List Vitally conversations with optional pagination and field selection"
+    },
+    {
+      "name": "Get conversation",
+      "description": "Get a single Vitally conversation by ID"
+    },
+    {
+      "name": "List notes",
+      "description": "List Vitally notes with optional pagination and field selection"
+    },
+    {
+      "name": "Get note",
+      "description": "Get a single Vitally note by ID"
+    },
+    {
+      "name": "List projects",
+      "description": "List Vitally projects with optional pagination and field selection"
+    },
+    {
+      "name": "Get project",
+      "description": "Get a single Vitally project by ID"
+    },
+    {
+      "name": "List tasks",
+      "description": "List Vitally tasks with optional pagination and field selection"
+    },
+    {
+      "name": "Get task",
+      "description": "Get a single Vitally task by ID"
+    },
+    {
+      "name": "List admins",
+      "description": "List Vitally admins with optional pagination and field selection"
+    },
+    {
+      "name": "Get admin",
+      "description": "Get a single Vitally admin by ID"
+    }
+  ],
+  "user_config": {
+    "VITALLY_API_KEY": {
+      "type": "string",
+      "title": "API Key",
+      "description": "API key used to authenticate with the Vitally",
+      "required": true,
+      "sensitive": true
+    },
+    "VITALLY_SUBDOMAIN": {
+      "type": "string",
+      "title": "Subdomain",
+      "description": "Subdomain of your Vitally instance",
+      "required": true,
+      "sensitive": false
+    }
+  }
+}
