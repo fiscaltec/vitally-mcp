@@ -97,7 +97,7 @@ A self-contained executable file that runs directly without installation. You sp
 {
   "mcpServers": {
     "vitally": {
-      "command": "C:\\Users\\dsearle\\Downloads\\mcp-test\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
+      "command": "C:\\Users\\YourUsername\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
       "env": {
         "VITALLY_API_KEY": "sk_live_...",
         "VITALLY_SUBDOMAIN": "fiscaltec"

@@ -82,7 +82,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 {
   "mcpServers": {
     "vitally": {
-      "command": "C:\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
+      "command": "C:\\Users\\YourUsername\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",,
       "env": {
         "VITALLY_API_KEY": "sk_live_your_api_key_here",
         "VITALLY_SUBDOMAIN": "your-subdomain"
@@ -92,17 +92,17 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 }
 ```
 
-**Important**: Replace `C:\\path\\to\\VitallyMcp` with the actual full path to your project directory. Note the double backslashes (`\\`) in the path.
+**Important**: Replace `C:\\path\\to\\mcp` with the actual full path to your project directory. Note the double backslashes (`\\`) in the path.
 
 #### Example with Actual Path
 
-If your project is in `C:\Users\dsearle\Downloads\mcp-test\VitallyMcp`:
+If your project is in `C:\\Users\\YourUsername\\Downloads\\VitallyMcp`:
 
 ```json
 {
   "mcpServers": {
     "vitally": {
-      "command": "C:\\Users\\dsearle\\Downloads\\mcp-test\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
+      "command": "C:\\Users\\YourUsername\\Downloads\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
       "env": {
         "VITALLY_API_KEY": "sk_live_your_api_key_here",
         "VITALLY_SUBDOMAIN": "your-subdomain"
