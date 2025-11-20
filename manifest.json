@@ -2,8 +2,9 @@
 	"manifest_version": "0.2",
 	"name": "vitally-mcp",
 	"display_name": "Vitally",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "MCP for Vitally integration",
+	"icon": "./logo.png",
 	"author": {
 		"name": "Dan Searle"
 	},
