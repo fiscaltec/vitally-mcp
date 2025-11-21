@@ -6,21 +6,22 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class OrganizationsTools
 {
-    [McpServerTool, Description("List Vitally organizations with optional pagination and field selection")]
+    [McpServerTool, Description("List Vitally organisations with optional pagination and field selection")]
     public static async Task<string> ListOrganizations(
         VitallyService vitallyService,
-        [Description("Maximum number of organizations to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response")] string? cursor = null,
-        [Description("Comma-separated list of fields to include (e.g., 'id,name,createdAt')")] string? fields = null)
+        [Description("Maximum number of organisations to return (default: 20, max: 100)")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Comma-separated list of fields to include (e.g., 'id,name,createdAt'). Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null)
     {
-        return await vitallyService.GetResourcesAsync("organizations", limit, cursor, fields);
+        return await vitallyService.GetResourcesAsync("organizations", limit, from, fields, sortBy);
     }
 
-    [McpServerTool, Description("Get a single Vitally organization by ID")]
+    [McpServerTool, Description("Get a single Vitally organisation by ID")]
     public static async Task<string> GetOrganization(
         VitallyService vitallyService,
-        [Description("The organization ID")] string id,
-        [Description("Comma-separated list of fields to include")] string? fields = null)
+        [Description("The organisation ID")] string id,
+        [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null)
     {
         return await vitallyService.GetResourceByIdAsync("organizations", id, fields);
     }

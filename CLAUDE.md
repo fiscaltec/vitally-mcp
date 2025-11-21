@@ -82,9 +82,23 @@ Environment variable loading with validation:
 Centralised HTTP client for Vitally REST API:
 - Base URL constructed from subdomain: `https://{subdomain}.rest.vitally.io`
 - Basic authentication using Base64-encoded API key
+- **Client-side JSON filtering** to reduce response sizes for LLM consumption
+- Default fields when not specified: `id`, `name`, `createdAt`, `updatedAt`
 - Two core methods:
-  - `GetResourcesAsync()` - List resources with pagination/field selection
+  - `GetResourcesAsync()` - List resources with pagination, sorting, and filtering
   - `GetResourceByIdAsync()` - Get single resource by ID
+
+**Vitally API Parameters:**
+- Pagination uses `from` parameter (not `cursor`) - pass the `next` value from previous response
+- Sorting via `sortBy` parameter: `"createdAt"` or `"updatedAt"` (default: updatedAt)
+- Resource-specific filters (e.g., `status` for accounts: active, churned, activeOrChurned)
+
+**Client-Side Filtering:**
+- The Vitally API does NOT support field selection natively
+- VitallyService implements client-side JSON filtering after receiving full API response
+- Uses `System.Text.Json.JsonDocument` to parse and filter fields
+- Preserves pagination metadata (`next` field) in filtered responses
+- Reduces response size before returning to LLM
 
 ### Tool Structure (Tools/*.cs)
 
@@ -104,13 +118,21 @@ public static class AccountsTools
     public static async Task<string> ListAccounts(
         VitallyService vitallyService,
         [Description("Maximum number...")] int limit = 20,
-        [Description("Pagination cursor...")] string? cursor = null,
-        [Description("Comma-separated fields...")] string? fields = null)
+        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Comma-separated fields... Client-side filtering.")] string? fields = null,
+        [Description("Sort by field: 'createdAt' or 'updatedAt'")] string? sortBy = null,
+        [Description("Filter by account status: 'active', 'churned', 'activeOrChurned'")] string? status = null)
     {
-        return await vitallyService.GetResourcesAsync("accounts", limit, cursor, fields);
+        var additionalParams = new Dictionary<string, string>();
+        if (!string.IsNullOrEmpty(status))
+            additionalParams["status"] = status;
+
+        return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams);
     }
 }
 ```
+
+**Note:** The `status` parameter is specific to AccountsTools. Other resource types have the standard parameters (limit, from, fields, sortBy) without resource-specific filters.
 
 ### MCPB Packaging (mcpb/)
 
@@ -142,7 +164,10 @@ To add support for a new Vitally resource:
 - **Read-only**: Never implement write/update/delete operations - this is by design for security
 - **Environment variables**: Never hardcode credentials - always use environment variable loading
 - **Error handling**: VitallyService uses EnsureSuccessStatusCode() - HTTP errors propagate to MCP client
-- **JSON responses**: All tool responses return raw JSON strings from Vitally API
+- **Client-side filtering**: Field selection is done client-side (Vitally API doesn't support it natively)
+- **Default fields**: When no fields specified, responses contain: id, name, createdAt, updatedAt
+- **Pagination**: Use `from` parameter (not `cursor`) - this matches the Vitally API spec
+- **JSON responses**: Tools return filtered JSON strings to reduce LLM context usage
 - **Windows-specific**: MCPB packages are Windows-only (win-x64/win-arm64 runtimes)
 - **MCP SDK Preview**: Using preview SDK version 0.4.0-preview.3 - breaking changes possible
 
@@ -157,6 +182,10 @@ When distributing the MCPB:
 ## Testing Considerations
 
 - Manual testing requires actual Vitally credentials
-- Test pagination by using low limit values (e.g., limit=5)
-- Test field selection with valid field names from Vitally API docs
+- Test pagination by using low limit values (e.g., limit=5) and verify `from` parameter works with `next` cursor
+- Test client-side field filtering by specifying various field combinations
+- Verify default fields (id, name, createdAt, updatedAt) are returned when no fields specified
+- Test sortBy parameter with "createdAt" and "updatedAt" values
+- For accounts, test status filter with: active, churned, activeOrChurned
 - Verify error handling by testing with invalid IDs/missing env vars
+- Check that filtered responses are significantly smaller than full API responses

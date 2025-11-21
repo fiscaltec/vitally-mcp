@@ -10,17 +10,18 @@ public static class AdminsTools
     public static async Task<string> ListAdmins(
         VitallyService vitallyService,
         [Description("Maximum number of admins to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response")] string? cursor = null,
-        [Description("Comma-separated list of fields to include (e.g., 'id,name,email')")] string? fields = null)
+        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Comma-separated list of fields to include (e.g., 'id,name,email'). Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null)
     {
-        return await vitallyService.GetResourcesAsync("admins", limit, cursor, fields);
+        return await vitallyService.GetResourcesAsync("admins", limit, from, fields, sortBy);
     }
 
     [McpServerTool, Description("Get a single Vitally admin by ID")]
     public static async Task<string> GetAdmin(
         VitallyService vitallyService,
         [Description("The admin ID")] string id,
-        [Description("Comma-separated list of fields to include")] string? fields = null)
+        [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null)
     {
         return await vitallyService.GetResourceByIdAsync("admins", id, fields);
     }

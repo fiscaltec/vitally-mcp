@@ -8,7 +8,10 @@ Packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windo
 
 - **Read-only access** to all major Vitally resources
 - **Pagination support** for efficient data retrieval
-- **Field selection** for customised data responses
+- **Client-side field filtering** to reduce response sizes for LLM consumption
+- **Default minimal responses** (id, name, createdAt, updatedAt) when fields not specified
+- **Sort ordering** by createdAt or updatedAt
+- **Resource-specific filters** (e.g., account status filtering)
 - **Built with .NET 10** and the official MCP C# SDK
 - **Environment variable configuration** for secure credential management
 - **Single-file executable** packaged as MCPB for easy distribution
@@ -82,7 +85,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 {
   "mcpServers": {
     "vitally": {
-      "command": "C:\\Users\\YourUsername\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",,
+      "command": "C:\\Users\\YourUsername\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
       "env": {
         "VITALLY_API_KEY": "sk_live_your_api_key_here",
         "VITALLY_SUBDOMAIN": "your-subdomain"
@@ -204,8 +207,10 @@ List Vitally organisations but only show me the id, name, and createdAt fields
 ### Pagination
 
 ```
-Get more accounts using this cursor: eyJzb3J0VmFsdWU...
+Get more accounts using the pagination cursor: eyJzb3J0VmFsdWU...
 ```
+
+**Note:** Use the `next` value from the previous response as the `from` parameter to get the next page of results.
 
 ### Getting a Specific Resource
 
@@ -220,19 +225,23 @@ Get the Vitally account with ID abc123
 All list tools support the following parameters:
 
 - **limit** (optional): Maximum number of items to return (default: 20, max: 100)
-- **cursor** (optional): Pagination cursor from previous response
-- **fields** (optional): Comma-separated list of fields to include (e.g., `"id,name,createdAt"`)
+- **from** (optional): Pagination cursor from previous response (use the `next` value)
+- **fields** (optional): Comma-separated list of fields to include (e.g., `"id,name,createdAt"`). Defaults to `id,name,createdAt,updatedAt`. **Note:** Field filtering is done client-side to reduce response sizes.
+- **sortBy** (optional): Sort by `"createdAt"` or `"updatedAt"` (default: updatedAt)
+
+**AccountsTools only:**
+- **status** (optional): Filter by account status - `"active"` (default), `"churned"`, or `"activeOrChurned"`
 
 ### Get Tools
 
 All get tools support:
 
 - **id** (required): The resource ID
-- **fields** (optional): Comma-separated list of fields to include
+- **fields** (optional): Comma-separated list of fields to include. Defaults to `id,name,createdAt,updatedAt`. **Note:** Field filtering is done client-side.
 
 ## Response Format
 
-All responses are returned as JSON strings containing:
+All responses are returned as filtered JSON strings. By default (when no fields are specified), responses contain only the essential fields to reduce LLM context usage:
 
 ```json
 {
@@ -240,13 +249,15 @@ All responses are returned as JSON strings containing:
     {
       "id": "...",
       "name": "...",
-      "createdAt": "..."
+      "createdAt": "...",
+      "updatedAt": "..."
     }
   ],
-  "next": "cursor-token-for-pagination",
-  "atEnd": false
+  "next": "cursor-token-for-pagination"
 }
 ```
+
+**Note:** The Vitally API does not support field filtering natively. Field selection is implemented client-side by parsing the full API response and extracting only the requested fields before returning to the LLM.
 
 ## Architecture
 
@@ -263,9 +274,9 @@ The server is built using:
 VitallyMcp/
 ├── Program.cs                 # Application entry point and MCP server setup
 ├── VitallyConfig.cs          # Configuration model with environment variable loading
-├── VitallyService.cs         # HTTP service for Vitally API calls
+├── VitallyService.cs         # HTTP service with client-side JSON filtering
 ├── Tools/                     # MCP tool implementations
-│   ├── AccountsTools.cs
+│   ├── AccountsTools.cs       # Account tools with status filtering
 │   ├── OrganizationsTools.cs
 │   ├── UsersTools.cs
 │   ├── ConversationsTools.cs
@@ -279,6 +290,12 @@ VitallyMcp/
 ├── VitallyMcp.csproj         # Project file
 └── README.md                  # This file
 ```
+
+**Key Implementation Details:**
+- **VitallyService** implements client-side JSON filtering using `System.Text.Json.JsonDocument`
+- Field filtering reduces response sizes before returning to LLM
+- Default fields (id, name, createdAt, updatedAt) returned when no fields specified
+- Pagination uses `from` parameter matching Vitally API spec
 
 ## Building MCPB Packages
 
