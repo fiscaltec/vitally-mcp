@@ -76,7 +76,7 @@ A self-contained executable file that runs directly without installation. You sp
 
 ### ✅ Advantages
 
-- **Fast to build** - Just `dotnet publish` or run `build-standalone.ps1`
+- **Fast to build** - Just `dotnet publish` or run `Scripts\build-standalone.ps1`
 - **No dependencies to build** - Don't need Node.js or MCPB CLI
 - **Great for development** - Quick rebuild and test cycles
 - **Multiple versions** - Can have different builds in different folders
@@ -132,10 +132,10 @@ A self-contained executable file that runs directly without installation. You sp
 npm install -g @anthropic-ai/mcpb
 
 # Build
-.\build-mcpb.ps1
+.\Scripts\build-mcpb.ps1
 
 # Result
-Vitally.mcpb  (distributable package)
+VitallyMcp-{version}.mcpb  (distributable package in Output/)
 ```
 
 **Build time**: ~10-15 seconds (first time slower)
@@ -146,7 +146,7 @@ Vitally.mcpb  (distributable package)
 # No prerequisites needed (just .NET SDK)
 
 # Build with script
-.\build-standalone.ps1
+.\Scripts\build-standalone.ps1
 
 # OR build manually
 dotnet publish VitallyMcp.csproj `
@@ -185,10 +185,10 @@ VitallyMcp.exe  (in bin/Release/net10.0/win-x64/publish/)
 ```powershell
 # 1. Make code changes
 # 2. Build MCPB
-.\build-mcpb.ps1
+.\Scripts\build-mcpb.ps1
 
 # 3. Uninstall old version (if needed)
-# 4. Install new .mcpb (double-click)
+# 4. Install new .mcpb (double-click from Output/)
 # 5. Restart Claude Desktop
 # 6. Test
 
@@ -200,7 +200,7 @@ VitallyMcp.exe  (in bin/Release/net10.0/win-x64/publish/)
 ```powershell
 # 1. Make code changes
 # 2. Build executable
-.\build-standalone.ps1
+.\Scripts\build-standalone.ps1
 
 # 3. Restart Claude Desktop
 # 4. Test
@@ -216,14 +216,14 @@ VitallyMcp.exe  (in bin/Release/net10.0/win-x64/publish/)
 
 **For Developers:**
 ```
-Share: Source code + build-standalone.ps1
+Share: Source code + Scripts/build-standalone.ps1
 Method: Standalone Executable
 Why: Developers need flexibility and quick iterations
 ```
 
 **For End Users (Customer Success Team):**
 ```
-Share: Pre-built .mcpb file + configuration template
+Share: Pre-built .mcpb file from Output/ + configuration template
 Method: MCPB
 Why: Simple installation, no technical setup required
 ```
@@ -231,8 +231,8 @@ Why: Simple installation, no technical setup required
 ### Production Deployment
 
 **Always use MCPB** for production deployments:
-1. Build once: `.\build-mcpb.ps1`
-2. Test the .mcpb file
+1. Build once: `.\Scripts\build-mcpb.ps1`
+2. Test the .mcpb file from Output/
 3. Distribute to all users
 4. Provide configuration template with environment variables
 
@@ -242,8 +242,8 @@ Why: Simple installation, no technical setup required
 
 ### From Standalone to MCPB
 
-1. Build the MCPB: `.\build-mcpb.ps1`
-2. Install the .mcpb file (double-click)
+1. Build the MCPB: `.\Scripts\build-mcpb.ps1`
+2. Install the .mcpb file from Output/ (double-click)
 3. Update your `claude_desktop_config.json`:
    ```json
    // Before (Standalone)
@@ -256,7 +256,7 @@ Why: Simple installation, no technical setup required
 
 ### From MCPB to Standalone
 
-1. Build standalone: `.\build-standalone.ps1`
+1. Build standalone: `.\Scripts\build-standalone.ps1`
 2. Update your `claude_desktop_config.json`:
    ```json
    // Before (MCPB)

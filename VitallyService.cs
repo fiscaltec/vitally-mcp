@@ -10,8 +10,23 @@ public class VitallyService
     private readonly VitallyConfig _config;
     private readonly string _baseUrl;
 
-    // Default fields to return when no fields are specified
-    private static readonly string[] DefaultFields = { "id", "name", "createdAt", "updatedAt" };
+    // Resource-specific default fields to return when no fields are specified
+    // Tailored to each resource type for optimal balance of usefulness vs response size
+    private static readonly Dictionary<string, string[]> ResourceDefaultFields = new()
+    {
+        ["accounts"] = ["id", "name", "createdAt", "updatedAt", "externalId", "organizationId", "healthScore", "mrr", "accountOwnerId", "lastSeenTimestamp"],
+        ["organizations"] = ["id", "name", "createdAt", "updatedAt", "externalId", "healthScore", "mrr", "lastSeenTimestamp"],
+        ["users"] = ["id", "name", "createdAt", "updatedAt", "externalId", "email", "accountId", "organizationId", "lastSeenTimestamp"],
+        ["conversations"] = ["id", "externalId", "subject", "authorId", "accountId", "organizationId"],
+        ["notes"] = ["id", "createdAt", "updatedAt", "externalId", "subject", "noteDate", "authorId", "accountId", "organizationId", "categoryId", "archivedAt"],
+        ["tasks"] = ["id", "name", "createdAt", "updatedAt", "externalId", "dueDate", "completedAt", "assignedToId", "accountId", "organizationId", "archivedAt"],
+        ["projects"] = ["id", "name", "createdAt", "updatedAt", "traits", "accountId", "organizationId", "archivedAt"],
+        ["admins"] = ["id", "name", "email"]
+    };
+
+
+    // Fallback default fields for unknown resource types
+    private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
     public VitallyService(HttpClient httpClient, VitallyConfig config)
     {
@@ -50,8 +65,8 @@ public class VitallyService
 
         var jsonResponse = await response.Content.ReadAsStringAsync();
 
-        // Apply client-side field filtering
-        return FilterJsonFields(jsonResponse, fields, isListResponse: true);
+        // Apply client-side field filtering with resource-specific defaults
+        return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: true);
     }
 
     public async Task<string> GetResourceByIdAsync(string resourceType, string id, string? fields = null)
@@ -63,19 +78,20 @@ public class VitallyService
 
         var jsonResponse = await response.Content.ReadAsStringAsync();
 
-        // Apply client-side field filtering
-        return FilterJsonFields(jsonResponse, fields, isListResponse: false);
+        // Apply client-side field filtering with resource-specific defaults
+        return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false);
     }
 
     /// <summary>
     /// Filters JSON response to include only requested fields.
-    /// If no fields specified, returns default minimal set: id, name, createdAt, updatedAt
+    /// If no fields specified, returns resource-specific default field set.
+    /// Only includes fields that actually exist on the resource (via TryGetProperty).
     /// </summary>
-    private static string FilterJsonFields(string jsonResponse, string? fields, bool isListResponse)
+    private static string FilterJsonFields(string jsonResponse, string? fields, string resourceType, bool isListResponse)
     {
-        // Parse the fields parameter or use defaults
+        // Parse the fields parameter or use resource-specific defaults
         var requestedFields = string.IsNullOrWhiteSpace(fields)
-            ? DefaultFields
+            ? (ResourceDefaultFields.TryGetValue(resourceType, out var defaults) ? defaults : FallbackDefaultFields)
             : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         using var document = JsonDocument.Parse(jsonResponse);

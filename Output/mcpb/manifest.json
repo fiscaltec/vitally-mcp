@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "Vitally",
-  "version": "1.0.0",
+  "version": "1.1.5",
   "description": "MCP server for integrating with Vitally customer success platform. Provides read-only access to accounts, organisations, users, conversations, notes, projects, tasks, and admins. Features client-side field filtering to reduce response sizes for LLM consumption.",
   "author": {
     "name": "Dan Searle"
@@ -10,9 +10,10 @@
   "icon": "logo.png",
   "server": {
     "type": "binary",
-    "entry_point": "server/VitallyMcp.exe",
+    "entry_point": "VitallyMcp.exe",
     "mcp_config": {
-      "command": "server/VitallyMcp.exe",
+      "command": "${__dirname}/VitallyMcp.exe",
+      "args": [],
       "env": {
         "VITALLY_API_KEY": "${user_config.VITALLY_API_KEY}",
         "VITALLY_SUBDOMAIN": "${user_config.VITALLY_SUBDOMAIN}"

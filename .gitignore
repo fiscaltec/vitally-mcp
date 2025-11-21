@@ -8,6 +8,8 @@ obj/
 # MCPB packaging
 *.mcpb
 mcpb/server/
+Output/mcpb/VitallyMcp.exe
+Output/*.mcpb
 
 # API credentials - DO NOT COMMIT
 appsettings.json

@@ -68,7 +68,7 @@ If you see account data, you're all set! 🎉
 
 ```powershell
 # Quick build with helper script
-.\build-standalone.ps1
+.\Scripts\build-standalone.ps1
 
 # OR manually build
 dotnet publish VitallyMcp.csproj `
@@ -134,10 +134,10 @@ winget install OpenJS.NodeJS.LTS
 npm install -g @anthropic-ai/mcpb
 
 # 2. Build the MCPB package
-.\build-mcpb.ps1
+.\Scripts\build-mcpb.ps1
 
 # 3. Install the generated .mcpb file
-# (Double-click the .mcpb file that appears in the project root)
+# (Double-click the .mcpb file from the Output/ directory)
 
 # 4. Configure as shown in "Method A" above
 ```

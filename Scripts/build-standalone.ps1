@@ -15,11 +15,17 @@
 .PARAMETER Configuration
     Build configuration (Debug or Release). Default is Release.
 
+.PARAMETER SkipVersionBump
+    Optional. Skip the automatic version bump step.
+
 .EXAMPLE
     .\build-standalone.ps1
 
 .EXAMPLE
     .\build-standalone.ps1 -Architecture win-x64 -Configuration Debug
+
+.EXAMPLE
+    .\build-standalone.ps1 -SkipVersionBump
 
 .NOTES
     Prerequisites:
@@ -33,15 +39,37 @@ param(
 
     [Parameter(Mandatory=$false)]
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipVersionBump
 )
 
 $ErrorActionPreference = "Stop"
+
+# Resolve paths relative to script location
+$ScriptDir = $PSScriptRoot
+$ProjectRoot = Split-Path -Parent $ScriptDir
 
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host " Vitally MCP Server - Standalone Build" -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
+
+# Step 0: Bump version
+if (-not $SkipVersionBump) {
+    Write-Host "[0/2] Bumping version..." -ForegroundColor Cyan
+    $bumpScript = Join-Path $ScriptDir "bump-version.ps1"
+    $newVersion = & $bumpScript -BumpType Revision
+    Write-Host ""
+} else {
+    Write-Host "[0/2] Skipping version bump..." -ForegroundColor Yellow
+    # Read current version
+    [xml]$csproj = Get-Content (Join-Path $ProjectRoot "VitallyMcp.csproj")
+    $newVersion = $csproj.Project.PropertyGroup.Version
+    Write-Host "Current version: $newVersion" -ForegroundColor Green
+    Write-Host ""
+}
 
 # Detect architecture if not specified
 if (-not $Architecture) {
@@ -65,16 +93,22 @@ Write-Host "Architecture: $Architecture" -ForegroundColor Green
 Write-Host ""
 
 # Build the server
-Write-Host "Publishing VitallyMcp server..." -ForegroundColor Cyan
-$publishOutput = Join-Path $PSScriptRoot "bin\$Configuration\net10.0\$Architecture\publish"
+Write-Host "[1/2] Publishing VitallyMcp server..." -ForegroundColor Cyan
+$publishOutput = Join-Path $ProjectRoot "bin\$Configuration\net10.0\$Architecture\publish"
+$projectFile = Join-Path $ProjectRoot "VitallyMcp.csproj"
 
-dotnet publish VitallyMcp.csproj `
-    --configuration $Configuration `
-    --runtime $Architecture `
-    --self-contained true `
-    --output $publishOutput `
-    /p:PublishSingleFile=true `
-    /p:PublishTrimmed=false
+Push-Location $ProjectRoot
+try {
+    dotnet publish $projectFile `
+        --configuration $Configuration `
+        --runtime $Architecture `
+        --self-contained true `
+        --output $publishOutput `
+        /p:PublishSingleFile=true `
+        /p:PublishTrimmed=false
+} finally {
+    Pop-Location
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to publish VitallyMcp server"
@@ -82,10 +116,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
+Write-Host "[2/2] Build complete!" -ForegroundColor Green
+Write-Host ""
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host "Build complete!" -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "Version: $newVersion" -ForegroundColor Yellow
 Write-Host "Executable location:" -ForegroundColor Yellow
 Write-Host "  $publishOutput\VitallyMcp.exe" -ForegroundColor White
 Write-Host ""

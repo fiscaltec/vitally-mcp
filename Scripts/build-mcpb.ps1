@@ -6,20 +6,27 @@
 
 .DESCRIPTION
     This script:
-    1. Detects the system architecture (x64 or ARM64)
-    2. Publishes the VitallyMcp server as a self-contained executable
-    3. Copies the executable to the MCPB server directory
-    4. Creates an installable .mcpb bundle file
+    1. Bumps the revision version number
+    2. Detects the system architecture (x64 or ARM64)
+    3. Publishes the VitallyMcp server as a self-contained executable
+    4. Copies the executable to the MCPB directory
+    5. Creates an installable .mcpb bundle file with version number
 
 .PARAMETER Architecture
     Optional. Specify the target architecture (win-x64 or win-arm64).
     If not specified, the script will auto-detect based on the system.
+
+.PARAMETER SkipVersionBump
+    Optional. Skip the automatic version bump step.
 
 .EXAMPLE
     .\build-mcpb.ps1
 
 .EXAMPLE
     .\build-mcpb.ps1 -Architecture win-x64
+
+.EXAMPLE
+    .\build-mcpb.ps1 -SkipVersionBump
 
 .NOTES
     Prerequisites:
@@ -31,15 +38,37 @@
 param(
     [Parameter(Mandatory=$false)]
     [ValidateSet("win-x64", "win-arm64")]
-    [string]$Architecture
+    [string]$Architecture,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipVersionBump
 )
 
 $ErrorActionPreference = "Stop"
+
+# Resolve paths relative to script location
+$ScriptDir = $PSScriptRoot
+$ProjectRoot = Split-Path -Parent $ScriptDir
 
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host " Vitally MCP Server - MCPB Builder" -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
+
+# Step 0: Bump version
+if (-not $SkipVersionBump) {
+    Write-Host "[0/5] Bumping version..." -ForegroundColor Cyan
+    $bumpScript = Join-Path $ScriptDir "bump-version.ps1"
+    $newVersion = & $bumpScript -BumpType Revision
+    Write-Host ""
+} else {
+    Write-Host "[0/5] Skipping version bump..." -ForegroundColor Yellow
+    # Read current version
+    [xml]$csproj = Get-Content (Join-Path $ProjectRoot "VitallyMcp.csproj")
+    $newVersion = $csproj.Project.PropertyGroup.Version
+    Write-Host "Current version: $newVersion" -ForegroundColor Green
+    Write-Host ""
+}
 
 # Detect architecture if not specified
 if (-not $Architecture) {
@@ -62,16 +91,22 @@ Write-Host "Target architecture: $Architecture" -ForegroundColor Green
 Write-Host ""
 
 # Step 1: Build the server
-Write-Host "[1/4] Publishing VitallyMcp server..." -ForegroundColor Cyan
-$publishOutput = Join-Path $PSScriptRoot "bin\Release\net10.0\$Architecture\publish"
+Write-Host "[1/5] Publishing VitallyMcp server..." -ForegroundColor Cyan
+$publishOutput = Join-Path $ProjectRoot "bin\Release\net10.0\$Architecture\publish"
+$projectFile = Join-Path $ProjectRoot "VitallyMcp.csproj"
 
-dotnet publish VitallyMcp.csproj `
-    --configuration Release `
-    --runtime $Architecture `
-    --self-contained true `
-    --output $publishOutput `
-    /p:PublishSingleFile=true `
-    /p:PublishTrimmed=false
+Push-Location $ProjectRoot
+try {
+    dotnet publish $projectFile `
+        --configuration Release `
+        --runtime $Architecture `
+        --self-contained true `
+        --output $publishOutput `
+        /p:PublishSingleFile=true `
+        /p:PublishTrimmed=false
+} finally {
+    Pop-Location
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to publish VitallyMcp server"
@@ -82,9 +117,9 @@ Write-Host "✓ Server published successfully" -ForegroundColor Green
 Write-Host ""
 
 # Step 2: Copy executable to MCPB directory
-Write-Host "[2/4] Staging files for MCPB package..." -ForegroundColor Cyan
+Write-Host "[2/5] Staging files for MCPB package..." -ForegroundColor Cyan
 $exePath = Join-Path $publishOutput "VitallyMcp.exe"
-$targetDir = Join-Path $PSScriptRoot "mcpb\server"
+$targetDir = Join-Path $ProjectRoot "Output\mcpb"
 $targetPath = Join-Path $targetDir "VitallyMcp.exe"
 
 if (-not (Test-Path $exePath)) {
@@ -109,7 +144,7 @@ Write-Host "✓ Files staged successfully" -ForegroundColor Green
 Write-Host ""
 
 # Step 3: Create MCPB bundle
-Write-Host "[3/4] Creating MCPB bundle..." -ForegroundColor Cyan
+Write-Host "[3/5] Creating MCPB bundle..." -ForegroundColor Cyan
 
 # Check if mcpb CLI is available
 $mcpbPath = (Get-Command mcpb -ErrorAction SilentlyContinue)
@@ -124,7 +159,7 @@ if (-not $mcpbPath) {
 }
 
 # Pack the MCPB
-$mcpbDir = Join-Path $PSScriptRoot "mcpb"
+$mcpbDir = Join-Path $ProjectRoot "Output\mcpb"
 Push-Location $mcpbDir
 
 try {
@@ -142,17 +177,32 @@ finally {
 Write-Host "✓ MCPB bundle created successfully" -ForegroundColor Green
 Write-Host ""
 
-# Step 4: Move MCPB file to root
-Write-Host "[4/4] Finalizing package..." -ForegroundColor Cyan
+# Step 4: Move and rename MCPB file
+Write-Host "[4/5] Finalizing package..." -ForegroundColor Cyan
 
 $mcpbFile = Get-ChildItem -Path $mcpbDir -Filter "*.mcpb" | Select-Object -First 1
 if ($mcpbFile) {
-    $finalPath = Join-Path $PSScriptRoot $mcpbFile.Name
+    $outputDir = Join-Path $ProjectRoot "Output"
+    $versionedFileName = "VitallyMcp-$newVersion.mcpb"
+    $finalPath = Join-Path $outputDir $versionedFileName
+
+    # Remove old versioned MCPB files
+    Get-ChildItem -Path $outputDir -Filter "VitallyMcp-*.mcpb" | Remove-Item -Force
+
     Move-Item -Path $mcpbFile.FullName -Destination $finalPath -Force
     Write-Host "✓ Package ready: $finalPath" -ForegroundColor Green
 }
 else {
     Write-Warning "MCPB file not found in mcpb directory"
+}
+
+# Step 5: Cleanup
+Write-Host "[5/5] Cleaning up..." -ForegroundColor Cyan
+# Remove the executable from the mcpb directory to avoid bloat in git
+# (it will be regenerated on next build)
+if (Test-Path $targetPath) {
+    Remove-Item $targetPath -Force
+    Write-Host "✓ Cleaned up temporary files" -ForegroundColor Green
 }
 
 Write-Host ""

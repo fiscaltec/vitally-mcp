@@ -9,7 +9,8 @@ Packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windo
 - **Read-only access** to all major Vitally resources
 - **Pagination support** for efficient data retrieval
 - **Client-side field filtering** to reduce response sizes for LLM consumption
-- **Default minimal responses** (id, name, createdAt, updatedAt) when fields not specified
+- **Resource-specific intelligent defaults** - each resource type returns optimised fields (business metrics for accounts, dates for tasks, etc.)
+- **Field existence handling** - only includes fields that actually exist (no null placeholders)
 - **Sort ordering** by createdAt or updatedAt
 - **Resource-specific filters** (e.g., account status filtering)
 - **Built with .NET 10** and the official MCP C# SDK
@@ -63,16 +64,17 @@ This method doesn't require MCPB installation and is useful for development or t
 #### Building the Standalone Executable
 
 ```powershell
-# Build for your current architecture
-dotnet publish VitallyMcp.csproj `
-  --configuration Release `
-  --runtime win-x64 `
-  --self-contained true `
-  --output bin/Release/net10.0/win-x64/publish `
-  /p:PublishSingleFile=true
+# Build using the automated script (auto-detects architecture and bumps version)
+.\Scripts\build-standalone.ps1
 
-# For ARM64 systems, use win-arm64 instead:
-# --runtime win-arm64
+# Skip version bump if needed
+.\Scripts\build-standalone.ps1 -SkipVersionBump
+
+# Build for specific architecture
+.\Scripts\build-standalone.ps1 -Architecture win-x64
+
+# For ARM64 systems
+.\Scripts\build-standalone.ps1 -Architecture win-arm64
 ```
 
 The executable will be at: `bin/Release/net10.0/win-x64/publish/VitallyMcp.exe`
@@ -126,15 +128,23 @@ If your project is in `C:\\Users\\YourUsername\\Downloads\\VitallyMcp`:
 
 3. **Build the MCPB package**:
    ```powershell
-   .\build-mcpb.ps1
+   # Build everything (bumps version, builds standalone, and creates MCPB)
+   .\Scripts\build-all.ps1
+
+   # Or build just the MCPB package
+   .\Scripts\build-mcpb.ps1
+
+   # Skip version bump if needed
+   .\Scripts\build-mcpb.ps1 -SkipVersionBump
    ```
 
    This will:
+   - Bump the version number (revision by default)
    - Detect your system architecture (x64 or ARM64)
    - Publish a self-contained executable
-   - Create a `.mcpb` file in the project root
+   - Create a versioned `.mcpb` file in the `Output/` directory (e.g., `VitallyMcp-1.1.3.mcpb`)
 
-4. **Install** the generated `.mcpb` file (double-click)
+4. **Install** the generated `.mcpb` file from `Output/` (double-click)
 
 5. **Configure** as described in Option 1 above
 
@@ -226,7 +236,7 @@ All list tools support the following parameters:
 
 - **limit** (optional): Maximum number of items to return (default: 20, max: 100)
 - **from** (optional): Pagination cursor from previous response (use the `next` value)
-- **fields** (optional): Comma-separated list of fields to include (e.g., `"id,name,createdAt"`). Defaults to `id,name,createdAt,updatedAt`. **Note:** Field filtering is done client-side to reduce response sizes.
+- **fields** (optional): Comma-separated list of fields to include (e.g., `"id,name,createdAt"`). See resource-specific defaults below. **Note:** Field filtering is done client-side to reduce response sizes.
 - **sortBy** (optional): Sort by `"createdAt"` or `"updatedAt"` (default: updatedAt)
 
 **AccountsTools only:**
@@ -237,27 +247,79 @@ All list tools support the following parameters:
 All get tools support:
 
 - **id** (required): The resource ID
-- **fields** (optional): Comma-separated list of fields to include. Defaults to `id,name,createdAt,updatedAt`. **Note:** Field filtering is done client-side.
+- **fields** (optional): Comma-separated list of fields to include. See resource-specific defaults below. **Note:** Field filtering is done client-side.
+
+### Resource-Specific Default Fields
+
+When no `fields` parameter is specified, each resource type returns an optimised field set:
+
+| Resource | Default Fields |
+|----------|----------------|
+| **Accounts** | id, name, createdAt, updatedAt, externalId, organizationId, healthScore, mrr, accountOwnerId, lastSeenTimestamp |
+| **Organizations** | id, name, createdAt, updatedAt, externalId, healthScore, mrr, lastSeenTimestamp |
+| **Users** | id, name, createdAt, updatedAt, externalId, email, accountId, organizationId, lastSeenTimestamp |
+| **Conversations** | id, externalId, subject, authorId, accountId, organizationId |
+| **Notes** | id, createdAt, updatedAt, externalId, subject, noteDate, authorId, accountId, organizationId, categoryId, archivedAt |
+| **Tasks** | id, name, createdAt, updatedAt, externalId, dueDate, completedAt, assignedToId, accountId, organizationId, archivedAt |
+| **Projects** | id, name, createdAt, updatedAt, traits, accountId, organizationId, archivedAt |
+| **Admins** | id, name, email |
+
+These defaults balance usefulness with response size:
+- **Business entities** (Accounts/Organizations) include health metrics and financial data
+- **Activity items** (Tasks/Notes) include dates, assignments, and relationships
+- **People** (Users/Admins) include contact information and activity timestamps
+- Large fields like full traits objects and rich text content are excluded unless explicitly requested
 
 ## Response Format
 
-All responses are returned as filtered JSON strings. By default (when no fields are specified), responses contain only the essential fields to reduce LLM context usage:
+All responses are returned as filtered JSON strings. By default (when no fields are specified), responses contain resource-specific optimised fields to reduce LLM context usage.
 
+**Example: ListAccounts (default fields)**
 ```json
 {
   "results": [
     {
-      "id": "...",
-      "name": "...",
-      "createdAt": "...",
-      "updatedAt": "..."
+      "id": "acc_123",
+      "name": "Acme Corp",
+      "createdAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-11-20T14:22:00Z",
+      "externalId": "SF-12345",
+      "organizationId": "org_456",
+      "healthScore": 8.5,
+      "mrr": 5000,
+      "accountOwnerId": "user_789",
+      "lastSeenTimestamp": "2024-11-19T09:15:00Z"
     }
   ],
   "next": "cursor-token-for-pagination"
 }
 ```
 
-**Note:** The Vitally API does not support field filtering natively. Field selection is implemented client-side by parsing the full API response and extracting only the requested fields before returning to the LLM.
+**Example: ListTasks (default fields)**
+```json
+{
+  "results": [
+    {
+      "id": "task_123",
+      "name": "Onboarding call",
+      "createdAt": "2024-11-01T08:00:00Z",
+      "updatedAt": "2024-11-15T16:30:00Z",
+      "externalId": null,
+      "dueDate": "2024-11-25",
+      "completedAt": null,
+      "assignedToId": "user_456",
+      "accountId": "acc_789",
+      "organizationId": "org_012",
+      "archivedAt": null
+    }
+  ],
+  "next": null
+}
+```
+
+**Note:**
+- The Vitally API does not support field filtering natively. Field selection is implemented client-side by parsing the full API response and extracting only the requested fields before returning to the LLM.
+- Only fields that exist on the resource are included - non-existent fields are omitted (not returned as null).
 
 ## Architecture
 
@@ -284,9 +346,17 @@ VitallyMcp/
 │   ├── ProjectsTools.cs
 │   ├── TasksTools.cs
 │   └── AdminsTools.cs
-├── mcpb/                      # MCPB packaging
-│   └── manifest.json          # Package manifest
-├── build-mcpb.ps1            # Build script for creating MCPB
+├── Scripts/                   # Build automation scripts
+│   ├── bump-version.ps1       # Version bumping script
+│   ├── build-standalone.ps1   # Standalone executable build
+│   ├── build-mcpb.ps1        # MCPB package build
+│   └── build-all.ps1         # Combined build script
+├── Output/                    # Build output directory
+│   ├── mcpb/                  # MCPB packaging files
+│   │   ├── manifest.json      # Package manifest
+│   │   ├── logo.png           # Package icon
+│   │   └── VitallyMcp.exe     # Executable staging (gitignored)
+│   └── VitallyMcp-*.mcpb     # Generated MCPB packages (gitignored)
 ├── VitallyMcp.csproj         # Project file
 └── README.md                  # This file
 ```
@@ -294,7 +364,8 @@ VitallyMcp/
 **Key Implementation Details:**
 - **VitallyService** implements client-side JSON filtering using `System.Text.Json.JsonDocument`
 - Field filtering reduces response sizes before returning to LLM
-- Default fields (id, name, createdAt, updatedAt) returned when no fields specified
+- **Resource-specific default fields** optimised per resource type (see table above)
+- Only fields that actually exist on the resource are included (via TryGetProperty)
 - Pagination uses `from` parameter matching Vitally API spec
 
 ## Building MCPB Packages
@@ -313,38 +384,54 @@ VitallyMcp/
 
 ### Build Process
 
-Run the build script:
+The project includes automated build scripts in the `Scripts/` directory:
+
+#### Complete Build (Recommended)
 
 ```powershell
-.\build-mcpb.ps1
+# Bumps version, builds standalone, and creates MCPB package
+.\Scripts\build-all.ps1
+
+# Bump minor version instead of revision
+.\Scripts\build-all.ps1 -BumpType Minor
+
+# Skip standalone build
+.\Scripts\build-all.ps1 -SkipStandalone
+```
+
+#### MCPB Package Only
+
+```powershell
+# Build MCPB with automatic version bump
+.\Scripts\build-mcpb.ps1
+
+# Skip version bump
+.\Scripts\build-mcpb.ps1 -SkipVersionBump
+
+# Specify architecture
+.\Scripts\build-mcpb.ps1 -Architecture win-arm64
 ```
 
 The script will:
-1. Auto-detect your system architecture (x64 or ARM64)
-2. Publish a self-contained .NET application
-3. Stage files in the `mcpb/server` directory
-4. Create an installable `.mcpb` bundle
+1. Bump the version number (revision by default)
+2. Auto-detect your system architecture (x64 or ARM64)
+3. Publish a self-contained .NET application
+4. Stage files in the `Output/mcpb` directory (executable at top level)
+5. Create a versioned `.mcpb` bundle in `Output/` (e.g., `VitallyMcp-1.1.3.mcpb`)
+6. Clean up temporary files
 
-### Manual Build
-
-For manual control:
+#### Version Management
 
 ```powershell
-# Publish the application
-dotnet publish VitallyMcp.csproj `
-  --configuration Release `
-  --runtime win-x64 `
-  --self-contained true `
-  --output bin/Release/net10.0/win-x64/publish `
-  /p:PublishSingleFile=true
-
-# Copy to MCPB directory
-Copy-Item bin/Release/net10.0/win-x64/publish/VitallyMcp.exe mcpb/server/
-
-# Create MCPB bundle
-cd mcpb
-mcpb pack
+# Manually bump version (revision, minor, or major)
+.\Scripts\bump-version.ps1 -BumpType Revision  # 1.1.2 -> 1.1.3
+.\Scripts\bump-version.ps1 -BumpType Minor     # 1.1.3 -> 1.2.0
+.\Scripts\bump-version.ps1 -BumpType Major     # 1.2.0 -> 2.0.0
 ```
+
+The version bump script updates both:
+- `VitallyMcp.csproj` - Project version
+- `Output/mcpb/manifest.json` - MCPB package version
 
 ## Security Considerations
 
@@ -417,8 +504,8 @@ mcpb pack
 
 ### For Internal Use
 
-1. Build the MCPB package: `.\build-mcpb.ps1`
-2. Distribute the `.mcpb` file to users
+1. Build the MCPB package: `.\Scripts\build-all.ps1` or `.\Scripts\build-mcpb.ps1`
+2. Distribute the versioned `.mcpb` file from `Output/` directory to users
 3. Provide installation instructions (double-click to install)
 4. Share the required environment variables template:
 
@@ -432,8 +519,8 @@ mcpb pack
 ### Version Control
 
 When committing to version control:
-- ✅ Include: Source code, manifest.json, build scripts
-- ❌ Exclude: Built `.mcpb` files, `mcpb/server/` directory, API credentials
+- ✅ Include: Source code, `Output/mcpb/manifest.json`, build scripts in `Scripts/`
+- ❌ Exclude: Built `.mcpb` files, `Output/mcpb/VitallyMcp.exe`, `Output/*.mcpb`, API credentials
 
 The `.gitignore` file is already configured appropriately.
 
@@ -450,6 +537,6 @@ This project is proprietary software developed for Fiscal Technologies. All righ
 
 ---
 
-**Version**: 1.0.0
-**Last Updated**: November 2025
+**Version**: 1.1.5
+**Last Updated**: November 2024
 **Built with**: .NET 10, MCP SDK 0.4.0-preview.3
