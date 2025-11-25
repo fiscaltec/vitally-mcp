@@ -116,24 +116,37 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ Server published successfully" -ForegroundColor Green
 Write-Host ""
 
-# Step 2: Copy executable to MCPB directory
-Write-Host "[2/5] Staging files for MCPB package..." -ForegroundColor Cyan
-$exePath = Join-Path $publishOutput "VitallyMcp.exe"
-$targetDir = Join-Path $ProjectRoot "Output\mcpb"
-$targetPath = Join-Path $targetDir "VitallyMcp.exe"
+# Rename the published binary to include version suffix
+$originalExe = Join-Path $publishOutput "VitallyMcp.exe"
+$versionedExeName = "VitallyMcp-$newVersion.exe"
+$versionedExe = Join-Path $publishOutput $versionedExeName
 
-if (-not (Test-Path $exePath)) {
-    Write-Error "Published executable not found at: $exePath"
+if (Test-Path $versionedExe) {
+    Remove-Item $versionedExe -Force
+}
+
+Rename-Item -Path $originalExe -NewName $versionedExeName -Force
+
+if (-not (Test-Path $versionedExe)) {
+    Write-Error "Failed to rename executable to versioned name"
     exit 1
 }
+
+Write-Host "✓ Binary renamed to $versionedExeName" -ForegroundColor Green
+Write-Host ""
+
+# Step 2: Copy versioned executable to MCPB directory
+Write-Host "[2/5] Staging files for MCPB package..." -ForegroundColor Cyan
+$targetDir = Join-Path $ProjectRoot "Output\mcpb"
+$targetPath = Join-Path $targetDir $versionedExeName
 
 # Ensure target directory exists
 if (-not (Test-Path $targetDir)) {
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 }
 
-# Copy the executable
-Copy-Item -Path $exePath -Destination $targetPath -Force
+# Copy the versioned executable
+Copy-Item -Path $versionedExe -Destination $targetPath -Force
 
 if (-not (Test-Path $targetPath)) {
     Write-Error "Failed to copy executable to MCPB directory"
@@ -141,6 +154,21 @@ if (-not (Test-Path $targetPath)) {
 }
 
 Write-Host "✓ Files staged successfully" -ForegroundColor Green
+Write-Host ""
+
+# Step 2.5: Update manifest.json to reference versioned binary
+Write-Host "[2.5/5] Updating manifest.json..." -ForegroundColor Cyan
+$manifestPath = Join-Path $targetDir "manifest.json"
+$manifestContent = Get-Content $manifestPath -Raw | ConvertFrom-Json
+
+# Update the entry_point and command to reference versioned binary
+$manifestContent.server.entry_point = $versionedExeName
+$manifestContent.server.mcp_config.command = "`${__dirname}/$versionedExeName"
+
+# Write the updated manifest back
+$manifestContent | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding UTF8
+
+Write-Host "✓ Manifest updated to reference $versionedExeName" -ForegroundColor Green
 Write-Host ""
 
 # Step 3: Create MCPB bundle
@@ -198,12 +226,19 @@ else {
 
 # Step 5: Cleanup
 Write-Host "[5/5] Cleaning up..." -ForegroundColor Cyan
-# Remove the executable from the mcpb directory to avoid bloat in git
+# Remove the versioned executable from the mcpb directory to avoid bloat in git
 # (it will be regenerated on next build)
 if (Test-Path $targetPath) {
     Remove-Item $targetPath -Force
-    Write-Host "✓ Cleaned up temporary files" -ForegroundColor Green
+    Write-Host "✓ Cleaned up temporary files ($versionedExeName)" -ForegroundColor Green
 }
+
+# Also restore manifest.json to default entry_point
+Write-Host "Restoring manifest.json to default entry_point..." -ForegroundColor Cyan
+$manifestContent.server.entry_point = "VitallyMcp.exe"
+$manifestContent.server.mcp_config.command = "`${__dirname}/VitallyMcp.exe"
+$manifestContent | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding UTF8
+Write-Host "✓ Manifest restored" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Cyan

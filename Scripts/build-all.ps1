@@ -132,7 +132,7 @@ Write-Host "Architecture: $Architecture" -ForegroundColor Yellow
 Write-Host ""
 
 if (-not $SkipStandalone) {
-    $standaloneExe = Join-Path $ProjectRoot "bin\Release\net10.0\$Architecture\publish\VitallyMcp.exe"
+    $standaloneExe = Join-Path $ProjectRoot "bin\Release\net10.0\$Architecture\publish\VitallyMcp-$newVersion.exe"
     Write-Host "Standalone executable:" -ForegroundColor Green
     Write-Host "  $standaloneExe" -ForegroundColor White
     Write-Host ""

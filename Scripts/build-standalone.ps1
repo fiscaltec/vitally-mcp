@@ -116,7 +116,22 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "[2/2] Build complete!" -ForegroundColor Green
+Write-Host "[2/2] Renaming binary with version suffix..." -ForegroundColor Cyan
+$originalExe = Join-Path $publishOutput "VitallyMcp.exe"
+$versionedExe = Join-Path $publishOutput "VitallyMcp-$newVersion.exe"
+
+if (Test-Path $versionedExe) {
+    Remove-Item $versionedExe -Force
+}
+
+Rename-Item -Path $originalExe -NewName "VitallyMcp-$newVersion.exe" -Force
+
+if (-not (Test-Path $versionedExe)) {
+    Write-Error "Failed to rename executable to versioned name"
+    exit 1
+}
+
+Write-Host "✓ Binary renamed successfully" -ForegroundColor Green
 Write-Host ""
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host "Build complete!" -ForegroundColor Green
@@ -124,7 +139,7 @@ Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Version: $newVersion" -ForegroundColor Yellow
 Write-Host "Executable location:" -ForegroundColor Yellow
-Write-Host "  $publishOutput\VitallyMcp.exe" -ForegroundColor White
+Write-Host "  $versionedExe" -ForegroundColor White
 Write-Host ""
 Write-Host "To use with Claude Desktop, add this to your config:" -ForegroundColor Yellow
 Write-Host ""
@@ -134,7 +149,7 @@ $configExample = @"
 {
   "mcpServers": {
     "vitally": {
-      "command": "$escapedPath\\VitallyMcp.exe",
+      "command": "$escapedPath\\VitallyMcp-$newVersion.exe",
       "env": {
         "VITALLY_API_KEY": "sk_live_your_api_key_here",
         "VITALLY_SUBDOMAIN": "your-subdomain"
