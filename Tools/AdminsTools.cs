@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AdminsTools
 {
-    [McpServerTool, DisplayName("List admins"), Description("List Vitally admins with optional pagination and field selection")]
+    [McpServerTool(Name = "List admins", ReadOnly = true), Description("List Vitally admins with optional pagination and field selection")]
     public static async Task<string> ListAdmins(
         VitallyService vitallyService,
         [Description("Maximum number of admins to return (default: 20, max: 100)")] int limit = 20,
@@ -17,7 +17,7 @@ public static class AdminsTools
         return await vitallyService.GetResourcesAsync("admins", limit, from, fields, sortBy);
     }
 
-    [McpServerTool, DisplayName("Get admin"), Description("Get a single Vitally admin by ID")]
+    [McpServerTool(Name = "Get admin", ReadOnly = true), Description("Get a single Vitally admin by ID")]
     public static async Task<string> GetAdmin(
         VitallyService vitallyService,
         [Description("The admin ID")] string id,

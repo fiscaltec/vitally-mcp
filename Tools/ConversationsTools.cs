@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ConversationsTools
 {
-    [McpServerTool, DisplayName("List conversations"), Description("List Vitally conversations with optional pagination and field selection")]
+    [McpServerTool(Name = "List conversations", ReadOnly = true), Description("List Vitally conversations with optional pagination and field selection")]
     public static async Task<string> ListConversations(
         VitallyService vitallyService,
         [Description("Maximum number of conversations to return (default: 20, max: 100)")] int limit = 20,
@@ -17,7 +17,7 @@ public static class ConversationsTools
         return await vitallyService.GetResourcesAsync("conversations", limit, from, fields, sortBy);
     }
 
-    [McpServerTool, DisplayName("Get conversation"), Description("Get a single Vitally conversation by ID")]
+    [McpServerTool(Name = "Get conversation", ReadOnly = true), Description("Get a single Vitally conversation by ID")]
     public static async Task<string> GetConversation(
         VitallyService vitallyService,
         [Description("The conversation ID")] string id,

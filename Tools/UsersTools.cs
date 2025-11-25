@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class UsersTools
 {
-    [McpServerTool, DisplayName("List users"), Description("List Vitally users with optional pagination and field selection")]
+    [McpServerTool(Name = "List users", ReadOnly = true), Description("List Vitally users with optional pagination and field selection")]
     public static async Task<string> ListUsers(
         VitallyService vitallyService,
         [Description("Maximum number of users to return (default: 20, max: 100)")] int limit = 20,
@@ -18,7 +18,7 @@ public static class UsersTools
         return await vitallyService.GetResourcesAsync("users", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool, DisplayName("Get user"), Description("Get a single Vitally user by ID")]
+    [McpServerTool(Name = "Get user", ReadOnly = true), Description("Get a single Vitally user by ID")]
     public static async Task<string> GetUser(
         VitallyService vitallyService,
         [Description("The user ID")] string id,

@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AccountsTools
 {
-    [McpServerTool, DisplayName("List account"), Description("List Vitally accounts with optional pagination, filtering and field selection")]
+    [McpServerTool(Name = "List account", ReadOnly = true), Description("List Vitally accounts with optional pagination, filtering and field selection")]
     public static async Task<string> ListAccounts(
         VitallyService vitallyService,
         [Description("Maximum number of accounts to return (default: 20, max: 100)")] int limit = 20,
@@ -25,7 +25,7 @@ public static class AccountsTools
         return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams, traits);
     }
 
-    [McpServerTool, DisplayName("Get account"), Description("Get a single Vitally account by ID")]
+    [McpServerTool(Name = "Get account", ReadOnly = true), Description("Get a single Vitally account by ID")]
     public static async Task<string> GetAccount(
         VitallyService vitallyService,
         [Description("The account ID")] string id,
