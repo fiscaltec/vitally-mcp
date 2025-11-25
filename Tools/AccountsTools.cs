@@ -6,14 +6,15 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AccountsTools
 {
-    [McpServerTool, Description("List Vitally accounts with optional pagination, filtering and field selection")]
+    [McpServerTool, DisplayName("List account"), Description("List Vitally accounts with optional pagination, filtering and field selection")]
     public static async Task<string> ListAccounts(
         VitallyService vitallyService,
         [Description("Maximum number of accounts to return (default: 20, max: 100)")] int limit = 20,
         [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
         [Description("Comma-separated list of fields to include (e.g., 'id,name,createdAt'). Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
         [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null,
-        [Description("Filter by account status: 'active' (default), 'churned', or 'activeOrChurned'")] string? status = null)
+        [Description("Filter by account status: 'active' (default), 'churned', or 'activeOrChurned'")] string? status = null,
+        [Description("Comma-separated list of trait names to include (e.g., 'paymentMethod,customField'). If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null)
     {
         var additionalParams = new Dictionary<string, string>();
         if (!string.IsNullOrEmpty(status))
@@ -21,15 +22,16 @@ public static class AccountsTools
             additionalParams["status"] = status;
         }
 
-        return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams);
+        return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams, traits);
     }
 
-    [McpServerTool, Description("Get a single Vitally account by ID")]
+    [McpServerTool, DisplayName("Get account"), Description("Get a single Vitally account by ID")]
     public static async Task<string> GetAccount(
         VitallyService vitallyService,
         [Description("The account ID")] string id,
-        [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null)
+        [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
+        [Description("Comma-separated list of trait names to include (e.g., 'paymentMethod,customField'). If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null)
     {
-        return await vitallyService.GetResourceByIdAsync("accounts", id, fields);
+        return await vitallyService.GetResourceByIdAsync("accounts", id, fields, traits);
     }
 }

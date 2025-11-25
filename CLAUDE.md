@@ -109,11 +109,13 @@ Centralised HTTP client for Vitally REST API:
 - Resource-specific filters (e.g., `status` for accounts: active, churned, activeOrChurned)
 
 **Client-Side Filtering:**
-- The Vitally API does NOT support field selection natively
+- The Vitally API does NOT support field or trait selection natively
 - VitallyService implements client-side JSON filtering after receiving full API response
-- Uses `System.Text.Json.JsonDocument` to parse and filter fields
+- Uses `System.Text.Json.JsonDocument` to parse and filter fields and traits
 - Only includes fields that actually exist on the resource (via TryGetProperty)
 - Preserves pagination metadata (`next` field) in filtered responses
+- **Trait filtering:** When traits parameter is specified, filters the traits object to include only requested trait keys
+- **Default behaviour:** Traits are excluded by default to reduce response size - use traits parameter to include specific traits
 - Reduces response size before returning to LLM
 
 **Resource-Specific Default Fields:**
@@ -128,10 +130,24 @@ When no fields are specified, each resource type returns an optimised field set:
 | **Conversations** | id, externalId, subject, authorId, accountId, organizationId |
 | **Notes** | id, createdAt, updatedAt, externalId, subject, noteDate, authorId, accountId, organizationId, categoryId, archivedAt |
 | **Tasks** | id, name, createdAt, updatedAt, externalId, dueDate, completedAt, assignedToId, accountId, organizationId, archivedAt |
-| **Projects** | id, name, createdAt, updatedAt, traits, accountId, organizationId, archivedAt |
+| **Projects** | id, name, createdAt, updatedAt, accountId, organizationId, archivedAt |
 | **Admins** | id, name, email |
 
-These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like full traits objects, rich text content).
+These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like traits objects and rich text content).
+
+**Trait Filtering:**
+
+Resources supporting traits: **Accounts, Organizations, Users, Tasks, Notes, Projects**
+
+Traits are excluded by default to minimise response size. To include specific traits:
+1. Add `"traits"` to the `fields` parameter
+2. Specify desired trait names in the `traits` parameter (comma-separated)
+
+Example: To get account name and payment method trait:
+- `fields="id,name,traits"`
+- `traits="paymentMethod"`
+
+This will return only the `paymentMethod` trait, filtering out all other traits from the response.
 
 ### Tool Structure (Tools/*.cs)
 
@@ -154,18 +170,19 @@ public static class AccountsTools
         [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
         [Description("Comma-separated fields... Client-side filtering.")] string? fields = null,
         [Description("Sort by field: 'createdAt' or 'updatedAt'")] string? sortBy = null,
-        [Description("Filter by account status: 'active', 'churned', 'activeOrChurned'")] string? status = null)
+        [Description("Filter by account status: 'active', 'churned', 'activeOrChurned'")] string? status = null,
+        [Description("Comma-separated trait names... Client-side filtering.")] string? traits = null)
     {
         var additionalParams = new Dictionary<string, string>();
         if (!string.IsNullOrEmpty(status))
             additionalParams["status"] = status;
 
-        return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams);
+        return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams, traits);
     }
 }
 ```
 
-**Note:** The `status` parameter is specific to AccountsTools. Other resource types have the standard parameters (limit, from, fields, sortBy) without resource-specific filters.
+**Note:** The `status` parameter is specific to AccountsTools. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects). Other resource types have the standard parameters (limit, from, fields, sortBy).
 
 ### Build Scripts (Scripts/)
 
@@ -228,7 +245,8 @@ To add support for a new Vitally resource:
 - **Read-only**: Never implement write/update/delete operations - this is by design for security
 - **Environment variables**: Never hardcode credentials - always use environment variable loading
 - **Error handling**: VitallyService uses EnsureSuccessStatusCode() - HTTP errors propagate to MCP client
-- **Client-side filtering**: Field selection is done client-side (Vitally API doesn't support it natively)
+- **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively)
+- **Trait filtering**: Traits are excluded by default - use traits parameter to include specific trait keys (requires "traits" in fields parameter)
 - **Resource-specific defaults**: Each resource type has optimised default fields (see table above)
 - **Field existence**: Only includes fields that actually exist on the resource - no null/undefined placeholders
 - **Pagination**: Use `from` parameter (not `cursor`) - this matches the Vitally API spec
@@ -253,6 +271,11 @@ The `.gitignore` is configured to exclude:
 - Manual testing requires actual Vitally credentials
 - Test pagination by using low limit values (e.g., limit=5) and verify `from` parameter works with `next` cursor
 - Test client-side field filtering by specifying various field combinations
+- **Test trait filtering**:
+  - Verify traits are excluded by default (not in response)
+  - Test with `fields="traits"` and `traits="traitName1,traitName2"` to filter specific traits
+  - Confirm only requested traits are returned from the traits object
+  - Test trait filtering on all resources that support traits (accounts, organizations, users, tasks, notes, projects)
 - **Verify resource-specific defaults**: Check each resource type returns its tailored default field set when no fields specified
 - **Verify field existence handling**: Confirm that non-existent fields are skipped (not returned as null)
 - Test sortBy parameter with "createdAt" and "updatedAt" values
