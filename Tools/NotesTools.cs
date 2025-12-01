@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class NotesTools
 {
-    [McpServerTool(Name = "List notes", ReadOnly = true), Description("List Vitally notes with optional pagination and field selection")]
+    [McpServerTool(Name = "List_notes", Title = "List notes", ReadOnly = true), Description("List Vitally notes with optional pagination and field selection")]
     public static async Task<string> ListNotes(
         VitallyService vitallyService,
         [Description("Maximum number of notes to return (default: 20, max: 100)")] int limit = 20,
@@ -18,7 +18,7 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync("notes", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "Get note", ReadOnly = true), Description("Get a single Vitally note by ID")]
+    [McpServerTool(Name = "Get_note", Title = "Get note", ReadOnly = true), Description("Get a single Vitally note by ID")]
     public static async Task<string> GetNote(
         VitallyService vitallyService,
         [Description("The note ID")] string id,

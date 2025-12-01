@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class TasksTools
 {
-    [McpServerTool(Name = "List tasks", ReadOnly = true), Description("List Vitally tasks with optional pagination and field selection")]
+    [McpServerTool(Name = "List_tasks", Title = "List tasks", ReadOnly = true), Description("List Vitally tasks with optional pagination and field selection")]
     public static async Task<string> ListTasks(
         VitallyService vitallyService,
         [Description("Maximum number of tasks to return (default: 20, max: 100)")] int limit = 20,
@@ -18,7 +18,7 @@ public static class TasksTools
         return await vitallyService.GetResourcesAsync("tasks", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "Get task", ReadOnly = true), Description("Get a single Vitally task by ID")]
+    [McpServerTool(Name = "Get_task", Title = "Get task", ReadOnly = true), Description("Get a single Vitally task by ID")]
     public static async Task<string> GetTask(
         VitallyService vitallyService,
         [Description("The task ID")] string id,

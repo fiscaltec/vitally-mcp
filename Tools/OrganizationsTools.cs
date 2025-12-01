@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class OrganizationsTools
 {
-    [McpServerTool(Name = "List organizations", ReadOnly = true), Description("List Vitally organisations with optional pagination and field selection")]
+    [McpServerTool(Name = "List_organizations", Title = "List organizations", ReadOnly = true), Description("List Vitally organisations with optional pagination and field selection")]
     public static async Task<string> ListOrganizations(
         VitallyService vitallyService,
         [Description("Maximum number of organisations to return (default: 20, max: 100)")] int limit = 20,
@@ -18,7 +18,7 @@ public static class OrganizationsTools
         return await vitallyService.GetResourcesAsync("organizations", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "Get organization", ReadOnly = true), Description("Get a single Vitally organisation by ID")]
+    [McpServerTool(Name = "Get_organization", Title = "Get organization", ReadOnly = true), Description("Get a single Vitally organisation by ID")]
     public static async Task<string> GetOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string id,

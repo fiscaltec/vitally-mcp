@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ProjectsTools
 {
-    [McpServerTool(Name = "List projects", ReadOnly = true), Description("List Vitally projects with optional pagination and field selection")]
+    [McpServerTool(Name = "List_projects", Title = "List projects", ReadOnly = true), Description("List Vitally projects with optional pagination and field selection")]
     public static async Task<string> ListProjects(
         VitallyService vitallyService,
         [Description("Maximum number of projects to return (default: 20, max: 100)")] int limit = 20,
@@ -18,7 +18,7 @@ public static class ProjectsTools
         return await vitallyService.GetResourcesAsync("projects", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "Get project", ReadOnly = true), Description("Get a single Vitally project by ID")]
+    [McpServerTool(Name = "Get_project", Title = "Get project", ReadOnly = true), Description("Get a single Vitally project by ID")]
     public static async Task<string> GetProject(
         VitallyService vitallyService,
         [Description("The project ID")] string id,
