@@ -22,7 +22,7 @@
     "test": "node --experimental-modules --experimental-specifier-resolution=node test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.0",
+    "@modelcontextprotocol/sdk": "1.24.0",
     "dotenv": "^16.3.1",
     "node-fetch": "^3.3.2"
   },
