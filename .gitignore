@@ -5,11 +5,12 @@ obj/
 *.userosscache
 *.suo
 
-# MCPB packaging
+# MCPB packaging and standalone builds
 *.mcpb
 mcpb/server/
 Output/mcpb/VitallyMcp.exe
 Output/*.mcpb
+Output/*.exe
 
 # API credentials - DO NOT COMMIT
 appsettings.json

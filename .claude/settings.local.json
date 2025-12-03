@@ -7,7 +7,7 @@
       "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-standalone.ps1)",
       "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-mcpb.ps1)",
       "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-all.ps1)",
-      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/sump-version.ps1)"
+      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/skip-version.ps1)"
     ],
     "deny": [],
     "ask": []

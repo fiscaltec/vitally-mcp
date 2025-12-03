@@ -132,9 +132,9 @@ Write-Host "Architecture: $Architecture" -ForegroundColor Yellow
 Write-Host ""
 
 if (-not $SkipStandalone) {
-    $standaloneExe = Join-Path $ProjectRoot "bin\Release\net10.0\$Architecture\publish\VitallyMcp-$newVersion.exe"
+    $outputExe = Join-Path $ProjectRoot "Output\VitallyMcp.exe"
     Write-Host "Standalone executable:" -ForegroundColor Green
-    Write-Host "  $standaloneExe" -ForegroundColor White
+    Write-Host "  $outputExe" -ForegroundColor White
     Write-Host ""
 }
 
@@ -142,5 +142,6 @@ $mcpbPackage = Join-Path $ProjectRoot "Output\VitallyMcp-$newVersion.mcpb"
 Write-Host "MCPB package:" -ForegroundColor Green
 Write-Host "  $mcpbPackage" -ForegroundColor White
 Write-Host ""
+Write-Host "All distribution files are in Output/ folder" -ForegroundColor Cyan
 Write-Host "Ready for distribution!" -ForegroundColor Green
 Write-Host ""

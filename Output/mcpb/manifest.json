@@ -1,8 +1,8 @@
 {
   "manifest_version": "0.3",
   "name": "Vitally",
-  "version": "1.1.11",
-  "description": "MCP server for integrating with Vitally customer success platform. Provides read-only access to accounts, organisations, users, conversations, notes, projects, tasks, and admins. Features client-side field filtering to reduce response sizes for LLM consumption.",
+  "version": "2.1.0",
+  "description": "MCP server for integrating with Vitally customer success platform. Provides full CRUD access to accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, and custom objects. Features client-side field filtering and permission management via ReadOnly/Destructive flags.",
   "author": {
     "name": "Dan Searle"
   },
@@ -26,6 +26,10 @@
       "description": "List Vitally accounts with optional pagination and field selection"
     },
     {
+      "name": "List accounts by organization",
+      "description": "List Vitally accounts for a specific organisation"
+    },
+    {
       "name": "Get account",
       "description": "Get a single Vitally account by ID"
     },
@@ -42,12 +46,32 @@
       "description": "List Vitally users with optional pagination and field selection"
     },
     {
+      "name": "List users by account",
+      "description": "List Vitally users for a specific account"
+    },
+    {
+      "name": "List users by organization",
+      "description": "List Vitally users for a specific organisation"
+    },
+    {
+      "name": "Search users",
+      "description": "Search Vitally users by email or externalId"
+    },
+    {
       "name": "Get user",
       "description": "Get a single Vitally user by ID"
     },
     {
       "name": "List conversations",
       "description": "List Vitally conversations with optional pagination and field selection"
+    },
+    {
+      "name": "List conversations by account",
+      "description": "List Vitally conversations for a specific account"
+    },
+    {
+      "name": "List conversations by organization",
+      "description": "List Vitally conversations for a specific organisation"
     },
     {
       "name": "Get conversation",
@@ -58,12 +82,28 @@
       "description": "List Vitally notes with optional pagination and field selection"
     },
     {
+      "name": "List notes by account",
+      "description": "List Vitally notes for a specific account"
+    },
+    {
+      "name": "List notes by organization",
+      "description": "List Vitally notes for a specific organisation"
+    },
+    {
       "name": "Get note",
       "description": "Get a single Vitally note by ID"
     },
     {
       "name": "List projects",
       "description": "List Vitally projects with optional pagination and field selection"
+    },
+    {
+      "name": "List projects by account",
+      "description": "List Vitally projects for a specific account"
+    },
+    {
+      "name": "List projects by organization",
+      "description": "List Vitally projects for a specific organisation"
     },
     {
       "name": "Get project",
@@ -74,16 +114,212 @@
       "description": "List Vitally tasks with optional pagination and field selection"
     },
     {
+      "name": "List tasks by account",
+      "description": "List Vitally tasks for a specific account"
+    },
+    {
+      "name": "List tasks by organization",
+      "description": "List Vitally tasks for a specific organisation"
+    },
+    {
       "name": "Get task",
       "description": "Get a single Vitally task by ID"
     },
     {
-      "name": "List admins",
-      "description": "List Vitally admins with optional pagination and field selection"
+      "name": "Search admins",
+      "description": "Search Vitally admins by email"
     },
     {
-      "name": "Get admin",
-      "description": "Get a single Vitally admin by ID"
+      "name": "List nps responses",
+      "description": "List Vitally NPS responses with optional pagination and field selection"
+    },
+    {
+      "name": "List nps responses by account",
+      "description": "List Vitally NPS responses for a specific account"
+    },
+    {
+      "name": "List nps responses by organization",
+      "description": "List Vitally NPS responses for a specific organisation"
+    },
+    {
+      "name": "Get nps response",
+      "description": "Get a single Vitally NPS response by ID"
+    },
+    {
+      "name": "List project templates",
+      "description": "List Vitally project templates with optional pagination and filtering"
+    },
+    {
+      "name": "Get project template",
+      "description": "Get a single Vitally project template by ID"
+    },
+    {
+      "name": "List project categories",
+      "description": "List Vitally project categories with optional pagination"
+    },
+    {
+      "name": "Get project category",
+      "description": "Get a single Vitally project category by ID"
+    },
+    {
+      "name": "Get message",
+      "description": "Get a single Vitally message by ID"
+    },
+    {
+      "name": "List messages by conversation",
+      "description": "List Vitally messages for a specific conversation"
+    },
+    {
+      "name": "Get account health scores",
+      "description": "Get health score breakdown for a Vitally account"
+    },
+    {
+      "name": "List note categories",
+      "description": "List Vitally note categories with optional pagination"
+    },
+    {
+      "name": "List task categories",
+      "description": "List Vitally task categories with optional pagination"
+    },
+    {
+      "name": "Create account",
+      "description": "Create a new Vitally account"
+    },
+    {
+      "name": "Update account",
+      "description": "Update an existing Vitally account"
+    },
+    {
+      "name": "Delete account",
+      "description": "Delete a Vitally account"
+    },
+    {
+      "name": "Create organization",
+      "description": "Create a new Vitally organisation"
+    },
+    {
+      "name": "Update organization",
+      "description": "Update an existing Vitally organisation"
+    },
+    {
+      "name": "Delete organization",
+      "description": "Delete a Vitally organisation"
+    },
+    {
+      "name": "Create user",
+      "description": "Create a new Vitally user"
+    },
+    {
+      "name": "Update user",
+      "description": "Update an existing Vitally user"
+    },
+    {
+      "name": "Delete user",
+      "description": "Delete a Vitally user"
+    },
+    {
+      "name": "Create conversation",
+      "description": "Create a new Vitally conversation with messages"
+    },
+    {
+      "name": "Update conversation",
+      "description": "Update an existing Vitally conversation and its messages"
+    },
+    {
+      "name": "Delete conversation",
+      "description": "Delete a Vitally conversation including all messages"
+    },
+    {
+      "name": "Create note",
+      "description": "Create a new Vitally note"
+    },
+    {
+      "name": "Update note",
+      "description": "Update an existing Vitally note"
+    },
+    {
+      "name": "Delete note",
+      "description": "Delete a Vitally note"
+    },
+    {
+      "name": "Create task",
+      "description": "Create a new Vitally task"
+    },
+    {
+      "name": "Update task",
+      "description": "Update an existing Vitally task"
+    },
+    {
+      "name": "Delete task",
+      "description": "Delete a Vitally task"
+    },
+    {
+      "name": "Create project from template",
+      "description": "Create a new Vitally project from a template"
+    },
+    {
+      "name": "Update project",
+      "description": "Update an existing Vitally project"
+    },
+    {
+      "name": "Delete project",
+      "description": "Delete a Vitally project"
+    },
+    {
+      "name": "Create nps response",
+      "description": "Create a new Vitally NPS response (or update if externalId exists)"
+    },
+    {
+      "name": "Update nps response",
+      "description": "Update an existing Vitally NPS response"
+    },
+    {
+      "name": "Delete nps response",
+      "description": "Delete a Vitally NPS response"
+    },
+    {
+      "name": "Create message",
+      "description": "Create a new message in a Vitally conversation"
+    },
+    {
+      "name": "Delete message",
+      "description": "Delete a Vitally message"
+    },
+    {
+      "name": "List custom objects",
+      "description": "List Vitally custom objects with optional pagination"
+    },
+    {
+      "name": "Get custom object",
+      "description": "Get a single Vitally custom object by ID"
+    },
+    {
+      "name": "List custom object instances",
+      "description": "List instances of a Vitally custom object with optional pagination"
+    },
+    {
+      "name": "Search custom object instances",
+      "description": "Search for custom object instances by various criteria"
+    },
+    {
+      "name": "Create custom object",
+      "description": "Create a new Vitally custom object"
+    },
+    {
+      "name": "Update custom object",
+      "description": "Update an existing Vitally custom object"
+    },
+    {
+      "name": "Create custom object instance",
+      "description": "Create a new instance of a Vitally custom object"
+    },
+    {
+      "name": "Update custom object instance",
+      "description": "Update an existing custom object instance"
+    },
+    {
+      "name": "Delete custom object instance",
+      "description": "Delete a custom object instance"
     }
   ],
   "user_config": {

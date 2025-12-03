@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides read-only access to the Vitally customer success platform. The server is packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windows.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windows.
 
 **Key characteristics:**
-- Read-only API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins)
+- Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages)
+- Permission management via ReadOnly and Destructive flags for MCP clients
 - Windows-specific MCPB packaging
 - .NET 10 single-file executable
 - Credentials managed via environment variables (VITALLY_API_KEY, VITALLY_SUBDOMAIN)
@@ -132,12 +133,16 @@ When no fields are specified, each resource type returns an optimised field set:
 | **Tasks** | id, name, createdAt, updatedAt, externalId, dueDate, completedAt, assignedToId, accountId, organizationId, archivedAt |
 | **Projects** | id, name, createdAt, updatedAt, accountId, organizationId, archivedAt |
 | **Admins** | id, name, email |
+| **NPS Responses** | id, externalId, userId, score, feedback, respondedAt |
+| **Project Templates** | id, name, createdAt, updatedAt, projectCategoryId, description |
+| **Project Categories** | id, name, createdAt, updatedAt |
+| **Messages** | id, type, externalId, timestamp, message, from, to |
 
 These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like traits objects and rich text content).
 
 **Trait Filtering:**
 
-Resources supporting traits: **Accounts, Organizations, Users, Tasks, Notes, Projects**
+Resources supporting traits: **Accounts, Organizations, Users, Tasks, Notes, Projects, Project Templates**
 
 Traits are excluded by default to minimise response size. To include specific traits:
 1. Add `"traits"` to the `fields` parameter
@@ -242,7 +247,8 @@ To add support for a new Vitally resource:
 ## Important Notes
 
 - **UK English**: Use UK spelling (organisations, authorisation, etc.) in all code comments and documentation
-- **Read-only**: Never implement write/update/delete operations - this is by design for security
+- **Permission management**: Tools use ReadOnly = true flag for GET/LIST operations and Destructive = true flag for CREATE/UPDATE/DELETE operations. This allows MCP clients to bulk enable/disable operations by permission level.
+- **Write operations**: All resources support full CRUD operations (where applicable). JSON body parameters accept complete request bodies for create/update operations.
 - **Environment variables**: Never hardcode credentials - always use environment variable loading
 - **Error handling**: VitallyService uses EnsureSuccessStatusCode() - HTTP errors propagate to MCP client
 - **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively)
@@ -275,7 +281,7 @@ The `.gitignore` is configured to exclude:
   - Verify traits are excluded by default (not in response)
   - Test with `fields="traits"` and `traits="traitName1,traitName2"` to filter specific traits
   - Confirm only requested traits are returned from the traits object
-  - Test trait filtering on all resources that support traits (accounts, organizations, users, tasks, notes, projects)
+  - Test trait filtering on all resources that support traits (accounts, organizations, users, tasks, notes, projects, project templates)
 - **Verify resource-specific defaults**: Check each resource type returns its tailored default field set when no fields specified
 - **Verify field existence handling**: Confirm that non-existent fields are skipped (not returned as null)
 - Test sortBy parameter with "createdAt" and "updatedAt" values

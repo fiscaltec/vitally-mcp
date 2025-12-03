@@ -58,12 +58,12 @@ Write-Host ""
 
 # Step 0: Bump version
 if (-not $SkipVersionBump) {
-    Write-Host "[0/2] Bumping version..." -ForegroundColor Cyan
+    Write-Host "[0/3] Bumping version..." -ForegroundColor Cyan
     $bumpScript = Join-Path $ScriptDir "bump-version.ps1"
     $newVersion = & $bumpScript -BumpType Revision
     Write-Host ""
 } else {
-    Write-Host "[0/2] Skipping version bump..." -ForegroundColor Yellow
+    Write-Host "[0/3] Skipping version bump..." -ForegroundColor Yellow
     # Read current version
     [xml]$csproj = Get-Content (Join-Path $ProjectRoot "VitallyMcp.csproj")
     $newVersion = $csproj.Project.PropertyGroup.Version
@@ -93,7 +93,7 @@ Write-Host "Architecture: $Architecture" -ForegroundColor Green
 Write-Host ""
 
 # Build the server
-Write-Host "[1/2] Publishing VitallyMcp server..." -ForegroundColor Cyan
+Write-Host "[1/3] Publishing VitallyMcp server..." -ForegroundColor Cyan
 $publishOutput = Join-Path $ProjectRoot "bin\$Configuration\net10.0\$Architecture\publish"
 $projectFile = Join-Path $ProjectRoot "VitallyMcp.csproj"
 
@@ -116,7 +116,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "[2/2] Renaming binary with version suffix..." -ForegroundColor Cyan
+Write-Host "[2/3] Renaming binary with version suffix..." -ForegroundColor Cyan
 $originalExe = Join-Path $publishOutput "VitallyMcp.exe"
 $versionedExe = Join-Path $publishOutput "VitallyMcp-$newVersion.exe"
 
@@ -133,13 +133,32 @@ if (-not (Test-Path $versionedExe)) {
 
 Write-Host "✓ Binary renamed successfully" -ForegroundColor Green
 Write-Host ""
+
+# Copy binary to Output folder
+Write-Host "[3/3] Copying binary to Output folder..." -ForegroundColor Cyan
+$outputDir = Join-Path $ProjectRoot "Output"
+
+# Ensure Output directory exists
+if (-not (Test-Path $outputDir)) {
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+}
+
+$outputLatestExe = Join-Path $outputDir "VitallyMcp.exe"
+
+# Copy as VitallyMcp.exe (no version prefix)
+Copy-Item -Path $versionedExe -Destination $outputLatestExe -Force
+Write-Host "✓ Copied: VitallyMcp.exe" -ForegroundColor Green
+
+Write-Host ""
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host "Build complete!" -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Version: $newVersion" -ForegroundColor Yellow
-Write-Host "Executable location:" -ForegroundColor Yellow
-Write-Host "  $versionedExe" -ForegroundColor White
+Write-Host ""
+Write-Host "Executable locations:" -ForegroundColor Yellow
+Write-Host "  Build output (versioned): $versionedExe" -ForegroundColor White
+Write-Host "  Output: $outputLatestExe" -ForegroundColor White
 Write-Host ""
 Write-Host "To use with Claude Desktop, add this to your config:" -ForegroundColor Yellow
 Write-Host ""

@@ -22,7 +22,14 @@ public class VitallyService
         ["notes"] = ["id", "createdAt", "updatedAt", "externalId", "subject", "noteDate", "authorId", "accountId", "organizationId", "categoryId", "archivedAt"],
         ["tasks"] = ["id", "name", "createdAt", "updatedAt", "externalId", "dueDate", "completedAt", "assignedToId", "accountId", "organizationId", "archivedAt"],
         ["projects"] = ["id", "name", "createdAt", "updatedAt", "accountId", "organizationId", "archivedAt"],
-        ["admins"] = ["id", "name", "email"]
+        ["admins"] = ["id", "name", "email"],
+        ["npsResponses"] = ["id", "externalId", "userId", "score", "feedback", "respondedAt"],
+        ["projectTemplates"] = ["id", "name", "createdAt", "updatedAt", "projectCategoryId", "description"],
+        ["projectCategories"] = ["id", "name", "createdAt", "updatedAt"],
+        ["messages"] = ["id", "type", "externalId", "timestamp", "message", "from", "to"],
+        ["customObjects"] = ["id", "name", "createdAt", "updatedAt"],
+        ["noteCategories"] = ["id", "name", "createdAt", "updatedAt"],
+        ["taskCategories"] = ["id", "name", "createdAt", "updatedAt"]
     };
 
 
@@ -81,6 +88,38 @@ public class VitallyService
 
         // Apply client-side field and trait filtering with resource-specific defaults
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
+    }
+
+    public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
+    {
+        var url = $"{_baseUrl}/resources/{resourceType}";
+        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync(url, content);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    public async Task<string> UpdateResourceAsync(string resourceType, string id, string jsonBody)
+    {
+        var url = $"{_baseUrl}/resources/{resourceType}/{id}";
+        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PutAsync(url, content);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    public async Task<string> DeleteResourceAsync(string resourceType, string id)
+    {
+        var url = $"{_baseUrl}/resources/{resourceType}/{id}";
+
+        var response = await _httpClient.DeleteAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
     }
 
     /// <summary>
