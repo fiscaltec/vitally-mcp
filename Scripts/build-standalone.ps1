@@ -65,7 +65,7 @@ if (-not $SkipVersionBump) {
 } else {
     Write-Host "[0/3] Skipping version bump..." -ForegroundColor Yellow
     # Read current version
-    [xml]$csproj = Get-Content (Join-Path $ProjectRoot "VitallyMcp.csproj")
+    [xml]$csproj = Get-Content (Join-Path $ProjectRoot "VitallyMcp\VitallyMcp.csproj")
     $newVersion = $csproj.Project.PropertyGroup.Version
     Write-Host "Current version: $newVersion" -ForegroundColor Green
     Write-Host ""
@@ -94,8 +94,8 @@ Write-Host ""
 
 # Build the server
 Write-Host "[1/3] Publishing VitallyMcp server..." -ForegroundColor Cyan
-$publishOutput = Join-Path $ProjectRoot "bin\$Configuration\net10.0\$Architecture\publish"
-$projectFile = Join-Path $ProjectRoot "VitallyMcp.csproj"
+$publishOutput = Join-Path $ProjectRoot "VitallyMcp\bin\$Configuration\net10.0\$Architecture\publish"
+$projectFile = Join-Path $ProjectRoot "VitallyMcp\VitallyMcp.csproj"
 
 Push-Location $ProjectRoot
 try {

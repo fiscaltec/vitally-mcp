@@ -38,7 +38,7 @@ $ErrorActionPreference = "Stop"
 
 # Resolve paths relative to script location
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$CsprojPath = Join-Path $ProjectRoot "VitallyMcp.csproj"
+$CsprojPath = Join-Path $ProjectRoot "VitallyMcp\VitallyMcp.csproj"
 $ManifestPath = Join-Path $ProjectRoot "Output\mcpb\manifest.json"
 
 # Validate files exist
