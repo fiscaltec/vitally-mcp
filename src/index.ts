@@ -2,15 +2,18 @@
 
 /**
  * Copyright (c) 2024 John Jung
- * 
- * Vitally MCP Server
- * 
- * This MCP server connects to the Vitally API to provide customer information.
- * It allows:
- * - Listing accounts as resources
- * - Reading account details
- * - Searching for users
- * - Querying account health scores
+ * Copyright (c) 2026 Wiseair S.r.l.
+ *
+ * Vitally MCP Server (Wiseair fork)
+ *
+ * MCP server for the Vitally REST API. Exposes account, user, task, project,
+ * note, conversation, and organization data with first-class trait/MRR/health
+ * fields and explicit cursor pagination.
+ *
+ * Original work by John Jung; containerised by Dan Searle. This fork adds
+ * full account-payload exposure, workspace-level list tools, an `update_account`
+ * tool, a `paginate` helper, surfaced error bodies, rate-limit logging, and a
+ * self-deriving `search_tools` registry.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -21,17 +24,40 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import * as dotenv from 'dotenv';
-import * as path from 'path';
-import * as fs from 'fs';
-import fetch from 'node-fetch';
+import * as dotenv from "dotenv";
+import * as path from "path";
+import * as fs from "fs";
+import fetch from "node-fetch";
 
-// Type definitions for Vitally API responses
+// ---------------------------------------------------------------------------
+// Logging — stderr only. The MCP stdio transport uses stdout for JSON-RPC, so
+// any stray write to stdout corrupts the protocol stream.
+// ---------------------------------------------------------------------------
+
+function log(...parts: unknown[]): void {
+  process.stderr.write(parts.map(p => (typeof p === "string" ? p : JSON.stringify(p))).join(" ") + "\n");
+}
+
+// ---------------------------------------------------------------------------
+// Type definitions
+// ---------------------------------------------------------------------------
+
 interface VitallyAccount {
   id: string;
   name: string;
   externalId?: string;
-  [key: string]: any;
+  traits?: Record<string, unknown>;
+  mrr?: number;
+  nextRenewalDate?: string;
+  churnedAt?: string;
+  trialEndDate?: string;
+  usersCount?: number;
+  npsScore?: number;
+  healthScore?: number;
+  csmId?: string;
+  accountExecutiveId?: string;
+  segments?: unknown[];
+  [key: string]: unknown;
 }
 
 interface VitallyUser {
@@ -39,7 +65,9 @@ interface VitallyUser {
   name?: string;
   email?: string;
   externalId?: string;
-  [key: string]: any;
+  accountId?: string;
+  account?: VitallyAccount;
+  [key: string]: unknown;
 }
 
 interface VitallyPaginatedResponse<T> {
@@ -47,947 +75,1078 @@ interface VitallyPaginatedResponse<T> {
   next: string | null;
 }
 
-// Additional type definitions for Vitally API responses
 interface VitallyConversation {
   id: string;
   subject?: string;
-  createdAt: string;
-  updatedAt: string;
-  account?: {
-    id: string;
-    name: string;
-  };
-  [key: string]: any;
+  externalId?: string;
+  externalUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  account?: VitallyAccount;
+  [key: string]: unknown;
 }
 
 interface VitallyTask {
   id: string;
-  title: string;
+  title?: string;
   description?: string;
   status?: string;
   dueDate?: string;
-  createdAt: string;
-  updatedAt: string;
-  account?: {
-    id: string;
-    name: string;
-  };
-  [key: string]: any;
+  createdAt?: string;
+  updatedAt?: string;
+  account?: VitallyAccount;
+  [key: string]: unknown;
 }
 
 interface VitallyNote {
   id: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-  account?: {
-    id: string;
-    name: string;
-  };
-  [key: string]: any;
+  content?: string;
+  note?: string;
+  subject?: string;
+  noteDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  account?: VitallyAccount;
+  [key: string]: unknown;
 }
 
-// Load environment variables
-const envPath = path.resolve(process.cwd(), '.env');
+interface VitallyProject {
+  id: string;
+  name?: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  account?: VitallyAccount;
+  [key: string]: unknown;
+}
+
+interface VitallyOrganization {
+  id: string;
+  name?: string;
+  externalId?: string;
+  [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Environment & API configuration
+// ---------------------------------------------------------------------------
+
+const envPath = path.resolve(process.cwd(), ".env");
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
-  console.error(`Loaded environment from ${envPath}`);
+  log(`Loaded environment from ${envPath}`);
 } else {
-  console.error(`Warning: No .env file found at ${envPath}`);
+  log(`Warning: No .env file found at ${envPath}`);
 }
 
-// Vitally API Configuration
-const VITALLY_SUBDOMAIN = process.env.VITALLY_API_SUBDOMAIN || 'nylas';
+const VITALLY_SUBDOMAIN = process.env.VITALLY_API_SUBDOMAIN || "nylas";
 const VITALLY_API_KEY = process.env.VITALLY_API_KEY;
-const VITALLY_DATA_CENTER = (process.env.VITALLY_DATA_CENTER || 'US').toUpperCase();
+const VITALLY_DATA_CENTER = (process.env.VITALLY_DATA_CENTER || "US").toUpperCase();
 
-// API Base URL based on data center
-const API_BASE_URL = VITALLY_DATA_CENTER === 'EU'
-  ? 'https://rest.vitally-eu.io'
+// EU instance shares one host across tenants; US instance is per-subdomain.
+// Verified against https://docs.vitally.io/en/articles/9880654-rest-api-accounts.
+const API_BASE_URL = VITALLY_DATA_CENTER === "EU"
+  ? "https://rest.vitally-eu.io"
   : `https://${VITALLY_SUBDOMAIN}.rest.vitally.io`;
 
-// Validation
-if (!VITALLY_API_KEY || VITALLY_API_KEY === 'your_api_key_here') {
-  console.error('Error: VITALLY_API_KEY is not set or is using the default placeholder value');
-  console.error('Please update your .env file with a valid Vitally API key');
-
-  // Mock API key for demo mode
-  const DEMO_MODE = true;
-  if (DEMO_MODE) {
-    console.error('Starting in DEMO MODE with mock data');
-  } else {
-    process.exit(1);
-  }
+const DEMO_MODE = !VITALLY_API_KEY || VITALLY_API_KEY === "your_api_key_here";
+if (DEMO_MODE) {
+  log("VITALLY_API_KEY is not set; starting in DEMO MODE with mock data.");
 }
 
-// API Authentication header
-const AUTH_HEADER = `Basic ${Buffer.from(`${VITALLY_API_KEY}:`).toString('base64')}`;
+const AUTH_HEADER = `Basic ${Buffer.from(`${VITALLY_API_KEY ?? ""}:`).toString("base64")}`;
 
-/**
- * Helper function to make authenticated requests to the Vitally API
- */
-async function callVitallyAPI<T>(endpoint: string, method = 'GET', body?: any): Promise<T> {
-  // Check if we're in demo mode due to missing API key
-  if (!VITALLY_API_KEY || VITALLY_API_KEY === 'your_api_key_here') {
-    return mockApiResponse(endpoint, method, body);
+// ---------------------------------------------------------------------------
+// Vitally API client
+// ---------------------------------------------------------------------------
+
+async function callVitallyAPI<T>(endpoint: string, method: string = "GET", body?: unknown): Promise<T> {
+  if (DEMO_MODE) {
+    return mockApiResponse<T>(endpoint, method, body);
   }
 
   const url = `${API_BASE_URL}${endpoint}`;
-  const options: any = {
+  const init: Parameters<typeof fetch>[1] = {
     method,
     headers: {
-      'Authorization': AUTH_HEADER,
-      'Content-Type': 'application/json',
+      Authorization: AUTH_HEADER,
+      "Content-Type": "application/json",
     },
   };
-
-  if (body && (method === 'POST' || method === 'PUT')) {
-    options.body = JSON.stringify(body);
+  if (body !== undefined && (method === "POST" || method === "PUT" || method === "PATCH")) {
+    init.body = JSON.stringify(body);
   }
 
+  let response;
   try {
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      throw new Error(`API call failed: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json() as T;
-    return data;
-  } catch (error) {
-    console.error(`Error calling Vitally API: ${error}`);
-    throw error;
+    response = await fetch(url, init);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Network error calling Vitally ${method} ${endpoint}: ${msg}`);
   }
+
+  const remainingHeader = response.headers.get("x-ratelimit-remaining");
+  if (remainingHeader !== null) {
+    const remaining = parseInt(remainingHeader, 10);
+    if (!Number.isNaN(remaining) && remaining < 50) {
+      log(`[vitally-mcp] rate limit low: ${remaining} remaining on ${method} ${endpoint}`);
+    }
+  }
+
+  if (!response.ok) {
+    let errBody = "";
+    try {
+      errBody = await response.text();
+    } catch {
+      // ignore secondary read failures
+    }
+    throw new Error(
+      `Vitally API ${response.status} ${response.statusText} on ${method} ${endpoint}` +
+        (errBody ? `: ${errBody}` : "")
+    );
+  }
+
+  return (await response.json()) as T;
 }
 
 /**
- * Mock API response for demo mode when API key is not available
+ * Build a query string from a params object, omitting undefined / null / "".
  */
-function mockApiResponse<T>(endpoint: string, method = 'GET', body?: any): T {
-  console.error(`DEMO MODE: Mock API call to ${endpoint} [${method}]`);
+function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
+  const sp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    sp.append(key, String(value));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
 
-  // Mock accounts
-  const mockAccounts = [
-    { id: "1", name: "Acme Corporation", externalId: "acme-corp" },
-    { id: "2", name: "Globex Industries", externalId: "globex" },
-    { id: "3", name: "Initech Technologies", externalId: "initech" },
-    { id: "4", name: "Umbrella Corporation", externalId: "umbrella" },
-    { id: "5", name: "Stark Industries", externalId: "stark" }
-  ];
+/**
+ * Call a paginated Vitally endpoint. Returns the raw `{ results, next }`
+ * shape — pagination is the caller's responsibility (LLM-driven). We do NOT
+ * silently fetch all pages.
+ */
+async function paginate<T>(
+  endpoint: string,
+  params: Record<string, string | number | boolean | undefined | null>
+): Promise<VitallyPaginatedResponse<T>> {
+  return callVitallyAPI<VitallyPaginatedResponse<T>>(`${endpoint}${buildQuery(params)}`);
+}
 
-  // Mock users
-  const mockUsers = [
-    { id: "101", name: "John Doe", email: "john@acme-corp.com", externalId: "user-101", accountId: "1" },
-    { id: "102", name: "Jane Smith", email: "jane@globex.com", externalId: "user-102", accountId: "2" },
-    { id: "103", name: "Mike Johnson", email: "mike@initech.com", externalId: "user-103", accountId: "3" }
-  ];
+// ---------------------------------------------------------------------------
+// Account serialization — single source of truth so every tool returns the
+// same shape. We pass the full account through so traits, MRR, NPS, health,
+// CSM ownership, etc. are all available to the LLM.
+// ---------------------------------------------------------------------------
 
-  // Handle different endpoints
-  if (endpoint === '/resources/accounts') {
-    return {
-      results: mockAccounts,
-      next: null
-    } as unknown as T;
+function serializeAccount(account: VitallyAccount): VitallyAccount & { uri: string } {
+  return {
+    ...account,
+    uri: `vitally://account/${account.id}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mock data for demo mode
+// ---------------------------------------------------------------------------
+
+const MOCK_ACCOUNTS: VitallyAccount[] = [
+  {
+    id: "1",
+    name: "Acme Corporation",
+    externalId: "acme-corp",
+    traits: { "vitally.custom.arr": 120000, "vitally.custom.tier": "Tier 1" },
+    mrr: 10000,
+    nextRenewalDate: "2026-12-01",
+    usersCount: 42,
+    npsScore: 9,
+    healthScore: 88,
+    csmId: "csm-1",
+    accountExecutiveId: "ae-1",
+  },
+  {
+    id: "2",
+    name: "Globex Industries",
+    externalId: "globex",
+    traits: { "vitally.custom.arr": 60000 },
+    mrr: 5000,
+    nextRenewalDate: "2026-09-15",
+    usersCount: 18,
+    npsScore: 7,
+    healthScore: 72,
+    csmId: "csm-2",
+  },
+  {
+    id: "3",
+    name: "Initech Technologies",
+    externalId: "initech",
+    traits: { "vitally.custom.arr": 24000 },
+    mrr: 2000,
+    nextRenewalDate: "2026-07-20",
+    usersCount: 7,
+    npsScore: 5,
+    healthScore: 60,
+  },
+  {
+    id: "4",
+    name: "Sace",
+    externalId: "sace",
+    traits: { "vitally.custom.arr": 7000 },
+    mrr: 583.33,
+    nextRenewalDate: "2027-01-10",
+    usersCount: 4,
+    npsScore: 8,
+    healthScore: 80,
+  },
+  {
+    id: "5",
+    name: "Stark Industries",
+    externalId: "stark",
+    traits: { "vitally.custom.arr": 250000, "vitally.custom.tier": "Strategic" },
+    mrr: 20833.33,
+    nextRenewalDate: "2026-11-05",
+    usersCount: 120,
+    npsScore: 10,
+    healthScore: 95,
+    csmId: "csm-1",
+  },
+];
+
+const MOCK_USERS: VitallyUser[] = [
+  { id: "101", name: "John Doe", email: "john@acme-corp.com", externalId: "user-101", accountId: "1", account: MOCK_ACCOUNTS[0] },
+  { id: "102", name: "Jane Smith", email: "jane@globex.com", externalId: "user-102", accountId: "2", account: MOCK_ACCOUNTS[1] },
+  { id: "103", name: "Mike Johnson", email: "mike@initech.com", externalId: "user-103", accountId: "3", account: MOCK_ACCOUNTS[2] },
+];
+
+function mockApiResponse<T>(endpoint: string, method = "GET", body?: unknown): T {
+  log(`DEMO MODE: ${method} ${endpoint}`);
+
+  // Strip the query string for prefix matching, but keep the parsed params
+  // around for filters that the real API would honour (status, name, etc).
+  const [pathOnly, qs = ""] = endpoint.split("?");
+  const params = new URLSearchParams(qs);
+
+  // Account by id or externalId
+  const accountByIdMatch = pathOnly.match(/^\/resources\/accounts\/([^/]+)$/);
+  if (accountByIdMatch && method === "GET") {
+    const idOrExt = decodeURIComponent(accountByIdMatch[1]);
+    const acc = MOCK_ACCOUNTS.find(a => a.id === idOrExt || a.externalId === idOrExt);
+    if (!acc) throw new Error(`Vitally API 404 Not Found on GET ${endpoint}: account not found`);
+    return acc as unknown as T;
   }
 
-  if (endpoint.startsWith('/resources/accounts/') && endpoint.endsWith('/healthScores')) {
-    const accountId = endpoint.split('/')[3];
+  if (accountByIdMatch && method === "PUT") {
+    const idOrExt = decodeURIComponent(accountByIdMatch[1]);
+    const idx = MOCK_ACCOUNTS.findIndex(a => a.id === idOrExt || a.externalId === idOrExt);
+    if (idx === -1) throw new Error(`Vitally API 404 Not Found on PUT ${endpoint}: account not found`);
+    const patch = (body || {}) as Partial<VitallyAccount>;
+    const merged: VitallyAccount = {
+      ...MOCK_ACCOUNTS[idx],
+      ...patch,
+      traits: { ...(MOCK_ACCOUNTS[idx].traits || {}), ...(patch.traits || {}) },
+    };
+    MOCK_ACCOUNTS[idx] = merged;
+    return merged as unknown as T;
+  }
+
+  if (pathOnly === "/resources/accounts" && method === "GET") {
+    const limit = parseInt(params.get("limit") || "100", 10);
+    return { results: MOCK_ACCOUNTS.slice(0, limit), next: null } as unknown as T;
+  }
+
+  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/healthScores$/)) {
+    const accountId = pathOnly.split("/")[3];
     return {
       overallHealth: 85,
       components: [
         { name: "Product Usage", score: 90 },
         { name: "Support Tickets", score: 75 },
-        { name: "Billing Status", score: 95 }
+        { name: "Billing Status", score: 95 },
       ],
-      accountId
+      accountId,
     } as unknown as T;
   }
 
-  if (endpoint.startsWith('/resources/accounts/') && !endpoint.includes('/')) {
-    const accountId = endpoint.split('/')[3];
-    const account = mockAccounts.find(a => a.id === accountId);
-    return account as unknown as T;
-  }
-
-  if (endpoint.startsWith('/resources/users/search')) {
-    return {
-      results: mockUsers,
-      next: null
-    } as unknown as T;
-  }
-
-  if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/conversations')) {
+  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/conversations$/)) {
     return {
       results: [
-        { id: "c1", subject: "Product Feedback", createdAt: "2023-01-15T10:30:00Z", updatedAt: "2023-01-16T15:45:00Z" },
-        { id: "c2", subject: "Support Question", createdAt: "2023-02-22T09:15:00Z", updatedAt: "2023-02-23T11:30:00Z" }
+        { id: "c1", subject: "Product Feedback", createdAt: "2026-01-15T10:30:00Z", updatedAt: "2026-01-16T15:45:00Z" },
+        { id: "c2", subject: "Support Question", createdAt: "2026-02-22T09:15:00Z", updatedAt: "2026-02-23T11:30:00Z" },
       ],
-      next: null
+      next: null,
     } as unknown as T;
   }
 
-  if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/tasks')) {
+  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/tasks$/)) {
     return {
       results: [
-        { id: "t1", title: "Follow-up Call", description: "Schedule follow-up for new feature", status: "open", createdAt: "2023-03-10T14:20:00Z", updatedAt: "2023-03-10T14:20:00Z" },
-        { id: "t2", title: "Renewal Discussion", description: "Discuss upcoming renewal", status: "completed", createdAt: "2023-02-05T11:00:00Z", updatedAt: "2023-02-28T16:45:00Z" }
+        { id: "t1", title: "Follow-up Call", description: "Schedule follow-up for new feature", status: "open", createdAt: "2026-03-10T14:20:00Z", updatedAt: "2026-03-10T14:20:00Z" },
+        { id: "t2", title: "Renewal Discussion", description: "Discuss upcoming renewal", status: "completed", createdAt: "2026-02-05T11:00:00Z", updatedAt: "2026-02-28T16:45:00Z" },
       ],
-      next: null
+      next: null,
     } as unknown as T;
   }
 
-  if (endpoint.startsWith('/resources/accounts/') && endpoint.includes('/notes') && method === 'POST') {
+  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/notes$/) && method === "POST") {
+    const noteBody = (body || {}) as { content?: string };
     return {
-      id: "n1",
-      content: body.content,
+      id: "n-mock-" + Date.now(),
+      content: noteBody.content,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     } as unknown as T;
+  }
+
+  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/notes$/)) {
+    return {
+      results: [
+        { id: "n1", content: "Initial onboarding kickoff.", createdAt: "2026-01-10T12:00:00Z", updatedAt: "2026-01-10T12:00:00Z" },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly === "/resources/notes" && method === "GET") {
+    return {
+      results: [
+        { id: "n1", content: "Initial onboarding kickoff.", createdAt: "2026-01-10T12:00:00Z", updatedAt: "2026-01-10T12:00:00Z", account: MOCK_ACCOUNTS[0] },
+        { id: "n2", content: "QBR notes.", createdAt: "2026-04-02T09:30:00Z", updatedAt: "2026-04-02T09:30:00Z", account: MOCK_ACCOUNTS[1] },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly.match(/^\/resources\/notes\/[^/]+$/)) {
+    const id = pathOnly.split("/")[3];
+    return {
+      id,
+      content: "Mock note body for " + id,
+      createdAt: "2026-01-10T12:00:00Z",
+      updatedAt: "2026-01-10T12:00:00Z",
+      account: MOCK_ACCOUNTS[0],
+    } as unknown as T;
+  }
+
+  if (pathOnly === "/resources/tasks" && method === "GET") {
+    return {
+      results: [
+        { id: "t1", title: "Follow-up Call", status: "open", account: MOCK_ACCOUNTS[0], createdAt: "2026-03-10T14:20:00Z", updatedAt: "2026-03-10T14:20:00Z" },
+        { id: "t3", title: "Onboarding QA", status: "open", account: MOCK_ACCOUNTS[1], createdAt: "2026-04-01T08:00:00Z", updatedAt: "2026-04-01T08:00:00Z" },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly === "/resources/conversations" && method === "GET") {
+    return {
+      results: [
+        { id: "c1", subject: "Product Feedback", account: MOCK_ACCOUNTS[0], createdAt: "2026-01-15T10:30:00Z", updatedAt: "2026-01-16T15:45:00Z" },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly === "/resources/projects" && method === "GET") {
+    return {
+      results: [
+        { id: "p1", name: "Acme Onboarding", status: "active", account: MOCK_ACCOUNTS[0], createdAt: "2026-01-05T10:00:00Z", updatedAt: "2026-02-01T10:00:00Z" },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly.match(/^\/resources\/projects\/[^/]+$/) && method === "GET") {
+    const id = pathOnly.split("/")[3];
+    return { id, name: "Mock Project " + id, status: "active", account: MOCK_ACCOUNTS[0], createdAt: "2026-01-05T10:00:00Z", updatedAt: "2026-02-01T10:00:00Z" } as unknown as T;
+  }
+
+  if (pathOnly === "/resources/organizations" && method === "GET") {
+    return {
+      results: [
+        { id: "org-1", name: "Acme Holdings", externalId: "acme-holdings" },
+      ],
+      next: null,
+    } as unknown as T;
+  }
+
+  if (pathOnly.match(/^\/resources\/users\/[^/]+$/) && method === "GET" && pathOnly !== "/resources/users/search") {
+    const id = pathOnly.split("/")[3];
+    const user = MOCK_USERS.find(u => u.id === id || u.externalId === id);
+    if (!user) throw new Error(`Vitally API 404 Not Found on GET ${endpoint}: user not found`);
+    return user as unknown as T;
+  }
+
+  if (pathOnly === "/resources/users/search" || pathOnly === "/resources/users") {
+    return { results: MOCK_USERS, next: null } as unknown as T;
   }
 
   return {} as T;
 }
 
-// In-memory cache for accounts and users
-let accountsCache: VitallyAccount[] = [];
-let usersCache: VitallyUser[] = [];
+// ---------------------------------------------------------------------------
+// In-memory caches (single page; pagination is explicit elsewhere)
+// ---------------------------------------------------------------------------
 
-/**
- * Create an MCP server with capabilities for resources and tools
- */
+let accountsCache: VitallyAccount[] = [];
+
+async function ensureAccountsLoaded(limit = 100): Promise<void> {
+  if (accountsCache.length > 0) return;
+  const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>(
+    `/resources/accounts${buildQuery({ limit })}`
+  );
+  accountsCache = response.results || [];
+}
+
+// ---------------------------------------------------------------------------
+// Tool registry — single source of truth. ListTools returns the full schema;
+// search_tools derives its summaries from the same array, so the two cannot
+// drift apart.
+// ---------------------------------------------------------------------------
+
+interface ToolDef {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties: Record<string, { type: string; description: string; enum?: string[] }>;
+    required?: string[];
+  };
+}
+
+const TOOL_DEFINITIONS: ToolDef[] = [
+  {
+    name: "search_tools",
+    description: "Search for available Vitally MCP tools by keyword.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keyword: { type: "string", description: "Keyword to search in tool names and descriptions." },
+      },
+      required: ["keyword"],
+    },
+  },
+  {
+    name: "search_users",
+    description: "Search for users by email, externalId, or email subdomain.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "User email address." },
+        externalId: { type: "string", description: "External user ID." },
+        emailSubdomain: { type: "string", description: "Email subdomain to search for." },
+      },
+    },
+  },
+  {
+    name: "get_user",
+    description: "Get the full Vitally user object by Vitally ID or externalId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        userId: { type: "string", description: "Vitally user ID or externalId." },
+      },
+      required: ["userId"],
+    },
+  },
+  {
+    name: "search_accounts",
+    description:
+      "Search the cached account list by name and/or externalId. Returns the full account payload (traits, MRR, health, NPS, CSM, etc). Cache is single-page; for full enumeration use list_accounts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Full or partial account name (case insensitive)." },
+        externalId: { type: "string", description: "Exact externalId match." },
+        limit: { type: "number", description: "Maximum number of results (default: 10)." },
+        includeTraits: {
+          type: "boolean",
+          description: "Set to false to return a slim {id,name,externalId,uri} shape. Default true.",
+        },
+      },
+    },
+  },
+  {
+    name: "find_account_by_name",
+    description:
+      "Find accounts by name (partial, case insensitive). Returns the full account payload. Cache is single-page; for full enumeration use list_accounts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Full or partial account name." },
+        includeTraits: {
+          type: "boolean",
+          description: "Set to false to return a slim {id,name,externalId,uri} shape. Default true.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_account",
+    description:
+      "Get the full Vitally account object by Vitally ID or externalId. Includes traits, MRR, nextRenewalDate, usersCount, npsScore, healthScore, csmId, accountExecutiveId, and all other fields.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account UUID." },
+        externalId: { type: "string", description: "External account ID. Either accountId or externalId is required." },
+      },
+    },
+  },
+  {
+    name: "list_accounts",
+    description:
+      "Paginated list of accounts (GET /resources/accounts). Returns {results, next}. Caller drives pagination via the `from` cursor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+        status: {
+          type: "string",
+          description: "active | churned | activeOrChurned. Default: active.",
+          enum: ["active", "churned", "activeOrChurned"],
+        },
+        includeTraits: {
+          type: "boolean",
+          description: "Set to false to return slim {id,name,externalId,uri} per row. Default true.",
+        },
+      },
+    },
+  },
+  {
+    name: "update_account",
+    description:
+      "Update an account (PUT /resources/accounts/:id). Use to set traits like ARR, tier, or sentiment, or to change the account name. Returns the updated account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID or externalId." },
+        name: { type: "string", description: "New account name. Optional." },
+        traits: { type: "object", description: "Object of trait keys to set (e.g. {\"vitally.custom.arr\": 7000}). Set a value to null to clear it." },
+      },
+      required: ["accountId"],
+    },
+  },
+  {
+    name: "get_account_health",
+    description: "Get the health score breakdown for an account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID." },
+      },
+      required: ["accountId"],
+    },
+  },
+  {
+    name: "get_account_conversations",
+    description: "Get recent conversations for one account (paginated).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID." },
+        limit: { type: "number", description: "Maximum number of conversations (default: 10)." },
+        from: { type: "string", description: "Cursor token for pagination." },
+      },
+      required: ["accountId"],
+    },
+  },
+  {
+    name: "list_conversations",
+    description:
+      "Workspace-level paginated list of conversations (GET /resources/conversations). Returns {results, next}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+      },
+    },
+  },
+  {
+    name: "get_account_tasks",
+    description: "Get tasks for one account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID." },
+        status: { type: "string", description: "Filter by status (e.g. 'open', 'completed'). Note: the Vitally API does not officially support this filter on the per-account endpoint and may ignore it." },
+        limit: { type: "number", description: "Maximum number of tasks (default: 10)." },
+        from: { type: "string", description: "Cursor token for pagination." },
+      },
+      required: ["accountId"],
+    },
+  },
+  {
+    name: "list_tasks",
+    description:
+      "Workspace-level paginated list of tasks (GET /resources/tasks). Supports limit, from, archived. Note: the Vitally API does NOT support server-side filtering by status, assignee, or due-date on this endpoint — filter client-side after retrieval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+        archived: { type: "boolean", description: "If true, include archived tasks. Default false." },
+      },
+    },
+  },
+  {
+    name: "get_account_notes",
+    description: "Get note metadata for an account (use get_note_by_id for full body).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID." },
+        limit: { type: "number", description: "Maximum number of notes (default: 10)." },
+        from: { type: "string", description: "Cursor token for pagination." },
+      },
+      required: ["accountId"],
+    },
+  },
+  {
+    name: "list_notes",
+    description:
+      "Workspace-level paginated list of notes (GET /resources/notes). Returns {results, next}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+        archived: { type: "boolean", description: "If true, include archived notes. Default false." },
+        accountId: {
+          type: "string",
+          description:
+            "Optional. If provided, calls the per-account notes endpoint instead of the workspace-level one.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_note_by_id",
+    description: "Retrieve full content of a specific note by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        noteId: { type: "string", description: "Vitally note ID." },
+      },
+      required: ["noteId"],
+    },
+  },
+  {
+    name: "create_account_note",
+    description: "Create a new note on an account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accountId: { type: "string", description: "Vitally account ID." },
+        content: { type: "string", description: "Note body." },
+      },
+      required: ["accountId", "content"],
+    },
+  },
+  {
+    name: "list_projects",
+    description:
+      "Workspace-level paginated list of projects (GET /resources/projects). Returns {results, next}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+        archived: { type: "boolean", description: "If true, include archived projects. Default false." },
+      },
+    },
+  },
+  {
+    name: "get_project",
+    description: "Get a single project by ID (GET /resources/projects/:id).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Vitally project ID." },
+      },
+      required: ["projectId"],
+    },
+  },
+  {
+    name: "list_organizations",
+    description:
+      "Paginated list of organizations (GET /resources/organizations). Returns {results, next}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size, max 100, default 50." },
+        from: { type: "string", description: "Cursor token from the previous response's `next` field." },
+      },
+    },
+  },
+  {
+    name: "refresh_accounts",
+    description:
+      "Refresh the in-memory account cache. Returns the cached page with full account payloads (traits, MRR, etc).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Page size to load into the cache (default 100)." },
+        includeTraits: {
+          type: "boolean",
+          description: "Set to false to return a slim {id,name,externalId,uri} shape. Default true.",
+        },
+      },
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
+// MCP Server
+// ---------------------------------------------------------------------------
+
 const server = new Server(
   {
     name: "vitally-api",
-    version: "0.1.0",
-    transport: {
-      type: "http-stream",
-      options: {
-        port: 1337,
-        cors: {
-          allowOrigin: "*"
-        }
-      }
-    },
+    version: "2.0.0",
   },
   {
     capabilities: {
       resources: {},
       tools: {},
     },
-
   }
 );
 
-/**
- * Handler for listing available accounts as resources
- */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
   try {
-    // Fetch accounts from Vitally API if not cached
-    if (accountsCache.length === 0) {
-      const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-      accountsCache = response.results || [];
-    }
-
+    await ensureAccountsLoaded();
     return {
-      resources: accountsCache.map(account => ({
-        uri: `vitally://account/${account.id}`,
+      resources: accountsCache.map(a => ({
+        uri: `vitally://account/${a.id}`,
         mimeType: "application/json",
-        name: account.name,
-        description: `Vitally customer account: ${account.name}`
-      }))
+        name: a.name,
+        description: `Vitally customer account: ${a.name}`,
+      })),
     };
-  } catch (error) {
-    console.error('Error listing resources:', error);
+  } catch (err) {
+    log("Error listing resources:", err instanceof Error ? err.message : String(err));
     return { resources: [] };
   }
 });
 
-/**
- * Handler for reading the details of a specific account
- */
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const url = new URL(request.params.uri);
-  const path = url.pathname.replace(/^\//, '');
-  const [type, id] = path.split('/');
-
-  if (type === 'account') {
-    try {
-      const account = await callVitallyAPI<VitallyAccount>(`/resources/accounts/${id}`);
-      return {
-        contents: [{
+  const p = url.pathname.replace(/^\//, "");
+  const [type, id] = p.split("/");
+  if (type === "account") {
+    const account = await callVitallyAPI<VitallyAccount>(`/resources/accounts/${encodeURIComponent(id)}`);
+    return {
+      contents: [
+        {
           uri: request.params.uri,
           mimeType: "application/json",
-          text: JSON.stringify(account, null, 2)
-        }]
-      };
-    } catch (error) {
-      throw new Error(`Failed to retrieve account ${id}: ${error}`);
-    }
+          text: JSON.stringify(serializeAccount(account), null, 2),
+        },
+      ],
+    };
   }
-
   throw new Error(`Resource type '${type}' not supported`);
 });
 
-/**
- * Handler that lists available tools
- */
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const allTools = [
-    {
-      name: "search_tools",
-      description: "Vitally tool to search for available tools by keyword",
-      inputSchema: {
-        type: "object",
-        properties: {
-          keyword: {
-            type: "string",
-            description: "Keyword to search for in tool names and descriptions"
-          }
-        },
-        required: ["keyword"]
-      }
-    },
-    {
-      name: "search_users",
-      description: "Vitally tool to search for users by email or external ID",
-      inputSchema: {
-        type: "object",
-        properties: {
-          email: {
-            type: "string",
-            description: "User email address"
-          },
-          externalId: {
-            type: "string",
-            description: "External user ID"
-          },
-          emailSubdomain: {
-            type: "string",
-            description: "Email subdomain to search for"
-          }
-        }
-      }
-    },
-    {
-      name: "search_accounts",
-      description: "Vitally tool to search for accounts by multiple criteria",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            description: "Full or partial account name to search for"
-          },
-          externalId: {
-            type: "string",
-            description: "External account ID to search for"
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of results (default: 10)"
-          }
-        }
-      }
-    },
-    {
-      name: "get_account_health",
-      description: "Vitally tool to get health scores for an account",
-      inputSchema: {
-        type: "object",
-        properties: {
-          accountId: {
-            type: "string",
-            description: "Vitally account ID"
-          }
-        },
-        required: ["accountId"]
-      }
-    },
-    {
-      name: "find_account_by_name",
-      description: "Vitally tool to find an account by name (partial match supported)",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            description: "Full or partial account name to search for"
-          }
-        },
-        required: ["name"]
-      }
-    },
-    {
-      name: "get_account_conversations",
-      description: "Vitally tool to get recent conversations for an account",
-      inputSchema: {
-        type: "object",
-        properties: {
-          accountId: {
-            type: "string",
-            description: "Vitally account ID"
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of conversations to return (default: 10)"
-          }
-        },
-        required: ["accountId"]
-      }
-    },
-    {
-      name: "get_account_tasks",
-      description: "Vitally tool to get tasks for an account",
-      inputSchema: {
-        type: "object",
-        properties: {
-          accountId: {
-            type: "string",
-            description: "Vitally account ID"
-          },
-          status: {
-            type: "string",
-            description: "Filter tasks by status (e.g., 'open', 'completed')"
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of tasks to return (default: 10)"
-          }
-        },
-        required: ["accountId"]
-      }
-    },
-    {
-      name: "get_account_notes",
-      description: "Vitally tool to retrieve notes for an account",
-      inputSchema: {
-        type: "object",
-        properties: {
-          accountId: {
-            type: "string",
-            description: "Vitally account ID"
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of notes to return (default: 10)"
-          }
-        },
-        required: ["accountId"]
-      }
-    },
-    {
-      name: "get_note_by_id",
-      description: "Vitally tool to retrieve full content of a specific note by ID",
-      inputSchema: {
-        type: "object",
-        properties: {
-          noteId: {
-            type: "string",
-            description: "Vitally note ID"
-          }
-        },
-        required: ["noteId"]
-      }
-    },
-    {
-      name: "create_account_note",
-      description: "Vitally tool to create a new note for an account",
-      inputSchema: {
-        type: "object",
-        properties: {
-          accountId: {
-            type: "string",
-            description: "Vitally account ID"
-          },
-          content: {
-            type: "string",
-            description: "Content of the note"
-          }
-        },
-        required: ["accountId", "content"]
-      }
-    },
-    {
-      name: "refresh_accounts",
-      description: "Vitally tool to refresh the list of accounts",
-      inputSchema: {
-        type: "object",
-        properties: {
-          limit: {
-            type: "number",
-            description: "Maximum number of accounts to fetch (default: 100)"
-          }
-        }
-      }
-    }
-  ];
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
 
-  return { tools: allTools };
-});
+// Helpers used inside tool handlers --------------------------------------
 
-/**
- * Predefined list of all available tools for use in search_tools
- */
-const AVAILABLE_TOOLS = [
-  {
-    name: "search_tools",
-    description: "Vitally tool to search for available tools by keyword",
-    requiredParams: ["keyword"]
-  },
-  {
-    name: "search_users",
-    description: "Vitally tool to search for users by email or external ID",
-    requiredParams: []
-  },
-  {
-    name: "search_accounts",
-    description: "Vitally tool to search for accounts by multiple criteria",
-    requiredParams: []
-  },
-  {
-    name: "get_account_health",
-    description: "Vitally tool to get health scores for an account",
-    requiredParams: ["accountId"]
-  },
-  {
-    name: "find_account_by_name",
-    description: "Vitally tool to find an account by name (partial match supported)",
-    requiredParams: ["name"]
-  },
-  {
-    name: "get_account_conversations",
-    description: "Vitally tool to get recent conversations for an account",
-    requiredParams: ["accountId"]
-  },
-  {
-    name: "get_account_tasks",
-    description: "Vitally tool to get tasks for an account",
-    requiredParams: ["accountId"]
-  },
-  {
-    name: "get_account_notes",
-    description: "Vitally tool to retrieve notes for an account",
-    requiredParams: ["accountId"]
-  },
-  {
-    name: "get_note_by_id",
-    description: "Vitally tool to retrieve full content of a specific note by ID",
-    requiredParams: ["noteId"]
-  },
-  {
-    name: "create_account_note",
-    description: "Vitally tool to create a new note for an account",
-    requiredParams: ["accountId", "content"]
-  },
-  {
-    name: "refresh_accounts",
-    description: "Vitally tool to refresh the list of accounts",
-    requiredParams: []
-  }
-];
+function jsonContent(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
 
-/**
- * Handler for tool calls
- */
+function projectAccount(account: VitallyAccount, includeTraits: boolean) {
+  if (includeTraits) return serializeAccount(account);
+  return {
+    id: account.id,
+    name: account.name,
+    externalId: account.externalId,
+    uri: `vitally://account/${account.id}`,
+  };
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  switch (request.params.name) {
+  const args = (request.params.arguments || {}) as Record<string, unknown>;
+  const name = request.params.name;
+
+  switch (name) {
     case "search_tools": {
-      const keyword = (request.params.arguments?.keyword as string || "").toLowerCase();
-      if (!keyword) {
-        throw new Error("Keyword is required");
+      const keyword = String(args.keyword ?? "").toLowerCase();
+      if (!keyword) throw new Error("keyword is required");
+      const matches = TOOL_DEFINITIONS.filter(
+        t => t.name.toLowerCase().includes(keyword) || t.description.toLowerCase().includes(keyword)
+      ).map(t => ({
+        name: t.name,
+        description: t.description,
+        requiredParams: t.inputSchema.required ?? [],
+      }));
+      if (matches.length === 0) {
+        return { content: [{ type: "text", text: `No tools found matching "${keyword}"` }] };
       }
-
-      // Filter tools by keyword from our predefined list
-      const matchingTools = AVAILABLE_TOOLS.filter(tool =>
-        tool.name.toLowerCase().includes(keyword) ||
-        tool.description.toLowerCase().includes(keyword)
-      );
-
-      if (matchingTools.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `No tools found matching "${keyword}"`
-          }]
-        };
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            count: matchingTools.length,
-            tools: matchingTools
-          }, null, 2)
-        }]
-      };
+      return jsonContent({ count: matches.length, tools: matches });
     }
 
     case "search_users": {
-      const email = request.params.arguments?.email as string | undefined;
-      const externalId = request.params.arguments?.externalId as string | undefined;
-      const emailSubdomain = request.params.arguments?.emailSubdomain as string | undefined;
-
+      const email = args.email as string | undefined;
+      const externalId = args.externalId as string | undefined;
+      const emailSubdomain = args.emailSubdomain as string | undefined;
       if (!email && !externalId && !emailSubdomain) {
-        throw new Error("At least one search parameter (email, externalId, or emailSubdomain) is required");
+        throw new Error("At least one of email, externalId, or emailSubdomain is required");
       }
+      const data = await callVitallyAPI<VitallyPaginatedResponse<VitallyUser>>(
+        `/resources/users/search${buildQuery({ email, externalId, emailSubdomain })}`
+      );
+      return jsonContent(data);
+    }
 
-      // Build query parameters
-      const queryParams = new URLSearchParams();
-      if (email) queryParams.append('email', email);
-      if (externalId) queryParams.append('externalId', externalId);
-      if (emailSubdomain) queryParams.append('emailSubdomain', emailSubdomain);
-
-      try {
-        const users = await callVitallyAPI<VitallyPaginatedResponse<VitallyUser>>(`/resources/users/search?${queryParams}`);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(users, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`User search failed: ${error}`);
-      }
+    case "get_user": {
+      const userId = args.userId as string | undefined;
+      if (!userId) throw new Error("userId is required");
+      const user = await callVitallyAPI<VitallyUser>(`/resources/users/${encodeURIComponent(userId)}`);
+      return jsonContent(user);
     }
 
     case "search_accounts": {
-      const name = request.params.arguments?.name as string | undefined;
-      const externalId = request.params.arguments?.externalId as string | undefined;
-      const limit = request.params.arguments?.limit as number || 10;
+      const nameArg = args.name as string | undefined;
+      const externalId = args.externalId as string | undefined;
+      const limit = (args.limit as number | undefined) ?? 10;
+      const includeTraits = args.includeTraits === undefined ? true : Boolean(args.includeTraits);
+      if (!nameArg && !externalId) throw new Error("At least one of name or externalId is required");
 
-      if (!name && !externalId) {
-        throw new Error("At least one search parameter (name or externalId) is required");
+      await ensureAccountsLoaded();
+      let filtered = [...accountsCache];
+      if (nameArg) {
+        const needle = nameArg.toLowerCase();
+        filtered = filtered.filter(a => a.name.toLowerCase().includes(needle));
       }
+      if (externalId) filtered = filtered.filter(a => a.externalId === externalId);
 
-      try {
-        // Ensure accounts are loaded
-        if (accountsCache.length === 0) {
-          const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-          accountsCache = response.results || [];
-        }
-
-        // Filter accounts by criteria
-        let filteredAccounts = [...accountsCache];
-
-        if (name) {
-          const nameToMatch = name.toLowerCase();
-          filteredAccounts = filteredAccounts.filter(account =>
-            account.name.toLowerCase().includes(nameToMatch)
-          );
-        }
-
-        if (externalId) {
-          filteredAccounts = filteredAccounts.filter(account =>
-            account.externalId === externalId
-          );
-        }
-
-        // Limit results
-        const limitedAccounts = filteredAccounts.slice(0, limit);
-
-        if (limitedAccounts.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: `No accounts found matching the criteria`
-            }]
-          };
-        }
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: limitedAccounts.length,
-              totalMatches: filteredAccounts.length,
-              accounts: limitedAccounts.map(account => ({
-                id: account.id,
-                name: account.name,
-                externalId: account.externalId,
-                uri: `vitally://account/${account.id}`
-              }))
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Account search failed: ${error}`);
+      const limited = filtered.slice(0, limit);
+      if (limited.length === 0) {
+        return { content: [{ type: "text", text: "No accounts found matching the criteria" }] };
       }
-    }
-
-    case "get_account_health": {
-      const accountId = request.params.arguments?.accountId as string;
-      if (!accountId) {
-        throw new Error("Account ID is required");
-      }
-
-      try {
-        const healthScores = await callVitallyAPI<any>(`/resources/accounts/${accountId}/healthScores`);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(healthScores, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to get health scores: ${error}`);
-      }
+      return jsonContent({
+        count: limited.length,
+        totalMatches: filtered.length,
+        cacheNote:
+          "Searches the cached page only. If your workspace has more than 100 accounts, use list_accounts to paginate the full set.",
+        accounts: limited.map(a => projectAccount(a, includeTraits)),
+      });
     }
 
     case "find_account_by_name": {
-      const name = request.params.arguments?.name as string;
-      if (!name) {
-        throw new Error("Account name is required");
+      const nameArg = args.name as string | undefined;
+      const includeTraits = args.includeTraits === undefined ? true : Boolean(args.includeTraits);
+      if (!nameArg) throw new Error("name is required");
+
+      await ensureAccountsLoaded();
+      const needle = nameArg.toLowerCase();
+      const matches = accountsCache.filter(a => a.name.toLowerCase().includes(needle));
+      if (matches.length === 0) {
+        return { content: [{ type: "text", text: `No accounts found matching "${nameArg}"` }] };
       }
+      return jsonContent({
+        count: matches.length,
+        cacheNote:
+          "Searches the cached page only. If your workspace has more than 100 accounts, use list_accounts to paginate the full set.",
+        accounts: matches.map(a => projectAccount(a, includeTraits)),
+      });
+    }
 
-      try {
-        // Ensure accounts are loaded
-        if (accountsCache.length === 0) {
-          const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>('/resources/accounts');
-          accountsCache = response.results || [];
-        }
+    case "get_account": {
+      const accountId = args.accountId as string | undefined;
+      const externalId = args.externalId as string | undefined;
+      const idOrExt = accountId || externalId;
+      if (!idOrExt) throw new Error("Either accountId or externalId is required");
+      const account = await callVitallyAPI<VitallyAccount>(
+        `/resources/accounts/${encodeURIComponent(idOrExt)}`
+      );
+      return jsonContent(serializeAccount(account));
+    }
 
-        // Search for accounts with matching names (case insensitive)
-        const nameToMatch = name.toLowerCase();
-        const matchingAccounts = accountsCache.filter(account =>
-          account.name.toLowerCase().includes(nameToMatch)
-        );
+    case "list_accounts": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const status = (args.status as string | undefined) ?? "active";
+      const includeTraits = args.includeTraits === undefined ? true : Boolean(args.includeTraits);
 
-        if (matchingAccounts.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: `No accounts found matching "${name}"`
-            }]
-          };
-        }
+      const data = await paginate<VitallyAccount>("/resources/accounts", { limit, from, status });
+      return jsonContent({
+        count: data.results.length,
+        next: data.next,
+        results: data.results.map(a => projectAccount(a, includeTraits)),
+      });
+    }
 
-        // Return formatted account information
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: matchingAccounts.length,
-              accounts: matchingAccounts.map(account => ({
-                id: account.id,
-                name: account.name,
-                externalId: account.externalId,
-                uri: `vitally://account/${account.id}`
-              }))
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to find accounts by name: ${error}`);
+    case "update_account": {
+      const accountId = args.accountId as string | undefined;
+      if (!accountId) throw new Error("accountId is required");
+      const payload: Record<string, unknown> = {};
+      if (typeof args.name === "string") payload.name = args.name;
+      if (args.traits !== undefined) payload.traits = args.traits;
+      if (Object.keys(payload).length === 0) {
+        throw new Error("update_account requires at least one of: name, traits");
       }
+      const updated = await callVitallyAPI<VitallyAccount>(
+        `/resources/accounts/${encodeURIComponent(accountId)}`,
+        "PUT",
+        payload
+      );
+      // Refresh cache entry so subsequent search/find calls see the change.
+      const idx = accountsCache.findIndex(a => a.id === updated.id);
+      if (idx !== -1) accountsCache[idx] = updated;
+      return jsonContent(serializeAccount(updated));
+    }
+
+    case "get_account_health": {
+      const accountId = args.accountId as string | undefined;
+      if (!accountId) throw new Error("accountId is required");
+      const data = await callVitallyAPI<unknown>(
+        `/resources/accounts/${encodeURIComponent(accountId)}/healthScores`
+      );
+      return jsonContent(data);
     }
 
     case "get_account_conversations": {
-      const accountId = request.params.arguments?.accountId as string;
-      const limit = request.params.arguments?.limit as number || 10;
+      const accountId = args.accountId as string | undefined;
+      if (!accountId) throw new Error("accountId is required");
+      const limit = (args.limit as number | undefined) ?? 10;
+      const from = args.from as string | undefined;
+      const data = await paginate<VitallyConversation>(
+        `/resources/accounts/${encodeURIComponent(accountId)}/conversations`,
+        { limit, from }
+      );
+      return jsonContent(data);
+    }
 
-      if (!accountId) {
-        throw new Error("Account ID is required");
-      }
-
-      try {
-        const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
-
-        const conversations = await callVitallyAPI<VitallyPaginatedResponse<VitallyConversation>>(
-          `/resources/accounts/${accountId}/conversations?${queryParams}`
-        );
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: conversations.results.length,
-              conversations: conversations.results.map(conv => ({
-                id: conv.id,
-                subject: conv.subject,
-                createdAt: conv.createdAt,
-                updatedAt: conv.updatedAt
-              }))
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to get account conversations: ${error}`);
-      }
+    case "list_conversations": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const data = await paginate<VitallyConversation>("/resources/conversations", { limit, from });
+      return jsonContent(data);
     }
 
     case "get_account_tasks": {
-      const accountId = request.params.arguments?.accountId as string;
-      const status = request.params.arguments?.status as string | undefined;
-      const limit = request.params.arguments?.limit as number || 10;
+      const accountId = args.accountId as string | undefined;
+      if (!accountId) throw new Error("accountId is required");
+      const limit = (args.limit as number | undefined) ?? 10;
+      const from = args.from as string | undefined;
+      const status = args.status as string | undefined;
+      const data = await paginate<VitallyTask>(
+        `/resources/accounts/${encodeURIComponent(accountId)}/tasks`,
+        { limit, from, status }
+      );
+      return jsonContent(data);
+    }
 
-      if (!accountId) {
-        throw new Error("Account ID is required");
-      }
-
-      try {
-        const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
-        if (status) {
-          queryParams.append('status', status);
-        }
-
-        const tasks = await callVitallyAPI<VitallyPaginatedResponse<VitallyTask>>(
-          `/resources/accounts/${accountId}/tasks?${queryParams}`
-        );
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: tasks.results.length,
-              tasks: tasks.results.map(task => ({
-                id: task.id,
-                title: task.title,
-                description: task.description,
-                status: task.status,
-                dueDate: task.dueDate,
-                createdAt: task.createdAt,
-                updatedAt: task.updatedAt
-              }))
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to get account tasks: ${error}`);
-      }
+    case "list_tasks": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const archived = args.archived as boolean | undefined;
+      const data = await paginate<VitallyTask>("/resources/tasks", { limit, from, archived });
+      return jsonContent(data);
     }
 
     case "get_account_notes": {
-      const accountId = request.params.arguments?.accountId as string;
-      const limit = request.params.arguments?.limit as number || 10;
+      const accountId = args.accountId as string | undefined;
+      if (!accountId) throw new Error("accountId is required");
+      const limit = (args.limit as number | undefined) ?? 10;
+      const from = args.from as string | undefined;
+      const data = await paginate<VitallyNote>(
+        `/resources/accounts/${encodeURIComponent(accountId)}/notes`,
+        { limit, from }
+      );
+      return jsonContent(data);
+    }
 
-      if (!accountId) {
-        throw new Error("Account ID is required");
-      }
-
-      try {
-        const queryParams = new URLSearchParams();
-        queryParams.append('limit', limit.toString());
-
-        const notes = await callVitallyAPI<VitallyPaginatedResponse<VitallyNote>>(
-          `/resources/accounts/${accountId}/notes?${queryParams}`
-        );
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: notes.results.length,
-              notes: notes.results.map(note => ({
-                id: note.id,
-                content: note.content,
-                createdAt: note.createdAt,
-                updatedAt: note.updatedAt
-              }))
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to get account notes: ${error}`);
-      }
+    case "list_notes": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const archived = args.archived as boolean | undefined;
+      const accountId = args.accountId as string | undefined;
+      const endpoint = accountId
+        ? `/resources/accounts/${encodeURIComponent(accountId)}/notes`
+        : "/resources/notes";
+      const data = await paginate<VitallyNote>(endpoint, { limit, from, archived });
+      return jsonContent(data);
     }
 
     case "get_note_by_id": {
-      const noteId = request.params.arguments?.noteId as string;
-      if (!noteId) {
-        throw new Error("Note ID is required");
-      }
-
-      try {
-        const note = await callVitallyAPI<VitallyNote>(`/resources/notes/${noteId}`);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(note, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to get note by ID: ${error}`);
-      }
+      const noteId = args.noteId as string | undefined;
+      if (!noteId) throw new Error("noteId is required");
+      const note = await callVitallyAPI<VitallyNote>(`/resources/notes/${encodeURIComponent(noteId)}`);
+      return jsonContent(note);
     }
 
     case "create_account_note": {
-      const accountId = request.params.arguments?.accountId as string;
-      const content = request.params.arguments?.content as string;
+      const accountId = args.accountId as string | undefined;
+      const content = args.content as string | undefined;
+      if (!accountId || !content) throw new Error("accountId and content are required");
+      const note = await callVitallyAPI<VitallyNote>(
+        `/resources/accounts/${encodeURIComponent(accountId)}/notes`,
+        "POST",
+        { content }
+      );
+      return jsonContent({ success: true, note });
+    }
 
-      if (!accountId || !content) {
-        throw new Error("Account ID and content are required");
-      }
+    case "list_projects": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const archived = args.archived as boolean | undefined;
+      const data = await paginate<VitallyProject>("/resources/projects", { limit, from, archived });
+      return jsonContent(data);
+    }
 
-      try {
-        const note = await callVitallyAPI<VitallyNote>(
-          `/resources/accounts/${accountId}/notes`,
-          'POST',
-          { content }
-        );
+    case "get_project": {
+      const projectId = args.projectId as string | undefined;
+      if (!projectId) throw new Error("projectId is required");
+      const project = await callVitallyAPI<VitallyProject>(
+        `/resources/projects/${encodeURIComponent(projectId)}`
+      );
+      return jsonContent(project);
+    }
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              note: {
-                id: note.id,
-                content: note.content,
-                createdAt: note.createdAt
-              }
-            }, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to create note: ${error}`);
-      }
+    case "list_organizations": {
+      const limit = (args.limit as number | undefined) ?? 50;
+      const from = args.from as string | undefined;
+      const data = await paginate<VitallyOrganization>("/resources/organizations", { limit, from });
+      return jsonContent(data);
     }
 
     case "refresh_accounts": {
-      try {
-        const limit = request.params.arguments?.limit as number || 100;
-        const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>(`/resources/accounts?limit=${limit}`);
-        accountsCache = response.results || [];
-
-        // Format summary information about accounts
-        const summary = {
-          count: accountsCache.length,
-          accounts: accountsCache.map(account => ({
-            id: account.id,
-            name: account.name,
-            externalId: account.externalId
-          }))
-        };
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(summary, null, 2)
-          }]
-        };
-      } catch (error) {
-        throw new Error(`Failed to refresh accounts: ${error}`);
-      }
+      const limit = (args.limit as number | undefined) ?? 100;
+      const includeTraits = args.includeTraits === undefined ? true : Boolean(args.includeTraits);
+      const response = await callVitallyAPI<VitallyPaginatedResponse<VitallyAccount>>(
+        `/resources/accounts${buildQuery({ limit })}`
+      );
+      accountsCache = response.results || [];
+      return jsonContent({
+        count: accountsCache.length,
+        accounts: accountsCache.map(a => projectAccount(a, includeTraits)),
+      });
     }
 
     default:
-      throw new Error("Unknown tool");
+      throw new Error(`Unknown tool: ${name}`);
   }
 });
 
-/**
- * Start the server using stdio transport
- */
-async function main() {
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error("Server error:", error);
+main().catch((err) => {
+  log("Server error:", err instanceof Error ? err.stack || err.message : String(err));
   process.exit(1);
 });

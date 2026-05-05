@@ -1,21 +1,25 @@
 {
   "name": "vitally-mcp",
-  "version": "1.0.1",
-  "description": "MCP for Vitally",
+  "version": "2.0.0",
+  "description": "MCP server for the Vitally REST API (Wiseair fork — full account payloads, workspace-level list tools, update_account, paginate helper).",
   "private": true,
   "type": "module",
-  "author": "John Jung & Dan Searle",
+  "author": "Wiseair S.r.l. — based on original work by John Jung & Dan Searle",
   "license": "MIT",
-  "copyright": "Copyright (c) 2024 John Jung & Dan Searle",
+  "copyright": "Copyright (c) 2024 John Jung & Dan Searle, Copyright (c) 2026 Wiseair S.r.l.",
+  "packageManager": "pnpm@10.33.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Wiseair-srl/vitally-mcp.git"
+  },
   "bin": {
-    "vitally mcp": "./build/index.js"
+    "vitally-mcp": "./build/index.js"
   },
   "files": [
     "build"
   ],
   "scripts": {
     "build": "tsc && node --eval \"import('fs').then(fs => fs.chmodSync('build/index.js', '755'))\"",
-    "prepare": "npm run build",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "start": "node --experimental-modules --experimental-specifier-resolution=node build/index.js",

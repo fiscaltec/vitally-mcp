@@ -1,173 +1,143 @@
-<!-- Copyright (c) 2024 John Jung -->
+<!--
+  Copyright (c) 2024 John Jung & Dan Searle (original)
+  Copyright (c) 2026 Wiseair S.r.l. (fork)
+-->
 
-# Vitally MCP Server
+# Vitally MCP Server (Wiseair fork)
 
-An MCP (Model Context Protocol) server that provides access to Vitally customer data via the Vitally API.
+An MCP (Model Context Protocol) server for the Vitally REST API.
 
-## Features
+This is the Wiseair fork of [`fiscaltec/vitally-mcp`](https://github.com/fiscaltec/vitally-mcp). It exists because the upstream tools strip account traits (ARR, MRR, renewal date, sentiment, custom traits) out of every list/search result, leaving the LLM unable to answer basic questions like "rank our customers by ARR" without scraping notes for context. This fork fixes that and fills in the missing workspace-level list endpoints.
 
-- List customer accounts as resources
-- Read account details
-- Search for users by email or external ID
-- Find accounts by name
-- Query account health scores
-- View account conversations and tasks
-- Create notes for accounts
-- Search through available tools
-- Demo mode with mock data when no API key is provided
+**Image**: `ghcr.io/wiseair-srl/vitally-mcp:latest` (also tagged with semver: `v2.0.0`, `v2`, `v2.0`).
 
-## Setup for running locally
+## Differences from upstream
 
-1. Install dependencies:
+| Upstream | Wiseair fork |
+|---|---|
+| Account list/search returns `{id, name, externalId, uri}` only — traits hidden | Full account payload (traits, MRR, NPS, health, CSM, renewal date) on every account-returning tool |
+| No direct `get_account` by id/externalId | New `get_account` tool |
+| No workspace-level list endpoints — only per-account | New `list_accounts`, `list_tasks`, `list_conversations`, `list_notes`, `list_projects`, `list_organizations` |
+| No `update_account` — cannot set traits | New `update_account` (PUT /resources/accounts/:id) |
+| No direct `get_user` by id | New `get_user` |
+| No `get_project` | New `get_project` |
+| Hand-maintained `search_tools` registry that drifted from the real tool list | `search_tools` derives from the same array that powers `tools/list`, so it cannot drift |
+| API errors swallowed as `API call failed: 4xx` with no body | Error body surfaced verbatim in the MCP error |
+| No rate-limit awareness | Logs to stderr when `X-RateLimit-Remaining` falls below 50 |
+| No cursor pagination — `refresh_accounts` only fetched first page silently | All list tools accept a `from` cursor and return `{results, next}`; pagination is caller-driven |
 
-   ```node
-   npm install
-   ```
+Tool names and signatures from upstream are preserved; the only response-shape change is **additive** (search/find/refresh-accounts now embed the full account object — old fields still present). See `CHANGELOG.md`.
 
-2. Create a `.env` file in the root directory with the following:
+## Tools
 
-   ```text
-   # Vitally API Configuration
-   VITALLY_API_SUBDOMAIN=nylas  # Your Vitally subdomain
-   VITALLY_API_KEY=your_api_key_here  # Your Vitally API key
-   VITALLY_DATA_CENTER=US  # or EU depending on your data center
-   ```
+### Tool discovery
+- `search_tools` — keyword search across the live tool list (auto-derived).
 
-3. Build the project:
+### Accounts
+- `get_account` — full account payload by Vitally ID **or** externalId.
+- `list_accounts` — paginated list with `limit`, `from`, `status` (`active` | `churned` | `activeOrChurned`).
+- `update_account` — `PUT /resources/accounts/:id`. Set traits (e.g. ARR, tier, sentiment) or rename. Trait values can be set to `null` to clear them.
+- `search_accounts` — cached single-page name/externalId search; full payload by default. For full enumeration use `list_accounts`.
+- `find_account_by_name` — same as above for name-only lookups.
+- `refresh_accounts` — reloads the in-memory cache.
+- `get_account_health` — health score breakdown.
 
-   ```node
-   npm run build
-   ```
+### Workspace-level lists (paginated, `{results, next}`)
+- `list_tasks` — `limit`, `from`, `archived`. The Vitally API does **not** support server-side filtering by status / assignee / due-date here; filter client-side after retrieval.
+- `list_conversations` — `limit`, `from`.
+- `list_notes` — `limit`, `from`, `archived`. Optional `accountId` switches to the per-account endpoint.
+- `list_projects` — `limit`, `from`, `archived`.
+- `list_organizations` — `limit`, `from`.
 
-> **Note:** If you don't have a Vitally API key yet, the server will run in demo mode with mock data.
+### Per-account scoped tools
+- `get_account_conversations`, `get_account_tasks`, `get_account_notes`, `create_account_note`.
 
-## Getting your Vitally API Key
+### Notes & projects
+- `get_note_by_id`, `get_project`.
 
-1. Navigate to your Vitally account
-2. Go to Settings (⚙️) > Integrations > (new page) Vitally REST API
-3. Toggle the switch to enable the integration
-4. Copy the API Key (Secret Token)
+### Users
+- `search_users` — by email / externalId / emailSubdomain.
+- `get_user` — direct lookup by Vitally ID or externalId.
 
-## Usage
+Every tool that returns an account uses the same `serializeAccount` helper, so the shape is consistent across the codebase.
 
-There are three ways to use this MCP server:
+### `includeTraits` opt-out
+`search_accounts`, `find_account_by_name`, `refresh_accounts`, and `list_accounts` accept `includeTraits: false` to fall back to the upstream slim shape `{id, name, externalId, uri}` — useful when listing thousands of rows.
 
-### Using the MCP Inspector
+## Running via Docker (recommended)
 
-Run the MCP Inspector to test and debug the server:
+Add this to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
+```json
+{
+  "mcpServers": {
+    "vitally": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "VITALLY_API_SUBDOMAIN",
+        "-e", "VITALLY_API_KEY",
+        "-e", "VITALLY_DATA_CENTER",
+        "ghcr.io/wiseair-srl/vitally-mcp:latest"
+      ],
+      "env": {
+        "VITALLY_API_SUBDOMAIN": "your-subdomain",
+        "VITALLY_API_KEY": "your-api-key",
+        "VITALLY_DATA_CENTER": "EU"
+      }
+    }
+  }
+}
 ```
-npm run inspector
+
+### Migrating from `fiscaltec/vitally-mcp`
+
+Replace `ghcr.io/fiscaltec/vitally-mcp` with `ghcr.io/wiseair-srl/vitally-mcp:latest` in your config and restart Claude Desktop. Tool names and required parameters are unchanged. The only behaviour change you'll notice is that account-returning tools now include the full payload (traits, MRR, etc) — pass `includeTraits: false` to opt back into the slim shape.
+
+## Running locally
+
+```bash
+pnpm install
+cp .env.example .env  # then edit it
+pnpm run build
+pnpm start
 ```
 
-This will open the MCP Inspector interface where you can interact with your server.
+Without `VITALLY_API_KEY` (or with the placeholder value), the server runs in **demo mode** with mock data — useful for end-to-end testing in MCP Inspector without a Vitally account.
 
-### Running the MCP locally
+### Smoke test
 
-1. First, find your Claude Desktop configuration file:
-   - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+```bash
+pnpm run build && pnpm test
+```
 
-2. Edit the config file to add the Vitally MCP server:
+Runs against demo mode by default. Set `VITALLY_API_KEY` to point at real Vitally creds (the demo-specific Sace asserts are skipped automatically).
 
-   ```json
-   {
-     "mcpServers": {
-       "vitally": {
-         "command": "node",
-         "args": ["--experimental-modules", "--experimental-specifier-resolution=node", "/Users/johnjung/nylas/vitally/vitally/build/index.js"]
-       }
-     }
-   }
-   ```
+## Configuration
 
-3. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
+Environment variables (all read at startup, never logged in plain text):
 
-### Running the MCP via Docker
+| Var | Default | Notes |
+|---|---|---|
+| `VITALLY_API_KEY` | — | Required for non-demo mode. Get from Vitally → Settings → Integrations → Vitally REST API. |
+| `VITALLY_API_SUBDOMAIN` | `nylas` | Used for the US data center base URL: `https://{subdomain}.rest.vitally.io`. |
+| `VITALLY_DATA_CENTER` | `US` | `US` or `EU`. EU uses a single shared host: `https://rest.vitally-eu.io`. |
 
-1. Edit the config file to add the Vitally MCP server from the GitHub package repository:
+## Registry choice
 
-   ```json
-   {
-     "mcpServers": {
-       "vitally": {
-            "command": "docker",
-            "args": [
-                "run",
-                "--rm",
-                "-i",
-                "-e",
-                "VITALLY_API_SUBDOMAIN",
-                "-e",
-                "VITALLY_API_KEY",
-                "-e",
-                "VITALLY_DATA_CENTER",
-                "ghcr.io/fiscaltec/vitally-mcp"
-            ],
-            "env": {
-                "VITALLY_API_SUBDOMAIN": "VITALLY_API_SUBDOMAIN",
-                "VITALLY_API_KEY": "VITALLY_API_KEY",
-                "VITALLY_DATA_CENTER": "VITALLY_DATA_CENTER"
-            }
-        }
-     }
-   }
-   ```
+We publish to **GitHub Container Registry (GHCR)** at `ghcr.io/wiseair-srl/vitally-mcp`:
 
-2. Restart Claude Desktop and you'll be able to use the Vitally MCP server.
+- Same registry the upstream uses, so consumers swapping the namespace get a one-line config change.
+- Auth is the GitHub token already in CI; no extra secrets needed.
+- Free for public images, attestations work out of the box.
 
-## Available Tools
+We do not mirror to Docker Hub. If that becomes an actual constraint we can revisit.
 
-### Tool Discovery
+## Attribution
 
-- `search_tools` - Search for available tools by keyword
-
-### Account Management
-
-- `search_accounts` - Search for accounts using multiple criteria (name, externalId)
-- `find_account_by_name` - Find accounts by their name (partial matching supported)
-- `refresh_accounts` - Refresh the cached list of accounts
-- `get_account_health` - Get health scores for a specific account
-
-### User Management
-
-- `search_users` - Search for users by email, external ID, or email subdomain
-
-### Communication & Tasks
-
-- `get_account_conversations` - Get recent conversations for an account
-- `get_account_tasks` - Get tasks for an account (can filter by status)
-- `create_account_note` - Create a new note for an account
-
-## Example Questions to Ask
-
-When connected to an MCP client like Claude, you can ask questions such as:
-
-- "List all our customers"
-- "Find accounts with 'Acme' in their name"
-- "What's the health score for account X?"
-- "Find user with email <example@company.com>"
-- "Show me details about customer Y"
-- "Get recent conversations for account Z"
-- "What tasks are open for account A?"
-- "Add a note to account B about our recent call"
-- "What tools can I use for account management?"
-
-## Troubleshooting
-
-- If you encounter JSON parsing errors, ensure you've removed all console.log statements from the code
-- Make sure your `.env` file contains the correct API credentials
-- Check that you've built the project (`npm run build`) after making changes
-- Verify the path in claude_desktop_config.json is absolute and correct for your system
-- If you don't have a valid API key, the server will run in demo mode with mock data
-
-## Attibution
-
-As mentioned previously and in other files, this MCP has been created with original code from John Jung and containerised by Dan Searle.
-
-All rightts go to [John Jung](<https://github.com/johnjjung/vitally-mcp>).
+Original code by [John Jung](https://github.com/johnjjung/vitally-mcp), containerised by [Dan Searle](https://github.com/fiscaltec). MIT-licensed (preserved). The Wiseair fork adds the changes described above.
 
 ## Notes
 
-- This has only been tested with Claude Desktop as of this moment however, is likely to woth with others but the configuration may not translate and is untested.
-- Please raise an issue in either this repository, or the [original](<https://github.com/johnjjung/vitally-mcp>) if you find an issue or if you would like an improvement.
+- Don't add `console.log` anywhere — the MCP stdio transport uses stdout for JSON-RPC and any stray write corrupts the protocol stream. Use the `log()` helper which writes to stderr.
+- The Vitally REST API is rate-limited. The server logs to stderr when fewer than 50 calls remain on the current window; if your workflow runs into hard limits, paginate explicitly via `from` cursors instead of repeatedly calling `refresh_accounts`.

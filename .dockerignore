@@ -1,0 +1,10 @@
+node_modules
+build
+.git
+.github
+.env
+.env.*
+*.log
+README.md
+CHANGELOG.md
+test.js
