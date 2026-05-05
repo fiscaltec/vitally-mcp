@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.1.0 — 2026-05-05
 
 ### Added
 - **`aggregate_accounts`** — group/aggregate the cached account list. Supports `count`, `sum`, `avg`, `min`, `max` over a trait or top-level field, with optional `groupBy`, `filterTraits`, `status`, and `sortByMetric`.
