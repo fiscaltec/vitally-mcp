@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`aggregate_accounts`** — group/aggregate the cached account list. Supports `count`, `sum`, `avg`, `min`, `max` over a trait or top-level field, with optional `groupBy`, `filterTraits`, `status`, and `sortByMetric`.
+- **`traits` projection** on `search_accounts`, `find_account_by_name`, `list_accounts` — pass `traits: ["vitally.custom.arr", ...]` to project only those keys per row instead of the full traits dict. Implies `includeTraits=true`. Conflicts with `includeTraits=false` are surfaced as a `warning` field; `traits` wins.
+- **`sortBy` / `sortOrder`** on `list_accounts` — sort by top-level field (`mrr`, `usersCount`, `nextRenewalDate`, `createdAt`, `updatedAt`, `healthScore`, `npsScore`, `name`) or trait key (e.g. `vitally.custom.arr`). Nulls always sort last regardless of order. Uses the cache; refreshes if empty.
+- **`filterTraits`** on `list_accounts` — exact-match filter on trait key/value pairs. Combines with `sortBy` and `limit`. Cache-mode.
+- **`includeAccount`** on per-account list endpoints (`get_account_tasks`, `get_account_notes`, `get_account_conversations`, `list_tasks`, `list_notes`, `list_conversations`). Defaults to `false` — the embedded `account` object is stripped, `accountId` is preserved. Pass `includeAccount: true` to restore the previous shape.
+- **`descriptionFormat`** on `get_account_tasks`, `list_tasks`, `get_account_notes`, `list_notes`, `get_note_by_id`. Defaults to `'plain'`: HTML tags stripped, `<br>`/`<p>` boundaries become newlines, `<img>` becomes `[image]`, entities decoded. Pass `'html'` to keep raw HTML.
+- **Workspace-level `_warnings`** on `get_account`, `list_accounts`, `aggregate_accounts`. On the first call per server lifetime, samples up to 20 accounts; if `healthScore` (or `npsScore`) is null on every sampled row, a one-time warning is emitted explaining that the workspace likely has no health/NPS configured. Each warning is emitted at most once per session.
+- **Guarded traits on `update_account`** — writing one of `vitally.custom.arr`, `vitally.custom.mrr`, `vitally.custom.status`, `vitally.custom.churnDate`, `vitally.custom.nextRenewal`, `vitally.custom.currentSubscriptionStartDate`, `vitally.custom.testAccount` now requires `force: true`. These flow in from system-of-record sources; the LLM should not silently overwrite them.
+
+### Changed
+- `get_account_tasks`: the `status` parameter (`open` | `completed` | `archived`) is now applied client-side and respected. The MCP scans up to 5 upstream pages to fill `limit`; `pagesScanned` and `truncated` are returned alongside `next`/`results`. `'open'` = `!completedAt && !archivedAt`, `'completed'` = `completedAt` set, `'archived'` = `archivedAt` set.
+- All tool descriptions audited and tightened for LLM-facing clarity (when to use vs sibling tools, silent gotchas, default values).
+- Server `name` advertised over MCP bumped to `vitally-api` v2.1.0.
+
+### Deprecated
+- `find_account_by_name` — now forwards to `search_accounts` and tags responses with `_deprecation`. Will be removed in a future release. Use `search_accounts` for both name-only lookups and combined name + externalId queries.
+
+### Fixed
+- `status` filter on `get_account_tasks` previously appeared to work but the upstream Vitally API silently ignored it. Now enforced client-side with explicit semantics.
+
+### Migration
+
+No breaking changes for callers using documented parameters. Two behavioural shifts to be aware of:
+
+1. `get_account_tasks`, `list_tasks`, `get_account_notes`, `list_notes`, `get_account_conversations`, `list_conversations` no longer embed the full `account` object on each row by default. If you depended on this, pass `includeAccount: true`.
+2. Task `description` and note `content` come back as plain text by default. If you depended on the raw HTML, pass `descriptionFormat: 'html'`.
+
 ## v2.0.0 — 2026-05-05 (Wiseair fork)
 
 First Wiseair release, forked from `fiscaltec/vitally-mcp` v1.0.1. Major version bump signals divergence from upstream; tool names and required parameters are unchanged but several response shapes are richer.
