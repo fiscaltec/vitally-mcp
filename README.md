@@ -35,22 +35,24 @@ Tool names and signatures from upstream are preserved; the only response-shape c
 
 ### Accounts
 - `get_account` — full account payload by Vitally ID **or** externalId.
-- `list_accounts` — paginated list with `limit`, `from`, `status` (`active` | `churned` | `activeOrChurned`).
-- `update_account` — `PUT /resources/accounts/:id`. Set traits (e.g. ARR, tier, sentiment) or rename. Trait values can be set to `null` to clear them.
-- `search_accounts` — cached single-page name/externalId search; full payload by default. For full enumeration use `list_accounts`.
-- `find_account_by_name` — same as above for name-only lookups.
+- `list_accounts` — paginated list with `limit`, `from`, `status` (`active` | `churned` | `activeOrChurned`). Server-side `sortBy` (top-level field or trait key), `sortOrder`, and `filterTraits` (exact-match) trigger cache-mode for fast top-N queries.
+- `update_account` — `PUT /resources/accounts/:id`. Set traits (e.g. tier, sentiment) or rename. Guarded traits (ARR/MRR/status/churn dates/test flag) require `force: true`.
+- `search_accounts` — cached single-page name/externalId search; full payload by default. Supports `traits` projection for slim per-row shape.
+- `find_account_by_name` — **deprecated**, forwards to `search_accounts`.
 - `refresh_accounts` — reloads the in-memory cache.
 - `get_account_health` — health score breakdown.
+- `aggregate_accounts` — group/aggregate the cached list. `count`/`sum`/`avg`/`min`/`max` over a trait or top-level field, optional `groupBy` and `filterTraits`.
 
 ### Workspace-level lists (paginated, `{results, next}`)
-- `list_tasks` — `limit`, `from`, `archived`. The Vitally API does **not** support server-side filtering by status / assignee / due-date here; filter client-side after retrieval.
-- `list_conversations` — `limit`, `from`.
-- `list_notes` — `limit`, `from`, `archived`. Optional `accountId` switches to the per-account endpoint.
+- `list_tasks` — `limit`, `from`, `archived`, `includeAccount`, `descriptionFormat`. Vitally does **not** support server-side filtering by status / assignee / due-date here; filter client-side after retrieval.
+- `list_conversations` — `limit`, `from`, `includeAccount`.
+- `list_notes` — `limit`, `from`, `archived`, `includeAccount`, `descriptionFormat`. Optional `accountId` switches to the per-account endpoint.
 - `list_projects` — `limit`, `from`, `archived`.
 - `list_organizations` — `limit`, `from`.
 
 ### Per-account scoped tools
 - `get_account_conversations`, `get_account_tasks`, `get_account_notes`, `create_account_note`.
+- `get_account_tasks` accepts `status` (`open` | `completed` | `archived`) — applied client-side; scans up to 5 upstream pages to fill `limit` (returns `pagesScanned`, `truncated`).
 
 ### Notes & projects
 - `get_note_by_id`, `get_project`.
@@ -61,8 +63,14 @@ Tool names and signatures from upstream are preserved; the only response-shape c
 
 Every tool that returns an account uses the same `serializeAccount` helper, so the shape is consistent across the codebase.
 
-### `includeTraits` opt-out
-`search_accounts`, `find_account_by_name`, `refresh_accounts`, and `list_accounts` accept `includeTraits: false` to fall back to the upstream slim shape `{id, name, externalId, uri}` — useful when listing thousands of rows.
+### Payload-shaping parameters
+- `includeTraits: false` on `search_accounts`, `list_accounts`, `refresh_accounts` returns the slim `{id, name, externalId, uri}` shape.
+- `traits: ["vitally.custom.arr", ...]` on `search_accounts`, `list_accounts`, `find_account_by_name` projects only those trait keys per row.
+- `includeAccount` (default `false`) on per-account list endpoints (`get_account_tasks`, `get_account_notes`, `get_account_conversations`, `list_tasks`, `list_notes`, `list_conversations`) controls whether the embedded `account` object is included on each row. `accountId` is always preserved.
+- `descriptionFormat: 'plain' | 'html'` (default `plain`) on task and note tools strips HTML tags, replaces `<img>` with `[image]`, decodes entities. Pass `'html'` to keep raw HTML.
+
+### Workspace-level data hygiene warnings
+On the first call to `get_account` / `list_accounts` / `aggregate_accounts` per server lifetime, the MCP samples up to 20 accounts. If `healthScore` or `npsScore` is null on every sampled row, a one-time `_warnings` array is attached to the response so the LLM understands the workspace likely has no health/NPS configured (rather than assuming account-specific issues). Each warning is emitted at most once per session.
 
 ## Running via Docker (recommended)
 
