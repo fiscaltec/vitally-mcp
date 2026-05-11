@@ -82,6 +82,9 @@ function rpc(ctx, method, params) {
 async function callTool(ctx, name, args = {}) {
   const result = await rpc(ctx, "tools/call", { name, arguments: args });
   const text = result?.content?.[0]?.text;
+  if (result?.isError) {
+    return { isError: true, error: typeof text === "string" ? text : JSON.stringify(result) };
+  }
   if (typeof text !== "string") return result;
   try { return JSON.parse(text); } catch { return text; }
 }
@@ -438,6 +441,33 @@ async function main() {
       "note body is plain text by default",
       typeof note.content === "string" && !/[<>]/.test(note.content),
       note.content
+    );
+
+    console.log("\n== create_account_note: new endpoint + body shape ==");
+    const created = await callTool(ctx, "create_account_note", {
+      accountId: "4",
+      note: "Test diagnostic note",
+    });
+    check(
+      "create_account_note returns success with note.id",
+      created?.success === true && typeof created?.note?.id === "string",
+      JSON.stringify(created).slice(0, 200)
+    );
+    check(
+      "created note carries the `note` field (not `content`)",
+      created?.note?.note === "Test diagnostic note",
+      JSON.stringify(created?.note).slice(0, 200)
+    );
+    check(
+      "created note has noteDate defaulted to now",
+      typeof created?.note?.noteDate === "string" && !Number.isNaN(Date.parse(created.note.noteDate)),
+      created?.note?.noteDate
+    );
+
+    await expectThrow(
+      callTool(ctx, "create_account_note", { accountId: "4" }),
+      "create_account_note requires `note` parameter",
+      /note/i
     );
   }
 

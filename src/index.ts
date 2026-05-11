@@ -581,13 +581,16 @@ function mockApiResponse<T>(endpoint: string, method = "GET", body?: unknown): T
     return { results: tasks, next: null } as unknown as T;
   }
 
-  if (pathOnly.match(/^\/resources\/accounts\/[^/]+\/notes$/) && method === "POST") {
-    const noteBody = (body || {}) as { content?: string };
+  if (pathOnly === "/resources/notes" && method === "POST") {
+    const noteBody = (body || {}) as { accountId?: string; note?: string; noteDate?: string };
+    const now = new Date().toISOString();
     return {
       id: "n-mock-" + Date.now(),
-      content: noteBody.content,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      note: noteBody.note,
+      noteDate: noteBody.noteDate ?? now,
+      accountId: noteBody.accountId,
+      createdAt: now,
+      updatedAt: now,
     } as unknown as T;
   }
 
@@ -1199,14 +1202,19 @@ const TOOL_DEFINITIONS: ToolDef[] = [
   },
   {
     name: "create_account_note",
-    description: "Create a new note on an account.",
+    description:
+      "Create a new note on an account. Calls POST /resources/notes. The note body must go in `note` (not `content`). `noteDate` defaults to now if omitted.",
     inputSchema: {
       type: "object",
       properties: {
         accountId: { type: "string", description: "Vitally account ID." },
-        content: { type: "string", description: "Note body." },
+        note: { type: "string", description: "Note body (plain text or HTML)." },
+        noteDate: {
+          type: "string",
+          description: "ISO 8601 timestamp for the note. Defaults to now if omitted.",
+        },
       },
-      required: ["accountId", "content"],
+      required: ["accountId", "note"],
     },
   },
   {
@@ -1269,7 +1277,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
 const server = new Server(
   {
     name: "vitally-api",
-    version: "2.1.0",
+    version: "2.2.0",
   },
   {
     capabilities: {
@@ -1363,10 +1371,20 @@ async function handleSearchAccounts(args: Record<string, unknown>) {
   return jsonContent(payload);
 }
 
+function toolError(name: string, err: unknown) {
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  log(`[vitally-mcp] tool ${name} failed: ${message}`);
+  return {
+    content: [{ type: "text", text: `Tool ${name} failed. ${message}` }],
+    isError: true,
+  };
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = (request.params.arguments || {}) as Record<string, unknown>;
   const name = request.params.name;
 
+  try {
   switch (name) {
     case "search_tools": {
       const keyword = String(args.keyword ?? "").toLowerCase();
@@ -1719,14 +1737,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "create_account_note": {
       const accountId = args.accountId as string | undefined;
-      const content = args.content as string | undefined;
-      if (!accountId || !content) throw new Error("accountId and content are required");
-      const note = await callVitallyAPI<VitallyNote>(
-        `/resources/accounts/${encodeURIComponent(accountId)}/notes`,
+      const note = args.note as string | undefined;
+      const noteDate = (args.noteDate as string | undefined) ?? new Date().toISOString();
+      if (!accountId || !note) throw new Error("accountId and note are required");
+      const created = await callVitallyAPI<VitallyNote>(
+        "/resources/notes",
         "POST",
-        { content }
+        { accountId, note, noteDate }
       );
-      return jsonContent({ success: true, note });
+      return jsonContent({ success: true, note: created });
     }
 
     case "list_projects": {
@@ -1768,6 +1787,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     default:
       throw new Error(`Unknown tool: ${name}`);
+  }
+  } catch (err) {
+    return toolError(name, err);
   }
 });
 

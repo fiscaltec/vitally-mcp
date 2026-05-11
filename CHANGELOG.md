@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.0 — 2026-05-11
+
+### Fixed
+- **`create_account_note`** was 100% broken: it called `POST /resources/accounts/:id/notes` (route does not exist on Vitally → 404) with body `{ content }` (wrong schema). Now calls `POST /resources/notes` with `{ accountId, note, noteDate }`. The tool input parameter is renamed `content` → `note` to match Vitally's field name; `noteDate` is a new optional parameter that defaults to `now()`.
+
+### Changed
+- **MCP error contract.** Tool execution failures now return a `CallToolResult` with `isError: true` and a human-readable `text` payload containing the exception name and message (and, for HTTP failures from `callVitallyAPI`, the Vitally status code and response body). Previously the handler rethrew, which the MCP SDK serialized as a JSON-RPC protocol error and the client (Claude.ai) rendered as a generic "Tool execution failed" with no diagnostic content. The happy path is unchanged.
+- Server `name` advertised over MCP bumped to `vitally-api` v2.2.0.
+
+### Migration
+- Callers of `create_account_note` must rename `content` → `note`. Optional: pass `noteDate` (ISO 8601) to control the timestamp; otherwise it defaults to `now()`.
+- Programmatic clients that previously caught JSON-RPC errors from `tools/call` should now also inspect `result.isError` on successful RPC responses.
+
 ## v2.1.0 — 2026-05-05
 
 ### Added
