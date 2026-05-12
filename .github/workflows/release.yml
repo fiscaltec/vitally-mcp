@@ -82,59 +82,53 @@ jobs:
         shell: pwsh
         run: ./Scripts/build-standalone.ps1 -Architecture win-arm64 -SkipVersionBump
 
-      - name: Build MCPB bundle (win-x64)
+      - name: Prepare release-artifacts directory
         shell: pwsh
-        run: ./Scripts/build-mcpb.ps1 -Architecture win-x64 -SkipVersionBump
+        run: New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
 
-      - name: Rename win-x64 MCPB with architecture suffix
+      - name: Build MCPB bundle (win-x64) and stash
+        shell: pwsh
+        run: |
+          ./Scripts/build-mcpb.ps1 -Architecture win-x64 -SkipVersionBump
+          # build-mcpb.ps1 deletes pre-existing VitallyMcp-*.mcpb files in Output/
+          # before placing each new bundle, so move our win-x64 artefact aside
+          # before the next build wipes it.
+          $version = "${{ steps.version.outputs.version }}"
+          Move-Item "Output/VitallyMcp-$version.mcpb" "release-artifacts/VitallyMcp-$version-win-x64.mcpb" -Force
+
+      - name: Build MCPB bundle (win-arm64) and stash
+        shell: pwsh
+        run: |
+          ./Scripts/build-mcpb.ps1 -Architecture win-arm64 -SkipVersionBump
+          $version = "${{ steps.version.outputs.version }}"
+          Move-Item "Output/VitallyMcp-$version.mcpb" "release-artifacts/VitallyMcp-$version-win-arm64.mcpb" -Force
+
+      - name: Stash versioned standalone exes
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $src = "Output/VitallyMcp-$version.mcpb"
-          $dst = "Output/VitallyMcp-$version-win-x64.mcpb"
-          Move-Item $src $dst -Force
-
-      - name: Build MCPB bundle (win-arm64)
-        shell: pwsh
-        run: ./Scripts/build-mcpb.ps1 -Architecture win-arm64 -SkipVersionBump
-
-      - name: Rename win-arm64 MCPB with architecture suffix
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $src = "Output/VitallyMcp-$version.mcpb"
-          $dst = "Output/VitallyMcp-$version-win-arm64.mcpb"
-          Move-Item $src $dst -Force
-
-      - name: Stage versioned standalone exes for release upload
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $out = "Output"
-          # build-standalone.ps1 already produces VitallyMcp-{version}.exe in the publish dir;
-          # copy them out with architecture-specific names for the release upload.
           Copy-Item "VitallyMcp/bin/Release/net10.0/win-x64/publish/VitallyMcp-$version.exe" `
-                    "$out/VitallyMcp-$version-win-x64.exe" -Force
+                    "release-artifacts/VitallyMcp-$version-win-x64.exe" -Force
           Copy-Item "VitallyMcp/bin/Release/net10.0/win-arm64/publish/VitallyMcp-$version.exe" `
-                    "$out/VitallyMcp-$version-win-arm64.exe" -Force
+                    "release-artifacts/VitallyMcp-$version-win-arm64.exe" -Force
 
       - name: Compute SHA-256 checksums
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
           $files = @(
-            "Output/VitallyMcp-$version-win-x64.mcpb",
-            "Output/VitallyMcp-$version-win-arm64.mcpb",
-            "Output/VitallyMcp-$version-win-x64.exe",
-            "Output/VitallyMcp-$version-win-arm64.exe"
+            "release-artifacts/VitallyMcp-$version-win-x64.mcpb",
+            "release-artifacts/VitallyMcp-$version-win-arm64.mcpb",
+            "release-artifacts/VitallyMcp-$version-win-x64.exe",
+            "release-artifacts/VitallyMcp-$version-win-arm64.exe"
           )
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash -Algorithm SHA256 -Path $f).Hash.ToLower()
             $name = Split-Path -Leaf $f
             "$hash  $name"
           }
-          $lines | Set-Content "Output/SHA256SUMS.txt" -Encoding UTF8
-          Get-Content "Output/SHA256SUMS.txt"
+          $lines | Set-Content "release-artifacts/SHA256SUMS.txt" -Encoding UTF8
+          Get-Content "release-artifacts/SHA256SUMS.txt"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -145,8 +139,8 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            Output/VitallyMcp-${{ steps.version.outputs.version }}-win-x64.mcpb
-            Output/VitallyMcp-${{ steps.version.outputs.version }}-win-arm64.mcpb
-            Output/VitallyMcp-${{ steps.version.outputs.version }}-win-x64.exe
-            Output/VitallyMcp-${{ steps.version.outputs.version }}-win-arm64.exe
-            Output/SHA256SUMS.txt
+            release-artifacts/VitallyMcp-${{ steps.version.outputs.version }}-win-x64.mcpb
+            release-artifacts/VitallyMcp-${{ steps.version.outputs.version }}-win-arm64.mcpb
+            release-artifacts/VitallyMcp-${{ steps.version.outputs.version }}-win-x64.exe
+            release-artifacts/VitallyMcp-${{ steps.version.outputs.version }}-win-arm64.exe
+            release-artifacts/SHA256SUMS.txt
