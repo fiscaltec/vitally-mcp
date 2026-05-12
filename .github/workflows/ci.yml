@@ -10,6 +10,13 @@ on:
       - main
   workflow_dispatch:
 
+# dorny/test-reporter publishes a Check Run for the test summary; that requires
+# checks: write on top of the read-only defaults.
+permissions:
+  contents: read
+  checks: write
+  actions: read
+
 # Cancel any in-flight CI run when a new push lands on the same ref.
 concurrency:
   group: ci-${{ github.ref }}
