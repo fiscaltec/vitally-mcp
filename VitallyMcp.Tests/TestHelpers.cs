@@ -248,4 +248,318 @@ public static class TestHelpers
       "results": []
     }
     """;
+
+    /// <summary>
+    /// Sample conversation JSON for testing.
+    /// </summary>
+    public static string GetSampleConversationJson() => """
+    {
+      "results": [
+        {
+          "id": "conv-123",
+          "externalId": "ext-conv-123",
+          "subject": "Test Conversation",
+          "authorId": "user-456",
+          "accountId": "account-789",
+          "organizationId": "org-101",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ],
+      "next": "cursor-conv-next"
+    }
+    """;
+
+    /// <summary>
+    /// Sample message JSON for testing.
+    /// </summary>
+    public static string GetSampleMessageJson() => """
+    {
+      "results": [
+        {
+          "id": "msg-123",
+          "type": "email",
+          "externalId": "ext-msg-123",
+          "timestamp": "2024-01-15T12:00:00Z",
+          "message": "Hello there",
+          "from": "sender@example.com",
+          "to": "recipient@example.com"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample NPS response JSON for testing.
+    /// </summary>
+    public static string GetSampleNpsResponseJson() => """
+    {
+      "results": [
+        {
+          "id": "nps-123",
+          "externalId": "ext-nps-123",
+          "userId": "user-456",
+          "score": 9,
+          "feedback": "Great product!",
+          "respondedAt": "2024-01-15T12:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample project template JSON for testing.
+    /// </summary>
+    public static string GetSampleProjectTemplateJson() => """
+    {
+      "results": [
+        {
+          "id": "tmpl-123",
+          "name": "Onboarding Template",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z",
+          "projectCategoryId": "cat-456",
+          "description": "Standard onboarding template",
+          "traits": {
+            "phase": "Onboarding",
+            "complexity": "Medium"
+          }
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample project category JSON for testing.
+    /// </summary>
+    public static string GetSampleProjectCategoryJson() => """
+    {
+      "results": [
+        {
+          "id": "cat-123",
+          "name": "Onboarding",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample admin search JSON for testing.
+    /// </summary>
+    public static string GetSampleAdminJson() => """
+    {
+      "results": [
+        {
+          "id": "admin-123",
+          "name": "Admin User",
+          "email": "admin@example.com"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample note category JSON for testing.
+    /// </summary>
+    public static string GetSampleNoteCategoryJson() => """
+    {
+      "results": [
+        {
+          "id": "ncat-123",
+          "name": "Customer Call",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample task category JSON for testing.
+    /// </summary>
+    public static string GetSampleTaskCategoryJson() => """
+    {
+      "results": [
+        {
+          "id": "tcat-123",
+          "name": "Follow-up",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample custom object JSON for testing.
+    /// </summary>
+    public static string GetSampleCustomObjectJson() => """
+    {
+      "results": [
+        {
+          "id": "cobj-123",
+          "name": "Subscription",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample custom object instance JSON for testing.
+    /// </summary>
+    public static string GetSampleCustomObjectInstanceJson() => """
+    {
+      "results": [
+        {
+          "id": "inst-123",
+          "externalId": "ext-inst-123",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample meeting JSON for testing.
+    /// </summary>
+    public static string GetSampleMeetingJson() => """
+    {
+      "results": [
+        {
+          "id": "mtg-123",
+          "title": "Quarterly Review",
+          "externalId": "ext-mtg-123",
+          "startDateTime": "2024-01-15T14:00:00Z",
+          "endDateTime": "2024-01-15T15:00:00Z",
+          "location": "Zoom",
+          "source": "zoom",
+          "accountIds": ["account-456"],
+          "organizationIds": ["org-789"],
+          "participants": [
+            {
+              "id": "part-1",
+              "userId": "user-1",
+              "type": "organizer"
+            }
+          ],
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z",
+          "traits": {
+            "topic": "QBR",
+            "outcome": "Positive"
+          }
+        }
+      ],
+      "next": "cursor-mtg-next"
+    }
+    """;
+
+    /// <summary>
+    /// Sample meeting transcript JSON for testing.
+    /// </summary>
+    public static string GetSampleMeetingTranscriptJson() => """
+    {
+      "results": [
+        {
+          "id": "trans-123",
+          "meetingId": "mtg-456",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z"
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample raw meeting transcript JSON for testing (non-results envelope).
+    /// </summary>
+    public static string GetSampleRawTranscriptJson() => """
+    {
+      "id": "trans-123",
+      "meetingId": "mtg-456",
+      "transcript": [
+        {
+          "speaker": {
+            "externalId": "speaker-1",
+            "name": "Alice"
+          },
+          "sentences": [
+            { "text": "Hello everyone", "startTime": 0.0, "endTime": 1.5 }
+          ]
+        }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample custom traits (custom fields) raw JSON for testing.
+    /// </summary>
+    public static string GetSampleCustomTraitsJson() => """
+    [
+      {
+        "label": "Payment Method",
+        "type": "STRING",
+        "path": "paymentMethod",
+        "createdAt": "2024-01-01T00:00:00Z"
+      },
+      {
+        "label": "Employees",
+        "type": "NUMBER",
+        "path": "employees",
+        "createdAt": "2024-01-01T00:00:00Z"
+      }
+    ]
+    """;
+
+    /// <summary>
+    /// Sample survey responses raw JSON for testing (uses 'data' envelope).
+    /// </summary>
+    public static string GetSampleSurveyResponsesJson() => """
+    {
+      "data": [
+        {
+          "id": "sres-123",
+          "surveyId": "survey-456",
+          "userId": "user-789",
+          "submittedAt": "2024-01-15T12:00:00Z",
+          "questionResponses": [
+            { "questionId": "q-1", "answer": "Very satisfied" }
+          ]
+        }
+      ],
+      "next": "cursor-survey-next"
+    }
+    """;
+
+    /// <summary>
+    /// Sample single survey response raw JSON for testing.
+    /// </summary>
+    public static string GetSampleSingleSurveyResponseJson() => """
+    {
+      "id": "sres-123",
+      "surveyId": "survey-456",
+      "userId": "user-789",
+      "submittedAt": "2024-01-15T12:00:00Z",
+      "questionResponses": [
+        { "questionId": "q-1", "answer": "Very satisfied" }
+      ]
+    }
+    """;
+
+    /// <summary>
+    /// Sample survey question raw JSON for testing.
+    /// </summary>
+    public static string GetSampleSurveyQuestionJson() => """
+    {
+      "id": "q-123",
+      "surveyId": "survey-456",
+      "label": "How satisfied are you?",
+      "type": "rating"
+    }
+    """;
 }

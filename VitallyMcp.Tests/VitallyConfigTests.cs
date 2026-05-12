@@ -206,4 +206,109 @@ public class VitallyConfigTests
             Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
         }
     }
+
+    #region Region Tests
+
+    [Fact]
+    public void FromEnvironment_WithNoRegion_ShouldDefaultToUs()
+    {
+        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
+        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", TestSubdomain);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", null);
+
+        try
+        {
+            var config = VitallyConfig.FromEnvironment();
+            config.Region.Should().Be("US");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
+            Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+        }
+    }
+
+    [Fact]
+    public void FromEnvironment_WithRegionEu_ShouldNotRequireSubdomain()
+    {
+        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
+        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", "EU");
+
+        try
+        {
+            var config = VitallyConfig.FromEnvironment();
+            config.Region.Should().Be("EU");
+            config.Subdomain.Should().BeEmpty();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
+        }
+    }
+
+    [Theory]
+    [InlineData("eu")]
+    [InlineData("Eu")]
+    [InlineData(" eu ")]
+    public void FromEnvironment_WithMixedCaseRegion_ShouldNormaliseToUpper(string regionInput)
+    {
+        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", regionInput);
+
+        try
+        {
+            var config = VitallyConfig.FromEnvironment();
+            config.Region.Should().Be("EU");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
+        }
+    }
+
+    [Fact]
+    public void FromEnvironment_WithInvalidRegion_ShouldThrowInvalidOperationException()
+    {
+        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
+        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", TestSubdomain);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", "APAC");
+
+        try
+        {
+            var act = () => VitallyConfig.FromEnvironment();
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*VITALLY_REGION*US*EU*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
+            Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
+        }
+    }
+
+    [Fact]
+    public void FromEnvironment_WithRegionUsAndMissingSubdomain_ShouldThrowInvalidOperationException()
+    {
+        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
+        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", "US");
+
+        try
+        {
+            var act = () => VitallyConfig.FromEnvironment();
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*VITALLY_SUBDOMAIN*US region*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
+        }
+    }
+
+    #endregion
 }

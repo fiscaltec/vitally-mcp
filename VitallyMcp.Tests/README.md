@@ -1,203 +1,105 @@
 # VitallyMcp.Tests
 
-Comprehensive test suite for the Vitally MCP server implementation.
+Comprehensive automated test suite for the Vitally MCP server.
 
-## Test Coverage
+## Coverage
 
-This test project provides **52 tests** covering critical functionality across the codebase:
+**179 tests, all passing** (xUnit + FluentAssertions + Moq), running fully mocked against `HttpMessageHandler` — no live API calls.
 
-### Test Classes
+### Test classes
 
-#### 1. VitallyConfigTests (12 tests)
-Tests environment variable loading and validation for API credentials.
+| File | Scope |
+|------|-------|
+| `VitallyConfigTests` | Environment variable loading and validation for `VITALLY_API_KEY` / `VITALLY_SUBDOMAIN`. Runs sequentially via `[Collection]` to avoid env-var conflicts. |
+| `VitallyServiceTests` | Field/trait filtering, pagination, resource-specific defaults across every resource type, plus full coverage of `GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`, `GetRawAsync` (with URL-encoded query params), `PostRawAsync`, `DeleteRawAsync`. Includes HTTP-verb, path, and Basic-auth header verification via Moq's `Protected().Verify(...)`. |
+| `Tools/AccountsToolsTests` | List / get / create / update / delete + status filter + traits + list-by-organisation |
+| `Tools/OrganizationsToolsTests` | CRUD + traits |
+| `Tools/UsersToolsTests` | CRUD + search + list-by-account/organisation + traits |
+| `Tools/AdminsToolsTests` | `SearchAdmins` by email |
+| `Tools/ConversationsToolsTests` | CRUD + sub-paths (by account, by organisation) |
+| `Tools/MessagesToolsTests` | List by conversation + get / create / delete |
+| `Tools/NotesToolsTests` | CRUD + sub-paths + `ListNoteCategories` + traits |
+| `Tools/ProjectsToolsTests` | CRUD + sub-paths + create-from-template + traits |
+| `Tools/ProjectTemplatesToolsTests` | Templates + categories + categoryId filter + traits |
+| `Tools/TasksToolsTests` | CRUD + sub-paths + `ListTaskCategories` + traits |
+| `Tools/NpsResponsesToolsTests` | CRUD + sub-paths |
+| `Tools/CustomObjectsToolsTests` | Objects + instances + search + CRUD |
+| `Tools/MeetingsToolsTests` | Full CRUD + add / remove participant + 4 transcript methods + `archived` filter + traits |
+| `Tools/CustomTraitsToolsTests` | List custom traits for `accounts` and `customObjects` models |
+| `Tools/SurveysToolsTests` | List responses + get response + get question (raw `{data}` envelope passthrough) |
 
-**Coverage:**
-- Valid environment variable loading
-- Missing API key detection
-- Empty API key detection
-- Missing subdomain detection
-- Empty subdomain detection
-- Both credentials missing detection
-- Various valid API key formats
-- Various valid subdomain formats
+## Framework & dependencies
 
-**Key Features:**
-- Tests run sequentially using `[Collection]` attribute to avoid environment variable conflicts
-- Each test includes proper cleanup in `finally` blocks
+- **xUnit** 2.9.3 — test framework
+- **Moq** 4.20.72 — HttpClient mocking (uses `Mock<HttpMessageHandler>` + `Protected()`)
+- **FluentAssertions** 8.9.0 — readable assertions
+- **coverlet.collector** 10.0.0 — code coverage
+- **Microsoft.NET.Test.Sdk** 18.5.1
 
-#### 2. VitallyServiceTests (29 tests)
-Tests JSON filtering, field selection, trait filtering, and pagination.
+Targets `net10.0` to match the main project.
 
-**Coverage:**
-- Default field behaviour for all resource types
-- Client-side field filtering
-- Trait inclusion/exclusion
-- Specific trait filtering
-- Non-existent field handling
-- Non-existent trait handling
-- Pagination cursor preservation
-- Empty results handling
-- Multiple result filtering
-- Resource-specific default fields (accounts, organisations, users, tasks, notes, projects)
+## Running
 
-**Key Scenarios:**
-- Traits excluded by default to minimise response size
-- Field existence validation (non-existent fields skipped)
-- GetResourcesAsync vs GetResourceByIdAsync behaviour
-- Pagination metadata preservation
-
-#### 3. AccountsToolsTests (11 tests)
-Tests account-related tool endpoints and parameter passing.
-
-**Coverage:**
-- List accounts with default parameters
-- List accounts with field filtering
-- List accounts with status filter
-- List accounts with pagination
-- List accounts with traits
-- Get single account
-- Get account with field filtering
-- List accounts by organisation
-- Create account
-- Update account
-- Delete account
-
-#### 4. UsersToolsTests (11 tests)
-Tests user-related tool endpoints and parameter passing.
-
-**Coverage:**
-- List users with default parameters
-- List users with field filtering
-- List users by account
-- List users by organisation
-- Search users by email
-- Get single user
-- Create user
-- Update user
-- Delete user
-- List users with traits
-
-## Test Framework & Dependencies
-
-- **xUnit** 2.9.3 - Test framework
-- **Moq** 4.20.72 - Mocking framework for HttpClient
-- **FluentAssertions** 8.8.0 - Readable assertions
-- **coverlet.collector** 6.0.4 - Code coverage collection
-
-## Running Tests
-
-### Run All Tests
 ```powershell
-dotnet test VitallyMcp.Tests/VitallyMcp.Tests.csproj
-```
+# Full suite (from repo root)
+dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
 
-### Run with Detailed Output
-```powershell
-dotnet test VitallyMcp.Tests/VitallyMcp.Tests.csproj --verbosity normal
-```
+# Just one class
+dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 
-### Run Specific Test Class
-```powershell
-dotnet test --filter "FullyQualifiedName~VitallyServiceTests"
-```
+# Just one method
+dotnet test --filter "Name~AddMeetingParticipant"
 
-### Run Specific Test Method
-```powershell
-dotnet test --filter "Name~GetResourcesAsync_AccountsWithNoFields"
-```
-
-### Generate Code Coverage Report
-```powershell
+# With coverage (opencover)
 dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 ```
 
-## Test Structure
+## Patterns
 
-### TestHelpers.cs
-Provides mock HTTP client creation and sample JSON data for testing:
+### Mock HTTP client
 
-**Mock HTTP Client Creation:**
-- `CreateMockHttpClient(jsonResponse)` - Simple mock with JSON response
-- `CreateMockHttpClientWithHandler(jsonResponse)` - Mock with handler for verification
-
-**Sample JSON Data:**
-- `GetSampleAccountJson()` - Full account with traits
-- `GetSampleOrganizationJson()` - Organisation data
-- `GetSampleUserJson()` - User data
-- `GetSampleTaskJson()` - Task data
-- `GetSampleNoteJson()` - Note data
-- `GetSampleProjectJson()` - Project data
-- `GetSampleSingleAccountJson()` - Single account (for Get operations)
-- `GetEmptyResultsJson()` - Empty results array
-
-## Key Testing Patterns
-
-### 1. Environment Variable Testing
 ```csharp
-Environment.SetEnvironmentVariable("VITALLY_API_KEY", testValue);
-try
-{
-    var config = VitallyConfig.FromEnvironment();
-    // assertions
-}
-finally
-{
-    Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
-}
+var client = TestHelpers.CreateMockHttpClient(jsonResponse);
+var service = new VitallyService(client, new VitallyConfig { ApiKey = "...", Subdomain = "..." });
 ```
 
-### 2. Mocking HTTP Responses
+### URL / verb verification
+
 ```csharp
-var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleAccountJson());
-var service = new VitallyService(mockClient, config);
-var result = await service.GetResourcesAsync("accounts");
+var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(json);
+// ... act ...
+handler.Protected().Verify(
+    "SendAsync",
+    Times.Once(),
+    ItExpr.Is<HttpRequestMessage>(req =>
+        req.Method == HttpMethod.Post
+        && req.RequestUri!.AbsolutePath == "/resources/meetings/m-1/participants"),
+    ItExpr.IsAny<CancellationToken>());
 ```
 
-### 3. JSON Assertion
-```csharp
-var jsonDoc = JsonDocument.Parse(result);
-jsonDoc.RootElement.TryGetProperty("id", out _).Should().BeTrue();
-jsonDoc.RootElement.TryGetProperty("traits", out _).Should().BeFalse();
-```
+### Sample JSON
 
-## Test Scenarios Based on CLAUDE.md Requirements
+`TestHelpers.cs` exposes per-resource sample payloads (`GetSampleAccountJson`, `GetSampleMeetingJson`, etc.). Add a new helper there when you need a shape that doesn't fit an existing one; don't refactor existing helpers.
 
-The tests validate all scenarios documented in `CLAUDE.md`:
+### Env-var tests
 
-✅ Pagination with `from` parameter
-✅ Client-side field filtering
-✅ Trait filtering (default exclusion, specific trait selection)
-✅ Resource-specific default fields
-✅ Field existence handling (non-existent fields skipped)
-✅ Error handling (environment variable validation)
-✅ Response size reduction via filtering
+`VitallyConfigTests` mutates real environment variables, so it uses `[Collection("VitallyConfig Tests")]` to run sequentially and always cleans up in a `finally` block.
 
-## Future Test Considerations
+## Adding tests
 
-### Not Currently Tested (Require Live API)
-- Actual Vitally API integration tests
-- HTTP error handling (4xx, 5xx responses)
-- Network timeout scenarios
-- Rate limiting behaviour
+When you add a new tool method (or a new tool class):
 
-### Potential Additions
-- Performance/load testing
-- Custom field scenarios for different resource types
-- All 75 tool endpoints (currently sample coverage)
-- MCP protocol integration tests
-- End-to-end tests with Claude Desktop
+1. Add the matching test method in `Tools/{ResourceName}ToolsTests.cs`. One test per public `[McpServerTool]` method is the baseline.
+2. For raw-passthrough methods (no field filtering — `GetRawAsync`/`PostRawAsync`/`DeleteRawAsync` based), mock the exact response shape the Vitally API returns and assert the raw body comes back through unchanged.
+3. If the response shape is new, add a sample JSON helper to `TestHelpers.cs`.
+4. If the tool exercises new behaviour at the service layer, add a corresponding `VitallyServiceTests` case.
 
-## Continuous Integration
+## CI
 
-These tests are designed to run in CI/CD pipelines:
-- No external dependencies (fully mocked)
-- Fast execution (~230ms total)
-- Zero flaky tests (deterministic)
-- Clear pass/fail output
+The suite has no external dependencies and finishes in <500 ms, so it's safe to run in any CI step that follows `dotnet build`.
 
-## Notes
+## Out of scope (intentional)
 
-- Tests use mocked HTTP clients - no actual API calls are made
-- VitallyConfig tests run sequentially to avoid env var conflicts
-- All tool tests validate parameter passing and JSON response handling
-- Default field filtering is extensively tested across resource types
+- Live Vitally API integration — covered by manual testing as described in `../CLAUDE.md`
+- MCP protocol integration — relies on the `ModelContextProtocol` SDK's own test coverage
+- End-to-end tests against Claude Desktop — covered by the manual install workflow

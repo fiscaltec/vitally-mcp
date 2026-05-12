@@ -1,8 +1,8 @@
 {
   "manifest_version": "0.3",
   "name": "Vitally",
-  "version": "2.1.0",
-  "description": "MCP server for integrating with Vitally customer success platform. Provides full CRUD access to accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, and custom objects. Features client-side field filtering and permission management via ReadOnly/Destructive flags.",
+  "version": "2.3.0",
+  "description": "MCP server for integrating with Vitally customer success platform. Provides full CRUD access to accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings (with participants and transcripts), custom traits and custom survey responses. Features client-side field filtering and permission management via ReadOnly/Destructive flags.",
   "author": {
     "name": "Dan Searle"
   },
@@ -16,7 +16,8 @@
       "args": [],
       "env": {
         "VITALLY_API_KEY": "${user_config.VITALLY_API_KEY}",
-        "VITALLY_SUBDOMAIN": "${user_config.VITALLY_SUBDOMAIN}"
+        "VITALLY_SUBDOMAIN": "${user_config.VITALLY_SUBDOMAIN}",
+        "VITALLY_REGION": "${user_config.VITALLY_REGION}"
       }
     }
   },
@@ -320,6 +321,74 @@
     {
       "name": "Delete custom object instance",
       "description": "Delete a custom object instance"
+    },
+    {
+      "name": "List meetings",
+      "description": "List Vitally meetings with optional pagination, filtering and field selection"
+    },
+    {
+      "name": "List meetings by account",
+      "description": "List Vitally meetings for a specific account"
+    },
+    {
+      "name": "List meetings by organization",
+      "description": "List Vitally meetings for a specific organisation"
+    },
+    {
+      "name": "Get meeting",
+      "description": "Get a single Vitally meeting by ID or externalId"
+    },
+    {
+      "name": "Create meeting",
+      "description": "Create a new Vitally meeting"
+    },
+    {
+      "name": "Update meeting",
+      "description": "Update an existing Vitally meeting"
+    },
+    {
+      "name": "Delete meeting",
+      "description": "Archive a Vitally meeting (soft delete)"
+    },
+    {
+      "name": "Add meeting participant",
+      "description": "Add a participant to a Vitally meeting"
+    },
+    {
+      "name": "Remove meeting participant",
+      "description": "Remove a participant from a Vitally meeting"
+    },
+    {
+      "name": "List meeting transcripts",
+      "description": "List Vitally meeting transcripts with optional pagination"
+    },
+    {
+      "name": "Get meeting transcript",
+      "description": "Get a single Vitally meeting transcript by its transcript ID"
+    },
+    {
+      "name": "Get transcript for meeting",
+      "description": "Get the transcript belonging to a specific meeting"
+    },
+    {
+      "name": "Create meeting transcript",
+      "description": "Create or replace the transcript for a Vitally meeting"
+    },
+    {
+      "name": "List custom traits",
+      "description": "List custom trait definitions configured on a Vitally model (read-only schema discovery)"
+    },
+    {
+      "name": "List survey responses",
+      "description": "List responses for a Vitally custom survey"
+    },
+    {
+      "name": "Get survey response",
+      "description": "Get a single Vitally survey response by its response ID"
+    },
+    {
+      "name": "Get survey question",
+      "description": "Get metadata for a single Vitally survey question by its question ID"
     }
   ],
   "user_config": {
@@ -333,9 +402,17 @@
     "VITALLY_SUBDOMAIN": {
       "type": "string",
       "title": "Subdomain",
-      "description": "Subdomain of your Vitally instance",
-      "required": true,
+      "description": "Subdomain of your Vitally instance (required for the US region; ignored for EU)",
+      "required": false,
       "sensitive": false
+    },
+    "VITALLY_REGION": {
+      "type": "string",
+      "title": "Region",
+      "description": "Vitally data centre region: 'US' (default, uses {subdomain}.rest.vitally.io) or 'EU' (uses rest.vitally-eu.io with no subdomain)",
+      "required": false,
+      "sensitive": false,
+      "default": "US"
     }
   }
 }

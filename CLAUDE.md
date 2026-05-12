@@ -7,11 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windows.
 
 **Key characteristics:**
-- Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages)
+- Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via ReadOnly and Destructive flags for MCP clients
 - Windows-specific MCPB packaging
 - .NET 10 single-file executable
-- Credentials managed via environment variables (VITALLY_API_KEY, VITALLY_SUBDOMAIN)
+- Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA)
+- Multi-region support: US (default, `{subdomain}.rest.vitally.io`) and EU (`rest.vitally-eu.io`) via the `VITALLY_REGION` env var
+- Rate-limit-aware HTTP pipeline: auto-retries on `429 Too Many Requests` and logs a warning when `X-RateLimit-Remaining` drops below threshold
+- Credentials and region managed via environment variables (VITALLY_API_KEY, VITALLY_SUBDOMAIN, VITALLY_REGION)
 
 ## Common Development Commands
 
@@ -66,7 +69,8 @@ To test the server locally without MCPB installation:
 1. Set environment variables in PowerShell:
    ```powershell
    $env:VITALLY_API_KEY = "sk_live_your_key"
-   $env:VITALLY_SUBDOMAIN = "your-subdomain"
+   $env:VITALLY_SUBDOMAIN = "your-subdomain"   # required for US, ignored for EU
+   $env:VITALLY_REGION   = "US"                 # optional; "US" (default) or "EU"
    ```
 
 2. Run the published executable:
@@ -90,19 +94,38 @@ The server uses the official MCP C# SDK with automatic tool discovery:
 
 Environment variable loading with validation:
 - `VITALLY_API_KEY` - Required API key (format: sk_live_*)
-- `VITALLY_SUBDOMAIN` - Required subdomain (e.g., "fiscaltec")
-- Throws InvalidOperationException with helpful messages if not set
+- `VITALLY_SUBDOMAIN` - Required for US region (e.g., "fiscaltec"); ignored for EU region (the EU instance has no subdomain prefix)
+- `VITALLY_REGION` - Optional, `US` (default) or `EU`. Case-insensitive and trimmed. Invalid values throw.
+- Throws `InvalidOperationException` with helpful messages if required values are missing for the chosen region
 
 ### HTTP Service (VitallyService.cs)
 
 Centralised HTTP client for Vitally REST API:
-- Base URL constructed from subdomain: `https://{subdomain}.rest.vitally.io`
+- Base URL depends on `VitallyConfig.Region`:
+  - US: `https://{subdomain}.rest.vitally.io`
+  - EU: `https://rest.vitally-eu.io` (no subdomain — the EU instance is single-tenant per the Vitally docs)
 - Basic authentication using Base64-encoded API key
 - **Client-side JSON filtering** to reduce response sizes for LLM consumption
 - **Resource-specific default fields** optimised per resource type
-- Two core methods:
+- Standard methods (apply field/trait filtering and the `{results, next}` envelope):
   - `GetResourcesAsync()` - List resources with pagination, sorting, and filtering
   - `GetResourceByIdAsync()` - Get single resource by ID
+  - `CreateResourceAsync()` / `UpdateResourceAsync()` / `DeleteResourceAsync()` - POST / PUT / DELETE the standard `/resources/{type}[/{id}]` paths
+- Raw pass-through methods (no field filtering — for endpoints whose response shape is not the standard `{results, next}` envelope, e.g. surveys returning `{data, next}`, customFields returning a bare array, or for sub-resource paths like meeting participants):
+  - `GetRawAsync(path, queryParams)` - GET with URL-encoded query string
+  - `PostRawAsync(path, jsonBody)` - POST raw JSON
+  - `DeleteRawAsync(path)` - DELETE arbitrary path
+
+### Rate-Limit Handler (VitallyRateLimitHandler.cs)
+
+Vitally's documented limit is **1000 requests / minute (sliding window)**. The handler is a `DelegatingHandler` registered via `AddHttpMessageHandler<VitallyRateLimitHandler>()` in `Program.cs`, so all HTTP calls made by `VitallyService` go through it transparently.
+
+Behaviour:
+- **On HTTP 429 Too Many Requests:** waits and retries up to `MaxRetries` (default 3). Wait time is taken from `Retry-After` (preferred), then `X-RateLimit-Reset` (Unix seconds), falling back to `FallbackRetryDelay` (default 5s). The wait is capped at `MaxRetryDelay` (default 60s).
+- **On any non-429 response:** if `X-RateLimit-Remaining` is below `LowRemainingThreshold` (default 50), logs a warning via `ILogger` so callers can throttle themselves.
+- **When retries are exhausted:** the 429 response is returned to the caller, which propagates as `HttpRequestException` via `EnsureSuccessStatusCode`.
+
+All thresholds are public mutable properties, so they can be tweaked in tests or future configuration without touching the handler internals.
 
 **Vitally API Parameters:**
 - Pagination uses `from` parameter (not `cursor`) - pass the `next` value from previous response
@@ -137,8 +160,19 @@ When no fields are specified, each resource type returns an optimised field set:
 | **Project Templates** | id, name, createdAt, updatedAt, projectCategoryId, description |
 | **Project Categories** | id, name, createdAt, updatedAt |
 | **Messages** | id, type, externalId, timestamp, message, from, to |
+| **Custom Objects** | id, name, createdAt, updatedAt |
+| **Note Categories** | id, name, createdAt, updatedAt |
+| **Task Categories** | id, name, createdAt, updatedAt |
+| **Meetings** | id, title, externalId, startDateTime, endDateTime, location, source, accountIds, organizationIds, participants, createdAt, updatedAt |
+| **Meeting Transcripts** | id, meetingId, createdAt, updatedAt |
+| **Admins / Admins Search** | id, name, email |
 
-These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like traits objects and rich text content).
+These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like traits objects, rich text content, transcript bodies, and meeting summaries).
+
+**Resources NOT using field filtering** (raw pass-through):
+- **Custom Traits** (`customFields` endpoint) — returns a bare array of trait definitions; client-side filtering does not apply.
+- **Custom Surveys** (`surveys/:id/responses`, `surveyResponses/:id`, `surveyQuestions/:id`) — uses a `{data}` envelope rather than `{results, next}`.
+- **Meeting sub-resources** (`meetings/:id/participants`, `meetings/:id/transcript`) — body is returned as-is from the API.
 
 **Trait Filtering:**
 
@@ -187,7 +221,9 @@ public static class AccountsTools
 }
 ```
 
-**Note:** The `status` parameter is specific to AccountsTools. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects). Other resource types have the standard parameters (limit, from, fields, sortBy).
+**Note:** The `status` parameter is specific to AccountsTools, and `archived` is specific to MeetingsTools. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects, Meetings, Project Templates). Other resource types have the standard parameters (limit, from, fields, sortBy).
+
+**Raw pass-through tools:** `CustomTraitsTools`, `SurveysTools`, and the participant/transcript methods on `MeetingsTools` call `GetRawAsync` / `PostRawAsync` / `DeleteRawAsync` directly. They do not accept a `fields` parameter because Vitally returns these endpoints with a non-standard JSON envelope (`{data}` for surveys, bare arrays for `customFields`).
 
 ### Build Scripts (Scripts/)
 
@@ -241,8 +277,12 @@ To add support for a new Vitally resource:
 1. Create `Tools/{ResourceName}Tools.cs` following the pattern in AccountsTools.cs
 2. Implement `List{ResourceName}` and `Get{ResourceName}` methods
 3. Use VitallyService with appropriate resource type string
-4. Tools are automatically discovered via assembly scanning
-5. Update `Output/mcpb/manifest.json` to document the new tools
+4. **If the endpoint returns the standard `{results, next}` envelope:** add an entry to `ResourceDefaultFields` in `VitallyService.cs` with the optimised default field set
+5. **If the endpoint returns a non-standard envelope** (e.g. `{data}`) or is a sub-resource path (e.g. `meetings/:id/participants`): use `GetRawAsync` / `PostRawAsync` / `DeleteRawAsync` — these bypass client-side filtering and return the body unchanged
+6. **For sub-paths under an existing resource** (e.g. `admins/search`): add an explicit entry to `ResourceDefaultFields` for the full path — the lookup is exact-match, not prefix-match
+7. Tools are automatically discovered via assembly scanning
+8. Add a matching `Tools/{ResourceName}ToolsTests.cs` under `VitallyMcp.Tests/Tools/`
+9. Update `Output/mcpb/manifest.json` to document the new tools
 
 ## Important Notes
 
@@ -258,7 +298,7 @@ To add support for a new Vitally resource:
 - **Pagination**: Use `from` parameter (not `cursor`) - this matches the Vitally API spec
 - **JSON responses**: Tools return filtered JSON strings to reduce LLM context usage
 - **Windows-specific**: MCPB packages are Windows-only (win-x64/win-arm64 runtimes)
-- **MCP SDK Preview**: Using preview SDK version 0.4.0-preview.3 - breaking changes possible
+- **MCP SDK**: Using `ModelContextProtocol` 1.3.0 GA. The historical preview-to-GA upgrade from 0.4.0-preview.3 was source-compatible for this project's surface (stdio transport + attribute-based tools).
 
 ## Distribution
 
@@ -272,21 +312,29 @@ The `.gitignore` is configured to exclude:
 - `Output/mcpb/VitallyMcp.exe` - Temporary executable staging
 - `Output/*.mcpb` - Generated MCPB packages
 
-## Testing Considerations
+## Testing
 
-- Manual testing requires actual Vitally credentials
+The `VitallyMcp.Tests` project contains the automated test suite (xUnit + FluentAssertions + Moq).
+
+```powershell
+# Run the full suite
+dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+
+# Run a single test class
+dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
+```
+
+**Coverage:**
+- `VitallyConfigTests` — environment variable loading and validation
+- `VitallyServiceTests` — JSON field/trait filtering, pagination, resource-specific defaults, plus all six service methods (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`, `GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) including HTTP-verb / URL / auth-header verification via Moq protected verification
+- `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
+
+**When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.CreateMockHttpClient` (no URL assertions) or `TestHelpers.CreateMockHttpClientWithHandler` (when you want to assert verb + path).
+
+**Manual testing considerations** (require live Vitally credentials):
 - Test pagination by using low limit values (e.g., limit=5) and verify `from` parameter works with `next` cursor
 - Test client-side field filtering by specifying various field combinations
-- **Test trait filtering**:
-  - Verify traits are excluded by default (not in response)
-  - Test with `fields="traits"` and `traits="traitName1,traitName2"` to filter specific traits
-  - Confirm only requested traits are returned from the traits object
-  - Test trait filtering on all resources that support traits (accounts, organizations, users, tasks, notes, projects, project templates)
-- **Verify resource-specific defaults**: Check each resource type returns its tailored default field set when no fields specified
-- **Verify field existence handling**: Confirm that non-existent fields are skipped (not returned as null)
-- Test sortBy parameter with "createdAt" and "updatedAt" values
-- For accounts, test status filter with: active, churned, activeOrChurned
-- Test edge cases: Request fields that don't exist on a resource type (should be skipped gracefully)
-- Verify error handling by testing with invalid IDs/missing env vars
-- Check that filtered responses are significantly smaller than full API responses
-- Compare default field sets across resource types to verify they're optimised correctly
+- Test trait filtering by combining `fields="traits"` with `traits="trait1,trait2"`
+- For accounts, test the status filter with: `active`, `churned`, `activeOrChurned`
+- For meetings, test the `archived` filter
+- Verify error handling with invalid IDs/missing env vars

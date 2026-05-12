@@ -23,13 +23,16 @@ public class VitallyService
         ["tasks"] = ["id", "name", "createdAt", "updatedAt", "externalId", "dueDate", "completedAt", "assignedToId", "accountId", "organizationId", "archivedAt"],
         ["projects"] = ["id", "name", "createdAt", "updatedAt", "accountId", "organizationId", "archivedAt"],
         ["admins"] = ["id", "name", "email"],
+        ["admins/search"] = ["id", "name", "email"],
         ["npsResponses"] = ["id", "externalId", "userId", "score", "feedback", "respondedAt"],
         ["projectTemplates"] = ["id", "name", "createdAt", "updatedAt", "projectCategoryId", "description"],
         ["projectCategories"] = ["id", "name", "createdAt", "updatedAt"],
         ["messages"] = ["id", "type", "externalId", "timestamp", "message", "from", "to"],
         ["customObjects"] = ["id", "name", "createdAt", "updatedAt"],
         ["noteCategories"] = ["id", "name", "createdAt", "updatedAt"],
-        ["taskCategories"] = ["id", "name", "createdAt", "updatedAt"]
+        ["taskCategories"] = ["id", "name", "createdAt", "updatedAt"],
+        ["meetings"] = ["id", "title", "externalId", "startDateTime", "endDateTime", "location", "source", "accountIds", "organizationIds", "participants", "createdAt", "updatedAt"],
+        ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"]
     };
 
 
@@ -40,7 +43,9 @@ public class VitallyService
     {
         _httpClient = httpClient;
         _config = config;
-        _baseUrl = $"https://{_config.Subdomain}.rest.vitally.io";
+        _baseUrl = config.Region == VitallyConfig.RegionEu
+            ? "https://rest.vitally-eu.io"
+            : $"https://{config.Subdomain}.rest.vitally.io";
 
         var authValue = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{_config.ApiKey}:"));
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authValue);
@@ -115,6 +120,54 @@ public class VitallyService
     public async Task<string> DeleteResourceAsync(string resourceType, string id)
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
+
+        var response = await _httpClient.DeleteAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// GET an arbitrary path under /resources with no field filtering.
+    /// Use for endpoints whose response shape differs from the standard {results, next}
+    /// envelope (e.g. surveys use {data, next}, customFields returns a bare array).
+    /// </summary>
+    public async Task<string> GetRawAsync(string path, Dictionary<string, string>? queryParams = null)
+    {
+        var url = $"{_baseUrl}/resources/{path}";
+        if (queryParams != null && queryParams.Count > 0)
+        {
+            var query = string.Join("&", queryParams.Select(kv => $"{kv.Key}={Uri.EscapeDataString(kv.Value)}"));
+            url = $"{url}?{query}";
+        }
+
+        var response = await _httpClient.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// POST raw JSON to an arbitrary path under /resources (for sub-resources that don't
+    /// fit the {resourceType, id} pattern, e.g. meeting participants).
+    /// </summary>
+    public async Task<string> PostRawAsync(string path, string jsonBody)
+    {
+        var url = $"{_baseUrl}/resources/{path}";
+        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync(url, content);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// DELETE an arbitrary path under /resources (for sub-resources, e.g. meeting participants).
+    /// </summary>
+    public async Task<string> DeleteRawAsync(string path)
+    {
+        var url = $"{_baseUrl}/resources/{path}";
 
         var response = await _httpClient.DeleteAsync(url);
         response.EnsureSuccessStatusCode();

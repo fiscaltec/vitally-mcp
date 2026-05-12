@@ -1,4 +1,7 @@
 using FluentAssertions;
+using Moq;
+using Moq.Protected;
+using System.Net;
 using System.Text.Json;
 
 namespace VitallyMcp.Tests;
@@ -479,6 +482,523 @@ public class VitallyServiceTests
 
         // Assert - Should NOT include traits by default
         firstProject.TryGetProperty("traits", out _).Should().BeFalse();
+    }
+
+    #endregion
+
+    #region CreateResourceAsync Tests
+
+    [Fact]
+    public async Task CreateResourceAsync_ShouldPostJsonBodyToResourcePath()
+    {
+        // Arrange
+        var responseJson = """{"id":"acc-new","name":"New Account"}""";
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(responseJson);
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.CreateResourceAsync("accounts", """{"name":"New Account"}""");
+
+        // Assert - request shape
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Post
+                && req.RequestUri!.AbsolutePath == "/resources/accounts"),
+            ItExpr.IsAny<CancellationToken>());
+
+        // Assert - response passes through unfiltered
+        result.Should().Be(responseJson);
+    }
+
+    [Fact]
+    public async Task CreateResourceAsync_ShouldSendJsonContentType()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"id":"x"}""");
+        var service = CreateService(client);
+
+        // Act
+        await service.CreateResourceAsync("notes", """{"subject":"Hello"}""");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Content!.Headers.ContentType!.MediaType == "application/json"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CreateResourceAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("error", HttpStatusCode.BadRequest);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.CreateResourceAsync("accounts", "{}");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region UpdateResourceAsync Tests
+
+    [Fact]
+    public async Task UpdateResourceAsync_ShouldPutJsonBodyToResourceIdPath()
+    {
+        // Arrange
+        var responseJson = """{"id":"acc-123","name":"Renamed"}""";
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(responseJson);
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.UpdateResourceAsync("accounts", "acc-123", """{"name":"Renamed"}""");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Put
+                && req.RequestUri!.AbsolutePath == "/resources/accounts/acc-123"),
+            ItExpr.IsAny<CancellationToken>());
+
+        result.Should().Be(responseJson);
+    }
+
+    [Fact]
+    public async Task UpdateResourceAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("not found", HttpStatusCode.NotFound);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.UpdateResourceAsync("accounts", "missing", "{}");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region DeleteResourceAsync Tests
+
+    [Fact]
+    public async Task DeleteResourceAsync_ShouldSendDeleteToResourceIdPath()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("");
+        var service = CreateService(client);
+
+        // Act
+        await service.DeleteResourceAsync("accounts", "acc-123");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Delete
+                && req.RequestUri!.AbsolutePath == "/resources/accounts/acc-123"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DeleteResourceAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("forbidden", HttpStatusCode.Forbidden);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.DeleteResourceAsync("accounts", "acc-123");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region GetRawAsync Tests
+
+    [Fact]
+    public async Task GetRawAsync_WithNoQueryParams_ShouldGetUnfilteredBody()
+    {
+        // Arrange - raw body uses 'data' envelope (not the standard 'results' one)
+        var rawJson = """{"data":[{"id":"sr-1","score":9}],"next":null}""";
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(rawJson);
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.GetRawAsync("surveys/survey-1/responses");
+
+        // Assert - request URL is correct
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Get
+                && req.RequestUri!.AbsolutePath == "/resources/surveys/survey-1/responses"
+                && string.IsNullOrEmpty(req.RequestUri.Query)),
+            ItExpr.IsAny<CancellationToken>());
+
+        // Assert - body passes through unfiltered (no field stripping)
+        result.Should().Be(rawJson);
+    }
+
+    [Fact]
+    public async Task GetRawAsync_WithQueryParams_ShouldAppendUrlEncodedQuery()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("[]");
+        var service = CreateService(client);
+
+        // Act
+        await service.GetRawAsync("customFields", new Dictionary<string, string>
+        {
+            ["model"] = "customObjects",
+            ["customObjectId"] = "obj 123"
+        });
+
+        // Assert - both params are present and the space in 'obj 123' is URL-escaped
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Get
+                && req.RequestUri!.AbsolutePath == "/resources/customFields"
+                && req.RequestUri.Query.Contains("model=customObjects")
+                && req.RequestUri.Query.Contains("customObjectId=obj%20123")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetRawAsync_WithEmptyQueryParamsDictionary_ShouldNotAddQueryString()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("{}");
+        var service = CreateService(client);
+
+        // Act
+        await service.GetRawAsync("anything", new Dictionary<string, string>());
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req => string.IsNullOrEmpty(req.RequestUri!.Query)),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetRawAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("oops", HttpStatusCode.InternalServerError);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.GetRawAsync("surveys/x/responses");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region PostRawAsync Tests
+
+    [Fact]
+    public async Task PostRawAsync_ShouldPostJsonToArbitraryPath()
+    {
+        // Arrange - meeting participants is a sub-resource
+        var responseJson = """{"id":"meet-1","participants":[{"id":"p-99"}]}""";
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(responseJson);
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.PostRawAsync(
+            "meetings/meet-1/participants",
+            """{"email":"a@b.com","type":"attendee"}""");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Post
+                && req.RequestUri!.AbsolutePath == "/resources/meetings/meet-1/participants"
+                && req.Content!.Headers.ContentType!.MediaType == "application/json"),
+            ItExpr.IsAny<CancellationToken>());
+
+        result.Should().Be(responseJson);
+    }
+
+    [Fact]
+    public async Task PostRawAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("bad", HttpStatusCode.UnprocessableEntity);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.PostRawAsync("meetings/x/participants", "{}");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region DeleteRawAsync Tests
+
+    [Fact]
+    public async Task DeleteRawAsync_ShouldSendDeleteToArbitraryPath()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("");
+        var service = CreateService(client);
+
+        // Act
+        await service.DeleteRawAsync("meetings/meet-1/participants/p-99");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Delete
+                && req.RequestUri!.AbsolutePath == "/resources/meetings/meet-1/participants/p-99"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DeleteRawAsync_OnNonSuccessStatus_ShouldThrow()
+    {
+        // Arrange
+        var client = TestHelpers.CreateMockHttpClient("nope", HttpStatusCode.NotFound);
+        var service = CreateService(client);
+
+        // Act
+        var act = () => service.DeleteRawAsync("meetings/x/participants/y");
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    #endregion
+
+    #region Authentication Header Tests
+
+    [Fact]
+    public async Task GetResourcesAsync_ShouldSendBasicAuthHeader()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        await service.GetResourcesAsync("accounts");
+
+        // Assert - Basic auth using base64("apiKey:")
+        var expectedToken = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{TestApiKey}:"));
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Headers.Authorization!.Scheme == "Basic"
+                && req.Headers.Authorization.Parameter == expectedToken),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetResourcesAsync_ShouldUseSubdomainInBaseUrl()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        await service.GetResourcesAsync("accounts");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.Host == $"{TestSubdomain}.rest.vitally.io"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetResourcesAsync_WithRegionEu_ShouldUseEuHostNotSubdomain()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var config = new VitallyConfig
+        {
+            Subdomain = "ignored-on-eu",
+            ApiKey = TestApiKey,
+            Region = VitallyConfig.RegionEu
+        };
+        var service = new VitallyService(client, config);
+
+        // Act
+        await service.GetResourcesAsync("accounts");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.Host == "rest.vitally-eu.io"
+                && req.RequestUri.AbsolutePath == "/resources/accounts"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetResourcesAsync_WithRegionUs_ShouldUseSubdomainHost()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var config = new VitallyConfig
+        {
+            Subdomain = "tenant-x",
+            ApiKey = TestApiKey,
+            Region = VitallyConfig.RegionUs
+        };
+        var service = new VitallyService(client, config);
+
+        // Act
+        await service.GetResourcesAsync("accounts");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.Host == "tenant-x.rest.vitally.io"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    #endregion
+
+    #region Resource-Specific Defaults — newly-added resources
+
+    [Fact]
+    public async Task GetResourcesAsync_AdminsSearch_ShouldHaveAdminDefaultFields()
+    {
+        // Arrange - admins/search is the resource path used by AdminsTools.SearchAdmins
+        var adminsSearchJson = """
+        {
+          "results": [
+            {
+              "id": "admin-1",
+              "name": "Admin User",
+              "email": "admin@example.com",
+              "createdAt": "2024-01-01T00:00:00Z",
+              "extraField": "should be filtered out"
+            }
+          ]
+        }
+        """;
+        var mockClient = TestHelpers.CreateMockHttpClient(adminsSearchJson);
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await service.GetResourcesAsync("admins/search");
+        var jsonDoc = JsonDocument.Parse(result);
+        var firstAdmin = jsonDoc.RootElement.GetProperty("results")[0];
+
+        // Assert - has the admin defaults, not the bare fallback
+        firstAdmin.TryGetProperty("id", out _).Should().BeTrue();
+        firstAdmin.TryGetProperty("name", out _).Should().BeTrue();
+        firstAdmin.TryGetProperty("email", out _).Should().BeTrue();
+        firstAdmin.TryGetProperty("extraField", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetResourcesAsync_MeetingsWithNoFields_ShouldReturnMeetingDefaultFields()
+    {
+        // Arrange
+        var meetingsJson = """
+        {
+          "results": [
+            {
+              "id": "meet-1",
+              "title": "Quarterly review",
+              "externalId": "ext-meet-1",
+              "startDateTime": "2024-03-10T14:00:00Z",
+              "endDateTime": "2024-03-10T15:00:00Z",
+              "location": "Zoom",
+              "source": "calendar",
+              "summary": "long summary text we don't want by default",
+              "transcript": "very long transcript we don't want by default"
+            }
+          ]
+        }
+        """;
+        var mockClient = TestHelpers.CreateMockHttpClient(meetingsJson);
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await service.GetResourcesAsync("meetings");
+        var jsonDoc = JsonDocument.Parse(result);
+        var firstMeeting = jsonDoc.RootElement.GetProperty("results")[0];
+
+        // Assert - core meeting fields present
+        firstMeeting.TryGetProperty("id", out _).Should().BeTrue();
+        firstMeeting.TryGetProperty("title", out _).Should().BeTrue();
+        firstMeeting.TryGetProperty("startDateTime", out _).Should().BeTrue();
+        firstMeeting.TryGetProperty("endDateTime", out _).Should().BeTrue();
+        firstMeeting.TryGetProperty("location", out _).Should().BeTrue();
+        firstMeeting.TryGetProperty("source", out _).Should().BeTrue();
+
+        // Assert - heavy text fields excluded by default
+        firstMeeting.TryGetProperty("summary", out _).Should().BeFalse();
+        firstMeeting.TryGetProperty("transcript", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetResourcesAsync_MeetingTranscriptsWithNoFields_ShouldReturnTranscriptDefaultFields()
+    {
+        // Arrange
+        var transcriptsJson = """
+        {
+          "results": [
+            {
+              "id": "trans-1",
+              "meetingId": "meet-1",
+              "createdAt": "2024-03-10T15:30:00Z",
+              "updatedAt": "2024-03-10T15:30:00Z",
+              "transcript": "very long transcript text we don't want by default"
+            }
+          ]
+        }
+        """;
+        var mockClient = TestHelpers.CreateMockHttpClient(transcriptsJson);
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await service.GetResourcesAsync("meetingTranscripts");
+        var jsonDoc = JsonDocument.Parse(result);
+        var firstTranscript = jsonDoc.RootElement.GetProperty("results")[0];
+
+        // Assert
+        firstTranscript.TryGetProperty("id", out _).Should().BeTrue();
+        firstTranscript.TryGetProperty("meetingId", out _).Should().BeTrue();
+        firstTranscript.TryGetProperty("createdAt", out _).Should().BeTrue();
+        firstTranscript.TryGetProperty("updatedAt", out _).Should().BeTrue();
+
+        // Heavy transcript text excluded by default
+        firstTranscript.TryGetProperty("transcript", out _).Should().BeFalse();
     }
 
     #endregion
