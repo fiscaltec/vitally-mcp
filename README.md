@@ -1,542 +1,177 @@
 # Vitally MCP Server
 
-A Model Context Protocol (MCP) server implementation in C# for integrating with the Vitally customer success platform. This server provides read-only access to Vitally data including accounts, organisations, users, conversations, notes, projects, tasks, and admins.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop** and **Claude Code**.
 
-Packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windows.
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, distributed as both a Windows MCPB bundle (Claude Desktop) and a standalone single-file executable (Claude Code or any direct-launch MCP host).
+
+[![Build status](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml)
 
 ## Features
 
-- **Read-only access** to all major Vitally resources
-- **Pagination support** for efficient data retrieval
-- **Client-side field filtering** to reduce response sizes for LLM consumption
-- **Resource-specific intelligent defaults** - each resource type returns optimised fields (business metrics for accounts, dates for tasks, etc.)
-- **Field existence handling** - only includes fields that actually exist (no null placeholders)
-- **Sort ordering** by createdAt or updatedAt
-- **Resource-specific filters** (e.g., account status filtering)
-- **Built with .NET 10** and the official MCP C# SDK
-- **Environment variable configuration** for secure credential management
-- **Single-file executable** packaged as MCPB for easy distribution
-
-## Prerequisites
-
-### For End Users (Installing the MCPB)
-- Windows 10/11 (x64 or ARM64)
-- Claude Desktop or another MCP-compatible client
-- Vitally API credentials
-
-### For Developers (Building from Source)
-- .NET 10.0 SDK ([Download](https://dotnet.microsoft.com/download/dotnet/10.0))
-- Node.js LTS ([Download](https://nodejs.org/))
-- PowerShell 7+
+- **Full CRUD coverage** of 93 endpoints across 17 Vitally resource types: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
+- **Permission-aware tools** — every tool is tagged `ReadOnly` / `Destructive` so MCP clients can enable or disable categories of operation in bulk.
+- **EU and US data centres** — defaults to EU (`rest.vitally-eu.io`); set `VITALLY_REGION=US` to point at `{subdomain}.rest.vitally.io`.
+- **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
+- **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
+- **In-process update check** — the `Check_for_updates` MCP tool reports whether a newer GitHub Release is available and returns architecture-matched download URLs.
 
 ## Installation
 
-### Option 1: Install Pre-built MCPB (Recommended for End Users)
+Pre-built artefacts are published to [GitHub Releases](https://github.com/fiscaltec/vitally-mcp/releases). Every release contains four binaries plus a `SHA256SUMS.txt`:
 
-1. **Download** the `.mcpb` file from your distribution source
+| File | Audience |
+|---|---|
+| `VitallyMcp-{version}-win-x64.mcpb` | Claude Desktop on Intel/AMD64 |
+| `VitallyMcp-{version}-win-arm64.mcpb` | Claude Desktop on ARM64 |
+| `VitallyMcp-{version}-win-x64.exe` | Claude Code (or any direct-launch host) on Intel/AMD64 |
+| `VitallyMcp-{version}-win-arm64.exe` | Claude Code on ARM64 |
 
-2. **Double-click** the `.mcpb` file to install
+### Claude Desktop
 
-3. **Configure** your MCP client (e.g., Claude Desktop) with environment variables:
+1. Download the `.mcpb` file for your architecture from the latest release.
+2. Double-click — Claude Desktop installs the server and prompts for the configuration values declared in `manifest.json`.
+3. Provide `VITALLY_API_KEY`. Leave `VITALLY_REGION` blank to use the default (EU), or set it to `US` and supply `VITALLY_SUBDOMAIN` for a US tenant.
+4. Restart Claude Desktop.
 
-   Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+### Claude Code
 
-   ```json
-   {
-     "mcpServers": {
-       "vitally": {
-         "command": "VitallyMcp",
-         "env": {
-           "VITALLY_API_KEY": "sk_live_your_api_key_here",
-           "VITALLY_SUBDOMAIN": "your-subdomain"
-         }
-       }
-     }
-   }
-   ```
-
-4. **Restart** Claude Desktop
-
-### Option 2: Use Standalone Executable (For Testing/Development)
-
-This method doesn't require MCPB installation and is useful for development or testing.
-
-#### Building the Standalone Executable
-
-```powershell
-# Build using the automated script (auto-detects architecture and bumps version)
-.\Scripts\build-standalone.ps1
-
-# Skip version bump if needed
-.\Scripts\build-standalone.ps1 -SkipVersionBump
-
-# Build for specific architecture
-.\Scripts\build-standalone.ps1 -Architecture win-x64
-
-# For ARM64 systems
-.\Scripts\build-standalone.ps1 -Architecture win-arm64
-```
-
-The executable will be at: `bin/Release/net10.0/win-x64/publish/VitallyMcp.exe`
-
-#### Configuring Claude Desktop for Standalone Executable
-
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+Claude Code expects a path to an executable. Download the `.exe` for your architecture (e.g. to `C:\Tools\VitallyMcp\VitallyMcp.exe`) and add the server to your MCP config (`~/.claude.json` or project-local `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "vitally": {
-      "command": "C:\\Users\\YourUsername\\path\\to\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
+      "command": "C:\\Tools\\VitallyMcp\\VitallyMcp.exe",
       "env": {
-        "VITALLY_API_KEY": "sk_live_your_api_key_here",
-        "VITALLY_SUBDOMAIN": "your-subdomain"
+        "VITALLY_API_KEY": "sk_live_your_key",
+        "VITALLY_REGION": "EU"
       }
     }
   }
 }
 ```
 
-**Important**: Replace `C:\\path\\to\\mcp` with the actual full path to your project directory. Note the double backslashes (`\\`) in the path.
-
-#### Example with Actual Path
-
-If your project is in `C:\\Users\\YourUsername\\Downloads\\VitallyMcp`:
-
-```json
-{
-  "mcpServers": {
-    "vitally": {
-      "command": "C:\\Users\\YourUsername\\Downloads\\VitallyMcp\\bin\\Release\\net10.0\\win-x64\\publish\\VitallyMcp.exe",
-      "env": {
-        "VITALLY_API_KEY": "sk_live_your_api_key_here",
-        "VITALLY_SUBDOMAIN": "your-subdomain"
-      }
-    }
-  }
-}
-```
-
-### Option 3: Build MCPB from Source
-
-1. **Clone or download** the project
-
-2. **Install the MCPB CLI** (first time only):
-   ```powershell
-   npm install -g @anthropic-ai/mcpb
-   ```
-
-3. **Build the MCPB package**:
-   ```powershell
-   # Build everything (bumps version, builds standalone, and creates MCPB)
-   .\Scripts\build-all.ps1
-
-   # Or build just the MCPB package
-   .\Scripts\build-mcpb.ps1
-
-   # Skip version bump if needed
-   .\Scripts\build-mcpb.ps1 -SkipVersionBump
-   ```
-
-   This will:
-   - Bump the version number (revision by default)
-   - Detect your system architecture (x64 or ARM64)
-   - Publish a self-contained executable
-   - Create a versioned `.mcpb` file in the `Output/` directory (e.g., `VitallyMcp-1.1.3.mcpb`)
-
-4. **Install** the generated `.mcpb` file from `Output/` (double-click)
-
-5. **Configure** as described in Option 1 above
+For a US tenant, swap to `"VITALLY_REGION": "US"` and add `"VITALLY_SUBDOMAIN": "your-subdomain"`.
 
 ## Configuration
 
-### Required Environment Variables
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `VITALLY_API_KEY` | Yes | — | Vitally API key, format `sk_live_*`. Generate one under **Settings → Integrations → API Keys** in Vitally. |
+| `VITALLY_REGION` | No | `EU` | Data centre: `EU` (single shared host `rest.vitally-eu.io`) or `US` (per-tenant `{subdomain}.rest.vitally.io`). Case-insensitive. |
+| `VITALLY_SUBDOMAIN` | Only when `VITALLY_REGION=US` | — | Your Vitally subdomain, e.g. `fiscaltec` from `fiscaltec.vitally.io`. Ignored on EU because the EU API has no per-tenant subdomain. |
 
-The server requires two environment variables to be set in your MCP client configuration:
+## Updating
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `VITALLY_API_KEY` | Your Vitally API key | `sk_live_51f45f82...` |
-| `VITALLY_SUBDOMAIN` | Your Vitally subdomain | `fiscaltec` |
+Inside the host, ask Claude to call `Check_for_updates`. The tool returns:
+- the running version,
+- the latest GitHub Release version,
+- whether an update is available, and
+- pre-resolved download URLs matching your architecture for both `.mcpb` (Claude Desktop) and `.exe` (Claude Code).
 
-### Finding Your Credentials
+To apply an update:
+- **Claude Desktop**: download the new `.mcpb` and double-click to reinstall.
+- **Claude Code**: download the new `.exe` and replace the file referenced by `command` in your MCP config.
 
-- **API Key**: Available in your Vitally account settings
-- **Subdomain**: The subdomain in your Vitally URL (e.g., `fiscaltec` from `fiscaltec.vitally.io`)
+There's no self-replacing binary by design: the Windows file lock on a running .exe makes that fragile, and the manual swap takes only a few seconds.
 
-## Available Tools
+## Tool catalogue
 
-The Vitally MCP server exposes the following tools for each resource type:
+The server publishes ~95 MCP tools, one per Vitally REST endpoint. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk.
 
-### Accounts
-- `ListAccounts` - List accounts with pagination and field selection
-- `GetAccount` - Get a specific account by ID
+| Resource | List / search | Get | Create | Update | Delete | Sub-resources |
+|---|:-:|:-:|:-:|:-:|:-:|---|
+| Accounts | ✓ | ✓ | ✓ | ✓ | ✓ | health-score breakdown |
+| Organizations | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Users | ✓ (+search) | ✓ | ✓ | ✓ | ✓ | by account, by organisation |
+| Conversations | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation |
+| Messages | ✓ | ✓ | ✓ | — | ✓ | by conversation |
+| Notes | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation, note categories |
+| Projects | ✓ | ✓ | ✓ (from template) | ✓ | ✓ | by account, by organisation |
+| Project templates | ✓ | ✓ | — | — | — | project categories |
+| Tasks | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation, task categories |
+| NPS responses | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation |
+| Admins | search by email | — | — | — | — | — |
+| Custom objects | ✓ | ✓ | ✓ | ✓ | — | instances (list, search, CRUD) |
+| Meetings | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation, participants, transcripts |
+| Custom traits | schema discovery | — | — | — | — | — |
+| Custom surveys | responses (list, get) | survey question | — | — | — | — |
+| Updates | check for updates | — | — | — | — | — |
 
-### Organisations
-- `ListOrganizations` - List organisations with pagination and field selection
-- `GetOrganization` - Get a specific organisation by ID
+Full per-tool descriptions are in [`Output/mcpb/manifest.json`](Output/mcpb/manifest.json) and the developer guide in [`CLAUDE.md`](CLAUDE.md).
 
-### Users
-- `ListUsers` - List users with pagination and field selection
-- `GetUser` - Get a specific user by ID
+## Building from source
 
-### Conversations
-- `ListConversations` - List conversations with pagination and field selection
-- `GetConversation` - Get a specific conversation by ID
+Prerequisites: .NET 10 SDK, Node.js 20+, PowerShell 7+, and the MCPB CLI (`npm install -g @anthropic-ai/mcpb`).
 
-### Notes
-- `ListNotes` - List notes with pagination and field selection
-- `GetNote` - Get a specific note by ID
+```powershell
+# Restore + build + run the test suite (200+ tests)
+dotnet test VitallyMcp.sln -c Release --nologo --verbosity minimal
 
-### Projects
-- `ListProjects` - List projects with pagination and field selection
-- `GetProject` - Get a specific project by ID
+# Standalone exe (Claude Code), auto-detects architecture
+.\Scripts\build-standalone.ps1
 
-### Tasks
-- `ListTasks` - List tasks with pagination and field selection
-- `GetTask` - Get a specific task by ID
+# MCPB bundle (Claude Desktop), auto-detects architecture
+.\Scripts\build-mcpb.ps1
 
-### Admins
-- `ListAdmins` - List admins with pagination and field selection
-- `GetAdmin` - Get a specific admin by ID
-
-## Usage Examples
-
-### Listing Accounts
-
-```
-Can you list the first 10 Vitally accounts?
-```
-
-### Getting Specific Fields
-
-```
-List Vitally organisations but only show me the id, name, and createdAt fields
-```
-
-### Pagination
-
-```
-Get more accounts using the pagination cursor: eyJzb3J0VmFsdWU...
+# Both, with a version bump
+.\Scripts\build-all.ps1                # Revision bump
+.\Scripts\build-all.ps1 -BumpType Minor
+.\Scripts\build-all.ps1 -BumpType Major
 ```
 
-**Note:** Use the `next` value from the previous response as the `from` parameter to get the next page of results.
+See [`CLAUDE.md`](CLAUDE.md) for the deeper development guide, including the `VitallyService` filtering model, the rate-limit handler, the raw-passthrough pattern, and per-resource default field sets.
 
-### Getting a Specific Resource
+## Releases
 
-```
-Get the Vitally account with ID abc123
-```
-
-## Tool Parameters
-
-### List Tools
-
-All list tools support the following parameters:
-
-- **limit** (optional): Maximum number of items to return (default: 20, max: 100)
-- **from** (optional): Pagination cursor from previous response (use the `next` value)
-- **fields** (optional): Comma-separated list of fields to include (e.g., `"id,name,createdAt"`). See resource-specific defaults below. **Note:** Field filtering is done client-side to reduce response sizes.
-- **sortBy** (optional): Sort by `"createdAt"` or `"updatedAt"` (default: updatedAt)
-
-**AccountsTools only:**
-- **status** (optional): Filter by account status - `"active"` (default), `"churned"`, or `"activeOrChurned"`
-
-### Get Tools
-
-All get tools support:
-
-- **id** (required): The resource ID
-- **fields** (optional): Comma-separated list of fields to include. See resource-specific defaults below. **Note:** Field filtering is done client-side.
-
-### Resource-Specific Default Fields
-
-When no `fields` parameter is specified, each resource type returns an optimised field set:
-
-| Resource | Default Fields |
-|----------|----------------|
-| **Accounts** | id, name, createdAt, updatedAt, externalId, organizationId, healthScore, mrr, accountOwnerId, lastSeenTimestamp |
-| **Organizations** | id, name, createdAt, updatedAt, externalId, healthScore, mrr, lastSeenTimestamp |
-| **Users** | id, name, createdAt, updatedAt, externalId, email, accountId, organizationId, lastSeenTimestamp |
-| **Conversations** | id, externalId, subject, authorId, accountId, organizationId |
-| **Notes** | id, createdAt, updatedAt, externalId, subject, noteDate, authorId, accountId, organizationId, categoryId, archivedAt |
-| **Tasks** | id, name, createdAt, updatedAt, externalId, dueDate, completedAt, assignedToId, accountId, organizationId, archivedAt |
-| **Projects** | id, name, createdAt, updatedAt, traits, accountId, organizationId, archivedAt |
-| **Admins** | id, name, email |
-
-These defaults balance usefulness with response size:
-- **Business entities** (Accounts/Organizations) include health metrics and financial data
-- **Activity items** (Tasks/Notes) include dates, assignments, and relationships
-- **People** (Users/Admins) include contact information and activity timestamps
-- Large fields like full traits objects and rich text content are excluded unless explicitly requested
-
-## Response Format
-
-All responses are returned as filtered JSON strings. By default (when no fields are specified), responses contain resource-specific optimised fields to reduce LLM context usage.
-
-**Example: ListAccounts (default fields)**
-```json
-{
-  "results": [
-    {
-      "id": "acc_123",
-      "name": "Acme Corp",
-      "createdAt": "2024-01-15T10:30:00Z",
-      "updatedAt": "2024-11-20T14:22:00Z",
-      "externalId": "SF-12345",
-      "organizationId": "org_456",
-      "healthScore": 8.5,
-      "mrr": 5000,
-      "accountOwnerId": "user_789",
-      "lastSeenTimestamp": "2024-11-19T09:15:00Z"
-    }
-  ],
-  "next": "cursor-token-for-pagination"
-}
-```
-
-**Example: ListTasks (default fields)**
-```json
-{
-  "results": [
-    {
-      "id": "task_123",
-      "name": "Onboarding call",
-      "createdAt": "2024-11-01T08:00:00Z",
-      "updatedAt": "2024-11-15T16:30:00Z",
-      "externalId": null,
-      "dueDate": "2024-11-25",
-      "completedAt": null,
-      "assignedToId": "user_456",
-      "accountId": "acc_789",
-      "organizationId": "org_012",
-      "archivedAt": null
-    }
-  ],
-  "next": null
-}
-```
-
-**Note:**
-- The Vitally API does not support field filtering natively. Field selection is implemented client-side by parsing the full API response and extracting only the requested fields before returning to the LLM.
-- Only fields that exist on the resource are included - non-existent fields are omitted (not returned as null).
+Releases are produced automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a `vX.Y.Z` tag is pushed. The workflow pins the `.csproj` and manifest versions to the tag, runs the test suite, builds `win-x64` and `win-arm64` artefacts for both Claude Desktop and Claude Code, computes SHA-256 checksums, and creates a GitHub Release with auto-generated notes.
 
 ## Architecture
 
-The server is built using:
-
-- **ModelContextProtocol (0.4.0-preview.3)** - Official MCP C# SDK
-- **Microsoft.Extensions.Hosting (10.0.0)** - Application hosting and dependency injection
-- **Microsoft.Extensions.Http (10.0.0)** - HTTP client factory for API calls
-- **.NET 10.0** - Latest .NET runtime
-
-### Project Structure
-
 ```
 VitallyMcp/
-├── Program.cs                 # Application entry point and MCP server setup
-├── VitallyConfig.cs          # Configuration model with environment variable loading
-├── VitallyService.cs         # HTTP service with client-side JSON filtering
-├── Tools/                     # MCP tool implementations
-│   ├── AccountsTools.cs       # Account tools with status filtering
-│   ├── OrganizationsTools.cs
-│   ├── UsersTools.cs
-│   ├── ConversationsTools.cs
-│   ├── NotesTools.cs
-│   ├── ProjectsTools.cs
-│   ├── TasksTools.cs
-│   └── AdminsTools.cs
-├── Scripts/                   # Build automation scripts
-│   ├── bump-version.ps1       # Version bumping script
-│   ├── build-standalone.ps1   # Standalone executable build
-│   ├── build-mcpb.ps1        # MCPB package build
-│   └── build-all.ps1         # Combined build script
-├── Output/                    # Build output directory
-│   ├── mcpb/                  # MCPB packaging files
-│   │   ├── manifest.json      # Package manifest
-│   │   ├── logo.png           # Package icon
-│   │   └── VitallyMcp.exe     # Executable staging (gitignored)
-│   └── VitallyMcp-*.mcpb     # Generated MCPB packages (gitignored)
-├── VitallyMcp.csproj         # Project file
-└── README.md                  # This file
+├── Program.cs                       # Host + DI setup, MCP stdio server
+├── VitallyConfig.cs                 # Env-var loading and region selection
+├── VitallyService.cs                # HTTP client + client-side JSON filtering
+├── VitallyRateLimitHandler.cs       # 429 retry + rate-limit warnings
+├── UpdateCheckService.cs            # GitHub Releases probe for Check_for_updates
+└── Tools/                           # One file per Vitally resource type
+    ├── AccountsTools.cs
+    ├── OrganizationsTools.cs
+    ├── UsersTools.cs
+    ├── ConversationsTools.cs
+    ├── MessagesTools.cs
+    ├── NotesTools.cs
+    ├── ProjectsTools.cs
+    ├── ProjectTemplatesTools.cs
+    ├── TasksTools.cs
+    ├── NpsResponsesTools.cs
+    ├── AdminsTools.cs
+    ├── CustomObjectsTools.cs
+    ├── MeetingsTools.cs
+    ├── CustomTraitsTools.cs
+    ├── SurveysTools.cs
+    └── UpdatesTools.cs
 ```
 
-**Key Implementation Details:**
-- **VitallyService** implements client-side JSON filtering using `System.Text.Json.JsonDocument`
-- Field filtering reduces response sizes before returning to LLM
-- **Resource-specific default fields** optimised per resource type (see table above)
-- Only fields that actually exist on the resource are included (via TryGetProperty)
-- Pagination uses `from` parameter matching Vitally API spec
+The `VitallyService` exposes two call patterns:
+1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
+2. **Raw passthrough** (`GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) — for endpoints whose response shape differs from the standard envelope (surveys' `{data}`, custom-fields' bare array) or for sub-resource sub-paths (meeting participants, meeting transcripts).
 
-## Building MCPB Packages
+All HTTP traffic flows through `VitallyRateLimitHandler`, a `DelegatingHandler` registered via `AddHttpMessageHandler<>()` in `Program.cs`.
 
-### Prerequisites
+## Security
 
-1. Install Node.js:
-   ```powershell
-   winget install OpenJS.NodeJS.LTS
-   ```
+- Credentials are read from environment variables at startup. They are never written to disk by the server.
+- All API requests use HTTPS with HTTP Basic auth (Base64-encoded API key).
+- Tools are tagged with `ReadOnly` and `Destructive` attributes so MCP clients can permission categories of operation in bulk.
+- The `.mcpb` files distributed in Releases do not contain credentials — the host injects them at runtime from the user's configuration.
 
-2. Install MCPB CLI (first time only):
-   ```powershell
-   npm install -g @anthropic-ai/mcpb
-   ```
+## Licence
 
-### Build Process
-
-The project includes automated build scripts in the `Scripts/` directory:
-
-#### Complete Build (Recommended)
-
-```powershell
-# Bumps version, builds standalone, and creates MCPB package
-.\Scripts\build-all.ps1
-
-# Bump minor version instead of revision
-.\Scripts\build-all.ps1 -BumpType Minor
-
-# Skip standalone build
-.\Scripts\build-all.ps1 -SkipStandalone
-```
-
-#### MCPB Package Only
-
-```powershell
-# Build MCPB with automatic version bump
-.\Scripts\build-mcpb.ps1
-
-# Skip version bump
-.\Scripts\build-mcpb.ps1 -SkipVersionBump
-
-# Specify architecture
-.\Scripts\build-mcpb.ps1 -Architecture win-arm64
-```
-
-The script will:
-1. Bump the version number (revision by default)
-2. Auto-detect your system architecture (x64 or ARM64)
-3. Publish a self-contained .NET application
-4. Stage files in the `Output/mcpb` directory (executable at top level)
-5. Create a versioned `.mcpb` bundle in `Output/` (e.g., `VitallyMcp-1.1.3.mcpb`)
-6. Clean up temporary files
-
-#### Version Management
-
-```powershell
-# Manually bump version (revision, minor, or major)
-.\Scripts\bump-version.ps1 -BumpType Revision  # 1.1.2 -> 1.1.3
-.\Scripts\bump-version.ps1 -BumpType Minor     # 1.1.3 -> 1.2.0
-.\Scripts\bump-version.ps1 -BumpType Major     # 1.2.0 -> 2.0.0
-```
-
-The version bump script updates both:
-- `VitallyMcp.csproj` - Project version
-- `Output/mcpb/manifest.json` - MCPB package version
-
-## Security Considerations
-
-### Environment Variables
-- **Credentials are never stored in files** - all sensitive data is passed via environment variables
-- Environment variables are configured in the MCP client (e.g., Claude Desktop config)
-- The server reads credentials at startup from the environment
-
-### Read-Only Operations
-- The server provides **read-only access** only
-- No create, update, or delete operations are available
-- Minimises risk of accidental data modification
-
-### HTTPS
-- All API requests use HTTPS with Basic Authentication
-- Credentials are Base64-encoded and sent over secure connections
-
-### Best Practices
-1. **Never commit** the `.mcpb` file with hardcoded credentials
-2. **Use environment variables** in your MCP client configuration
-3. **Rotate API keys** regularly
-4. **Limit API key permissions** in Vitally to read-only access if possible
-
-## Troubleshooting
-
-### Server not appearing in Claude Desktop
-
-1. Verify the MCPB was installed successfully (double-click should show installation progress)
-2. Check that environment variables are correctly configured in `claude_desktop_config.json`
-3. Ensure the variable names match exactly: `VITALLY_API_KEY` and `VITALLY_SUBDOMAIN`
-4. Restart Claude Desktop after configuration changes
-5. Check Claude Desktop logs for error messages
-
-### Authentication errors
-
-**Error: "Environment variable 'VITALLY_API_KEY' is required but not set"**
-- Add the `VITALLY_API_KEY` environment variable to your MCP client config
-- Ensure the value starts with `sk_live_`
-
-**Error: "Environment variable 'VITALLY_SUBDOMAIN' is required but not set"**
-- Add the `VITALLY_SUBDOMAIN` environment variable to your MCP client config
-- Use only the subdomain (e.g., `fiscaltec`), not the full URL
-
-**HTTP 401 Unauthorized**
-- Verify your API key is correct and active in Vitally
-- Ensure the API key has appropriate permissions
-
-### Build errors
-
-**"dotnet: command not found"**
-- Install .NET 10 SDK: `winget install Microsoft.DotNet.SDK.10`
-
-**"mcpb: command not found"**
-- Install Node.js: `winget install OpenJS.NodeJS.LTS`
-- Install MCPB CLI: `npm install -g @anthropic-ai/mcpb`
-
-**Build fails with architecture errors**
-- Specify architecture explicitly: `.\build-mcpb.ps1 -Architecture win-x64`
-- Ensure you're using PowerShell 7+: `$PSVersionTable.PSVersion`
-
-## Limitations
-
-- **Read-only operations**: Only GET operations are supported
-- **Windows only**: MCPB packages are currently Windows-specific
-- **.NET 10 requirement**: The runtime requires .NET 10.0
-- **No message/NPS response endpoints**: These endpoints were not accessible during development
-- **Preview SDK**: The MCP C# SDK is in preview and may have breaking changes
-
-## Distribution
-
-### For Internal Use
-
-1. Build the MCPB package: `.\Scripts\build-all.ps1` or `.\Scripts\build-mcpb.ps1`
-2. Distribute the versioned `.mcpb` file from `Output/` directory to users
-3. Provide installation instructions (double-click to install)
-4. Share the required environment variables template:
-
-   ```json
-   "env": {
-     "VITALLY_API_KEY": "sk_live_...",
-     "VITALLY_SUBDOMAIN": "your-subdomain"
-   }
-   ```
-
-### Version Control
-
-When committing to version control:
-- ✅ Include: Source code, `Output/mcpb/manifest.json`, build scripts in `Scripts/`
-- ❌ Exclude: Built `.mcpb` files, `Output/mcpb/VitallyMcp.exe`, `Output/*.mcpb`, API credentials
-
-The `.gitignore` file is already configured appropriately.
+Proprietary — © FISCAL Technologies Ltd. All rights reserved.
 
 ## Support
 
-For issues, questions, or feature requests:
-- **Internal**: Contact the Infrastructure team at Fiscal Technologies
-- **Issues**: Check the build logs and Claude Desktop logs first
-- **Updates**: Rebuild and redistribute the `.mcpb` file when source code changes
-
-## License
-
-This project is proprietary software developed for Fiscal Technologies. All rights reserved.
-
----
-
-**Version**: 1.1.5
-**Last Updated**: November 2024
-**Built with**: .NET 10, MCP SDK 0.4.0-preview.3
+- Internal: Infrastructure team at FISCAL Technologies.
+- Issues: [GitHub Issues](https://github.com/fiscaltec/vitally-mcp/issues).
