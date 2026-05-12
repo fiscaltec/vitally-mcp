@@ -1,0 +1,26 @@
+# Normalise all text files to LF in the repo. Without this, Windows
+# editors and tools (incl. PowerShell here) can mix CR/LF endings on
+# edit, producing diff noise that swamps the real change.
+* text=auto eol=lf
+
+# Force LF on script and source files that absolutely must not flip.
+*.cs        text eol=lf
+*.csproj    text eol=lf
+*.sln       text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.ps1       text eol=lf
+*.psm1      text eol=lf
+
+# Binary artefacts - never apply line-ending or text conversion.
+*.mcpb      binary
+*.exe       binary
+*.dll       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary

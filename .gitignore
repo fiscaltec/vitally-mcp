@@ -1,5 +1,135 @@
-# Copyright (c) 2024 John Jung
-node_modules/
-build/
-*.log
-.env*
+## Visual Studio / .NET project ignore - based on the GitHub VisualStudio
+## template (https://github.com/github/gitignore/blob/main/VisualStudio.gitignore)
+## with project-specific additions at the bottom.
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options directory
+.vs/
+
+# Visual Studio Code (allow only shared settings)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/
+
+# Other IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+coverage/
+TestResults/
+
+# Coverlet output
+*.opencover.xml
+
+# Build logs
+*.binlog
+MSBuild_Logs/
+
+# NuGet packages
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# ReSharper / Rider
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# NCrunch / DotCover / Coverlet
+_NCrunch_*
+.NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+*.dotCover
+
+# Windows / macOS / Linux junk
+.DS_Store
+Thumbs.db
+
+# Visual Studio temp / cache
+[Tt]emp*/
+*.tmp
+*.tmp_proj
+*.cache
+*~$*
+*.bak
+
+# Generated files
+Generated\ Files/
+
+# Strong-name keys, certificates and other secrets - do NOT commit
+*.pfx
+*.snk
+appsettings.json
+appsettings.*.json
+!appsettings.Example.json
+.env
+.env.*
+!.env.example
+
+# Project-specific: MCPB packaging artefacts and built executables
+*.mcpb
+mcpb/server/
+Output/mcpb/VitallyMcp.exe
+Output/mcpb/VitallyMcp-*.exe
+Output/*.mcpb
+Output/*.exe
+Output/SHA256SUMS.txt
+
+# Claude Code: local-only settings (committed: .claude/settings.json)
+.claude/settings.local.json
+.claude/worktrees/
+.worktrees/
+.remember/
+
+# OS junk
+ehthumbs.db
+[Dd]esktop.ini

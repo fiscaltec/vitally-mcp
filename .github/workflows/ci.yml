@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - csharp
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# dorny/test-reporter publishes a Check Run for the test summary; that requires
+# checks: write on top of the read-only defaults.
+permissions:
+  contents: read
+  checks: write
+  actions: read
+
+# Cancel any in-flight CI run when a new push lands on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (windows-latest, net10.0)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore VitallyMcp.sln
+
+      - name: Build (Release)
+        run: dotnet build VitallyMcp.sln --configuration Release --no-restore --nologo
+
+      - name: Run tests with coverage
+        run: >
+          dotnet test VitallyMcp.sln
+          --configuration Release
+          --no-build
+          --nologo
+          --verbosity minimal
+          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: TestResults/**/coverage.cobertura.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish test summary
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: xUnit tests
+          path: TestResults/**/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true

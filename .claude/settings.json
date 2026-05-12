@@ -1,0 +1,81 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet publish:*)",
+      "Bash(dotnet list package:*)",
+      "Bash(dotnet add package:*)",
+      "Bash(dotnet remove package:*)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet --version)",
+      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-standalone.ps1)",
+      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-mcpb.ps1)",
+      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/build-all.ps1)",
+      "Bash(pwsh -ExecutionPolicy Bypass -File Scripts/bump-version.ps1)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git rm:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh release list:*)",
+      "Bash(gh release view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run watch:*)",
+      "Bash(gh workflow list:*)",
+      "Bash(gh api repos/*:GET)",
+      "Bash(* --version)",
+      "Bash(* --help)",
+      "WebSearch",
+      "WebFetch(domain:docs.vitally.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:learn.microsoft.com)",
+      "WebFetch(domain:docs.microsoft.com)",
+      "WebFetch(domain:nuget.org)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:modelcontextprotocol.io)",
+      "WebFetch(domain:csharp.sdk.modelcontextprotocol.io)",
+      "WebFetch(domain:vitally.io)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE 'git push[^|;]*\\b(origin\\s+)?(main|master)\\b'; then echo 'BLOCKED: Never push directly to main. Open a PR from a feature branch instead.'; exit 1; fi"
+          },
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE 'git push[^|;]*--force\\b[^|;]*\\b(origin\\s+)?(main|master)\\b'; then echo 'BLOCKED: Force-push to main is never allowed.'; exit 1; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_FILE_PATHS\" in *.env|*.env.*|*appsettings.json|*appsettings.Development.json|*appsettings.Production.json) echo 'BLOCKED: Refusing to write to a likely-secret file. Use appsettings.Example.json or document the env var in CLAUDE.md instead.'; exit 1 ;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}
