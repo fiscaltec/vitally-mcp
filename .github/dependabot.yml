@@ -17,7 +17,10 @@ updates:
       - "dependencies"
       - "nuget"
     commit-message:
-      prefix: "nuget"
+      # Use "build" to match the Conventional Commits convention for
+      # dependency / build-system changes. Required for our pr-title
+      # workflow's type allowlist (build is in, nuget is not).
+      prefix: "build"
       include: "scope"
     groups:
       microsoft-extensions:
