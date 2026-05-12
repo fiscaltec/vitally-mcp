@@ -12,8 +12,10 @@ This is a Model Context Protocol (MCP) server implementation in C# that provides
 - Windows-specific MCPB packaging
 - .NET 10 single-file executable
 - Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA)
-- Multi-region support: US (default, `{subdomain}.rest.vitally.io`) and EU (`rest.vitally-eu.io`) via the `VITALLY_REGION` env var
+- Multi-region support: EU (default, `rest.vitally-eu.io`) and US (`{subdomain}.rest.vitally.io`) via the `VITALLY_REGION` env var
 - Rate-limit-aware HTTP pipeline: auto-retries on `429 Too Many Requests` and logs a warning when `X-RateLimit-Remaining` drops below threshold
+- In-process update check (`Check_for_updates` tool) against GitHub Releases
+- Distributed for both **Claude Desktop** (as `.mcpb`) and **Claude Code** (as a standalone `.exe`) from the same GitHub Release
 - Credentials and region managed via environment variables (VITALLY_API_KEY, VITALLY_SUBDOMAIN, VITALLY_REGION)
 
 ## Common Development Commands
@@ -69,8 +71,9 @@ To test the server locally without MCPB installation:
 1. Set environment variables in PowerShell:
    ```powershell
    $env:VITALLY_API_KEY = "sk_live_your_key"
-   $env:VITALLY_SUBDOMAIN = "your-subdomain"   # required for US, ignored for EU
-   $env:VITALLY_REGION   = "US"                 # optional; "US" (default) or "EU"
+   # VITALLY_REGION defaults to "EU"; only set it if you're on a US tenant
+   # $env:VITALLY_REGION   = "US"
+   # $env:VITALLY_SUBDOMAIN = "your-subdomain"  # required only when VITALLY_REGION=US
    ```
 
 2. Run the published executable:
@@ -78,7 +81,50 @@ To test the server locally without MCPB installation:
    .\bin\Release\net10.0\win-x64\publish\VitallyMcp.exe
    ```
 
-3. Configure Claude Desktop to use the full path to the executable
+3. Configure Claude Desktop or Claude Code to use the full path to the executable (see "Installing for End Users" below).
+
+## Installing for End Users
+
+Releases are published at https://github.com/fiscaltec/vitally-mcp/releases. Each release contains four artefacts plus a `SHA256SUMS.txt`:
+
+| Artefact | Audience |
+|---|---|
+| `VitallyMcp-{version}-win-x64.mcpb` | Claude Desktop on Intel/AMD64 |
+| `VitallyMcp-{version}-win-arm64.mcpb` | Claude Desktop on ARM64 |
+| `VitallyMcp-{version}-win-x64.exe` | Claude Code (or any direct-launch MCP host) on Intel/AMD64 |
+| `VitallyMcp-{version}-win-arm64.exe` | Claude Code on ARM64 |
+
+### Claude Desktop
+
+Download the `.mcpb` for your architecture and double-click to install. Claude Desktop prompts for the env-var values declared in `manifest.json` (`VITALLY_API_KEY`, plus optional `VITALLY_REGION` and `VITALLY_SUBDOMAIN`).
+
+To update: download the new `.mcpb` and double-click — Claude Desktop replaces the previous version.
+
+### Claude Code
+
+Claude Code doesn't use the MCPB format; it expects a path to an executable in its MCP config. Download the `.exe` for your architecture (e.g. to `C:\Tools\VitallyMcp\VitallyMcp.exe`), then add to your Claude Code MCP config (`~/.claude.json` or project-local `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "vitally": {
+      "command": "C:\\Tools\\VitallyMcp\\VitallyMcp.exe",
+      "env": {
+        "VITALLY_API_KEY": "sk_live_your_key",
+        "VITALLY_REGION": "EU"
+      }
+    }
+  }
+}
+```
+
+If your tenant is on the US region, set `"VITALLY_REGION": "US"` and add `"VITALLY_SUBDOMAIN": "your-subdomain"` to the `env` block.
+
+To update: download the new `.exe` and replace the one referenced by `command`. No config change required as long as the path stays the same.
+
+### Updates
+
+Both clients can invoke the `Check_for_updates` MCP tool to compare their running version against the latest GitHub Release. The tool returns the current/latest versions, an `isUpToDate` flag, the release page URL, and pre-resolved download URLs matching the running architecture.
 
 ## Architecture
 
@@ -94,16 +140,16 @@ The server uses the official MCP C# SDK with automatic tool discovery:
 
 Environment variable loading with validation:
 - `VITALLY_API_KEY` - Required API key (format: sk_live_*)
-- `VITALLY_SUBDOMAIN` - Required for US region (e.g., "fiscaltec"); ignored for EU region (the EU instance has no subdomain prefix)
-- `VITALLY_REGION` - Optional, `US` (default) or `EU`. Case-insensitive and trimmed. Invalid values throw.
+- `VITALLY_REGION` - Optional, `EU` (default) or `US`. Case-insensitive and trimmed. Invalid values throw.
+- `VITALLY_SUBDOMAIN` - Required only when `VITALLY_REGION` is `US` (e.g., "fiscaltec"). Ignored for `EU` because that region uses a single shared host with no subdomain prefix.
 - Throws `InvalidOperationException` with helpful messages if required values are missing for the chosen region
 
 ### HTTP Service (VitallyService.cs)
 
 Centralised HTTP client for Vitally REST API:
-- Base URL depends on `VitallyConfig.Region`:
+- Base URL depends on `VitallyConfig.Region` (default `EU`):
+  - EU: `https://rest.vitally-eu.io` (single shared host, no subdomain — matches Vitally's docs)
   - US: `https://{subdomain}.rest.vitally.io`
-  - EU: `https://rest.vitally-eu.io` (no subdomain — the EU instance is single-tenant per the Vitally docs)
 - Basic authentication using Base64-encoded API key
 - **Client-side JSON filtering** to reduce response sizes for LLM consumption
 - **Resource-specific default fields** optimised per resource type

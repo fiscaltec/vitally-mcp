@@ -42,6 +42,7 @@ public class VitallyConfigTests
         // Arrange
         Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
         Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", TestSubdomain);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", null);
 
         try
         {
@@ -66,6 +67,7 @@ public class VitallyConfigTests
         // Arrange
         Environment.SetEnvironmentVariable("VITALLY_API_KEY", "");
         Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", TestSubdomain);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", null);
 
         try
         {
@@ -85,11 +87,13 @@ public class VitallyConfigTests
     }
 
     [Fact]
-    public void FromEnvironment_WithMissingSubdomain_ShouldThrowInvalidOperationException()
+    public void FromEnvironment_WithUsRegionAndMissingSubdomain_ShouldThrowInvalidOperationException()
     {
-        // Arrange
+        // Arrange - explicit US region so missing subdomain becomes an error
+        // (EU is the default and does not need a subdomain)
         Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
         Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+        Environment.SetEnvironmentVariable("VITALLY_REGION", "US");
 
         try
         {
@@ -98,22 +102,23 @@ public class VitallyConfigTests
 
             // Assert
             act.Should().Throw<InvalidOperationException>()
-                .WithMessage("*VITALLY_SUBDOMAIN*not set*");
+                .WithMessage("*VITALLY_SUBDOMAIN*US region*");
         }
         finally
         {
             // Cleanup
             Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
-            Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
         }
     }
 
     [Fact]
-    public void FromEnvironment_WithEmptySubdomain_ShouldThrowInvalidOperationException()
+    public void FromEnvironment_WithUsRegionAndEmptySubdomain_ShouldThrowInvalidOperationException()
     {
-        // Arrange
+        // Arrange - explicit US region with empty subdomain
         Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
         Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", "");
+        Environment.SetEnvironmentVariable("VITALLY_REGION", "US");
 
         try
         {
@@ -122,13 +127,14 @@ public class VitallyConfigTests
 
             // Assert
             act.Should().Throw<InvalidOperationException>()
-                .WithMessage("*VITALLY_SUBDOMAIN*not set*");
+                .WithMessage("*VITALLY_SUBDOMAIN*US region*");
         }
         finally
         {
             // Cleanup
             Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
             Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
+            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
         }
     }
 
@@ -210,21 +216,22 @@ public class VitallyConfigTests
     #region Region Tests
 
     [Fact]
-    public void FromEnvironment_WithNoRegion_ShouldDefaultToUs()
+    public void FromEnvironment_WithNoRegion_ShouldDefaultToEu()
     {
+        // EU is the default region: rest.vitally-eu.io is a single shared host
+        // with no subdomain, so the subdomain env var is also optional in this case.
         Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
-        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", TestSubdomain);
+        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
         Environment.SetEnvironmentVariable("VITALLY_REGION", null);
 
         try
         {
             var config = VitallyConfig.FromEnvironment();
-            config.Region.Should().Be("US");
+            config.Region.Should().Be("EU");
         }
         finally
         {
             Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
-            Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
         }
     }
 
@@ -286,26 +293,6 @@ public class VitallyConfigTests
         {
             Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
             Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
-            Environment.SetEnvironmentVariable("VITALLY_REGION", null);
-        }
-    }
-
-    [Fact]
-    public void FromEnvironment_WithRegionUsAndMissingSubdomain_ShouldThrowInvalidOperationException()
-    {
-        Environment.SetEnvironmentVariable("VITALLY_API_KEY", TestApiKey);
-        Environment.SetEnvironmentVariable("VITALLY_SUBDOMAIN", null);
-        Environment.SetEnvironmentVariable("VITALLY_REGION", "US");
-
-        try
-        {
-            var act = () => VitallyConfig.FromEnvironment();
-            act.Should().Throw<InvalidOperationException>()
-                .WithMessage("*VITALLY_SUBDOMAIN*US region*");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("VITALLY_API_KEY", null);
             Environment.SetEnvironmentVariable("VITALLY_REGION", null);
         }
     }

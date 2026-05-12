@@ -22,6 +22,10 @@ builder.Services.AddTransient<VitallyRateLimitHandler>();
 builder.Services.AddHttpClient<VitallyService>()
     .AddHttpMessageHandler<VitallyRateLimitHandler>();
 
+// Update-check service uses a separate HttpClient (target is GitHub, not Vitally,
+// so no Vitally auth header and no rate-limit handler).
+builder.Services.AddHttpClient<UpdateCheckService>();
+
 // Configure MCP server with stdio transport and automatic tool discovery
 builder.Services
     .AddMcpServer()

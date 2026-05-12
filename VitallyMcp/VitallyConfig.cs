@@ -11,7 +11,7 @@ public class VitallyConfig
 
     public string ApiKey { get; set; } = string.Empty;
     public string Subdomain { get; set; } = string.Empty;
-    public string Region { get; set; } = RegionUs;
+    public string Region { get; set; } = RegionEu;
 
     public static VitallyConfig FromEnvironment()
     {
@@ -27,7 +27,7 @@ public class VitallyConfig
         }
 
         var region = string.IsNullOrWhiteSpace(rawRegion)
-            ? RegionUs
+            ? RegionEu
             : rawRegion.Trim().ToUpperInvariant();
 
         if (region != RegionUs && region != RegionEu)

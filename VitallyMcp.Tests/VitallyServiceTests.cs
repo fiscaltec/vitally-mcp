@@ -16,10 +16,13 @@ public class VitallyServiceTests
 
     private VitallyService CreateService(HttpClient httpClient)
     {
+        // Explicit US region so the subdomain-in-URL assertions below still hold.
+        // EU is the default region; tests that exercise EU build their own VitallyConfig.
         var config = new VitallyConfig
         {
             Subdomain = TestSubdomain,
-            ApiKey = TestApiKey
+            ApiKey = TestApiKey,
+            Region = VitallyConfig.RegionUs
         };
         return new VitallyService(httpClient, config);
     }

@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "Vitally",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "description": "MCP server for integrating with Vitally customer success platform. Provides full CRUD access to accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings (with participants and transcripts), custom traits and custom survey responses. Features client-side field filtering and permission management via ReadOnly/Destructive flags.",
   "author": {
     "name": "Dan Searle"
@@ -389,6 +389,10 @@
     {
       "name": "Get survey question",
       "description": "Get metadata for a single Vitally survey question by its question ID"
+    },
+    {
+      "name": "Check for updates",
+      "description": "Check the GitHub Releases for a newer version of the Vitally MCP server. Returns current and latest versions, whether an update is available, and direct download links for both the Claude Desktop (.mcpb) and Claude Code (.exe) artefacts."
     }
   ],
   "user_config": {
@@ -402,17 +406,17 @@
     "VITALLY_SUBDOMAIN": {
       "type": "string",
       "title": "Subdomain",
-      "description": "Subdomain of your Vitally instance (required for the US region; ignored for EU)",
+      "description": "Subdomain of your Vitally instance. Only required when VITALLY_REGION is 'US' (the EU region uses a single shared host with no subdomain).",
       "required": false,
       "sensitive": false
     },
     "VITALLY_REGION": {
       "type": "string",
       "title": "Region",
-      "description": "Vitally data centre region: 'US' (default, uses {subdomain}.rest.vitally.io) or 'EU' (uses rest.vitally-eu.io with no subdomain)",
+      "description": "Vitally data centre region: 'EU' (default, uses rest.vitally-eu.io with no subdomain) or 'US' (uses {subdomain}.rest.vitally.io and requires VITALLY_SUBDOMAIN)",
       "required": false,
       "sensitive": false,
-      "default": "US"
+      "default": "EU"
     }
   }
 }
