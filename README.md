@@ -4,7 +4,8 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes 
 
 Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, distributed as both a Windows MCPB bundle (Claude Desktop) and a standalone single-file executable (Claude Code or any direct-launch MCP host).
 
-[![Build status](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml)
+[![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
+[![Release](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml)
 
 ## Features
 

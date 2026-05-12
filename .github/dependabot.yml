@@ -1,0 +1,48 @@
+version: 2
+
+updates:
+  # Keep NuGet packages current across both projects.
+  # We've already been bitten once by sitting on the MCP SDK preview far too
+  # long - weekly checks here would have caught the 0.4.0-preview.3 -> 1.0 GA
+  # transition immediately.
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "nuget"
+    commit-message:
+      prefix: "nuget"
+      include: "scope"
+    groups:
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      test-framework:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "coverlet.*"
+          - "FluentAssertions"
+          - "Moq*"
+
+  # Keep GitHub Actions versions current (actions/checkout, setup-dotnet, etc.)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
