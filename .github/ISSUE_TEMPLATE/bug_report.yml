@@ -1,0 +1,94 @@
+name: Bug report
+description: Something in the Vitally MCP server isn't working as expected.
+title: "fix: <short description>"
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in as much
+        as you can - reports with concrete steps and version info close
+        much faster.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug, including any error messages or exception output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Call the `List_account` tool with `limit: 5`
+        2. ...
+        3. Observe response
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour (include full error / response if possible)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Vitally region
+      options:
+        - EU (default)
+        - US
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Desktop
+        - Claude Code
+        - Other (please describe in 'Additional context')
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      description: Run the `Check_for_updates` tool, or check `--version` on the binary.
+      placeholder: e.g. 3.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: arch
+    attributes:
+      label: Architecture
+      placeholder: win-x64 / win-arm64
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (stderr / Claude Desktop log pane)
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
