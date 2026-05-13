@@ -399,24 +399,24 @@
     "VITALLY_API_KEY": {
       "type": "string",
       "title": "API Key",
-      "description": "API key used to authenticate with the Vitally",
+      "description": "Your Vitally API key. You can generate one in Vitally under Settings → Integrations → API Keys.",
       "required": true,
       "sensitive": true
-    },
-    "VITALLY_SUBDOMAIN": {
-      "type": "string",
-      "title": "Subdomain",
-      "description": "Subdomain of your Vitally instance. Only required when VITALLY_REGION is 'US' (the EU region uses a single shared host with no subdomain).",
-      "required": false,
-      "sensitive": false
     },
     "VITALLY_REGION": {
       "type": "string",
       "title": "Region",
-      "description": "Vitally data centre region: 'EU' (default, uses rest.vitally-eu.io with no subdomain) or 'US' (uses {subdomain}.rest.vitally.io and requires VITALLY_SUBDOMAIN)",
+      "description": "The Vitally data centre your tenant uses. Leave as EU unless you're on a US tenant.",
       "required": false,
       "sensitive": false,
       "default": "EU"
+    },
+    "VITALLY_SUBDOMAIN": {
+      "type": "string",
+      "title": "Subdomain",
+      "description": "Your Vitally subdomain (for example, 'fiscaltec' from 'fiscaltec.vitally.io'). Only needed when Region is set to US.",
+      "required": false,
+      "sensitive": false
     }
   }
 }
