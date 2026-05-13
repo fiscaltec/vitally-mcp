@@ -1,0 +1,24 @@
+{
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp",
+    "editor.tabSize": 4
+  },
+  "[powershell]": {
+    "editor.tabSize": 4
+  },
+  "[json][jsonc][yaml][markdown]": {
+    "editor.tabSize": 2
+  },
+  "dotnet.defaultSolution": "VitallyMcp.sln",
+  "omnisharp.enableRoslynAnalyzers": true,
+  "omnisharp.enableEditorConfigSupport": true,
+  "powershell.codeFormatting.preset": "OTBS"
+}
