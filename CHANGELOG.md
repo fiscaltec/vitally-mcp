@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format based on
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-05-13
+
+### Changed
+
+- Friendlier and uniform wording for the three MCPB `user_config`
+  fields shown by Claude Desktop during install (`VITALLY_API_KEY`,
+  `VITALLY_REGION`, `VITALLY_SUBDOMAIN`). All three descriptions are
+  now complete sentences, consistently punctuated, with concrete
+  worked examples in plain English instead of references to internal
+  hostnames. Region now appears before Subdomain in the form since
+  the Subdomain hint refers to Region.
+
 ## [3.0.0] - 2026-05-12
 
 ### Added
@@ -81,7 +93,8 @@ Pre-rewrite (TypeScript) - see GitHub Releases for full notes:
 
 First containerised release of the pre-rewrite TypeScript implementation.
 
-[Unreleased]: https://github.com/fiscaltec/vitally-mcp/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/fiscaltec/vitally-mcp/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/fiscaltec/vitally-mcp/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/fiscaltec/vitally-mcp/compare/v1.1.0...v3.0.0
 [1.1.0]: https://github.com/fiscaltec/vitally-mcp/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/fiscaltec/vitally-mcp/compare/v1.0.0...v1.0.1
