@@ -1,0 +1,16 @@
+{
+  // Repo-wide formatting rules live in .editorconfig (and the EditorConfig
+  // VS Code extension respects them). Only put VS Code-specific settings
+  // here, not duplicates of .editorconfig's encoding / EOL / trim rules.
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  },
+  "dotnet.defaultSolution": "VitallyMcp.sln",
+  "omnisharp.enableRoslynAnalyzers": true,
+  "omnisharp.enableEditorConfigSupport": true,
+  "powershell.codeFormatting.preset": "OTBS"
+}

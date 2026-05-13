@@ -1,0 +1,67 @@
+name: Cleanup Caches
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    name: Cleanup branch caches
+    # Skip caches from forks - we don't own those refs and can't delete them.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Cleanup caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: refs/heads/${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          delete_caches() {
+            local ref="$1"
+            local label="$2"
+            local failed=0
+            local total_deleted=0
+
+            local caches
+            caches=$(gh api \
+              --paginate \
+              --jq '.actions_caches[] | "\(.id)\t\(.key)"' \
+              "/repos/$REPO/actions/caches?ref=$ref&per_page=100")
+
+            local count
+            count=$(echo "$caches" | grep -c . || true)
+            echo "Found $count cache(s) for $label ($ref)"
+
+            if [ "$count" -eq 0 ]; then
+              return
+            fi
+
+            while IFS=$'\t' read -r id key; do
+              [ -z "$id" ] && continue
+              echo "Deleting cache: $key (ID: $id)"
+              if gh cache delete "$id" --repo "$REPO"; then
+                total_deleted=$((total_deleted + 1))
+              else
+                echo "::warning::Failed to delete cache: $key (ID: $id)"
+                failed=$((failed + 1))
+              fi
+            done <<< "$caches"
+
+            echo "Deleted $total_deleted cache(s) for $label ($ref)"
+            if [ "$failed" -gt 0 ]; then
+              echo "::warning::Failed to delete $failed cache(s) for $label"
+            fi
+          }
+
+          delete_caches "$BRANCH" "branch"
+          delete_caches "refs/pull/$PR_NUMBER/merge" "merge ref"
