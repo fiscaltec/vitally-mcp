@@ -6,6 +6,50 @@ All notable changes to this project are documented here. Format based on
 
 ## [Unreleased]
 
+### Added
+
+- **Remote HTTP MCP server** using the streamable HTTP transport (MCP
+  2025-06-18, stateless mode) on the `ModelContextProtocol.AspNetCore`
+  package. Replaces the previous stdio transport.
+- **Auth0 OAuth 2.1 protection** on the `/mcp` endpoint via JwtBearer.
+  Publishes a `/.well-known/oauth-protected-resource` metadata document
+  (RFC 9728) so MCP clients discover the authorisation server automatically.
+- **Per-request Vitally API key resolution** via the new
+  `VitallyApiKeyProvider`: reads the `Vitally:SecretRefClaim` from the
+  authenticated user's access token, fetches the named secret from Azure
+  Key Vault (with a 5-minute in-memory cache), and falls back to the
+  configured `DefaultSecretRef` when the claim is absent.
+- **Configurable Auth0 + Key Vault settings** under the `Vitally:` and
+  `Auth0:` configuration sections. See `appsettings.Example.json`.
+- **`Auth0:NoAuth` development flag** that skips JWT validation for local
+  smoke tests; logs a loud warning at startup.
+
+### Changed
+
+- **BREAKING — Distribution model.** No more `.mcpb` bundles, no more
+  standalone `.exe`. The server is now a single hosted instance that
+  multiple users connect to by URL. Existing v3.x binaries continue to
+  work against Vitally but receive no further updates.
+- **BREAKING — Configuration shape.** `VITALLY_API_KEY`, `VITALLY_REGION`,
+  and `VITALLY_SUBDOMAIN` environment variables are replaced by the
+  `Vitally:` and `Auth0:` configuration sections (or the
+  `Vitally__*` / `Auth0__*` env-var equivalents in ASP.NET Core style).
+  Local self-hosters set `Vitally:DevelopmentApiKey` instead of
+  `VITALLY_API_KEY`.
+- `VitallyMcp.csproj` switched from `Microsoft.NET.Sdk` to
+  `Microsoft.NET.Sdk.Web`. Drops `PublishSingleFile`, `SelfContained`, and
+  the `win-x64;win-arm64` RuntimeIdentifiers — output is now framework-
+  dependent and runs in any .NET 10 container image.
+
+### Removed
+
+- The `Check_for_updates` MCP tool and the `UpdateCheckService` it sat on.
+  Hosted deployments don't need it — the server is the source of truth.
+- The `Output/mcpb/` folder, `manifest.json`, and `Scripts/build-*.ps1`
+  build pipeline. Container build pipeline lands in Phase 3.
+- `VitallyConfig` — replaced by `VitallyServerOptions` (singleton,
+  server-wide) plus `VitallyApiKeyProvider` (scoped, per-request).
+
 ## [3.0.1] - 2026-05-13
 
 ### Changed

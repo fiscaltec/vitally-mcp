@@ -1,13 +1,15 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 
 namespace VitallyMcp;
 
 public class VitallyService
 {
     private readonly HttpClient _httpClient;
-    private readonly VitallyConfig _config;
+    private readonly VitallyServerOptions _options;
+    private readonly VitallyApiKeyProvider _apiKeyProvider;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -35,20 +37,31 @@ public class VitallyService
         ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"]
     };
 
-
-    // Fallback default fields for unknown resource types
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, VitallyConfig config)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider)
     {
         _httpClient = httpClient;
-        _config = config;
-        _baseUrl = config.Region == VitallyConfig.RegionEu
-            ? "https://rest.vitally-eu.io"
-            : $"https://{config.Subdomain}.rest.vitally.io";
+        _options = options.Value;
+        _apiKeyProvider = apiKeyProvider;
+        _baseUrl = _options.BaseUrl;
+    }
 
-        var authValue = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{_config.ApiKey}:"));
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authValue);
+    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, HttpContent? content = null, CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(method, url);
+        if (content is not null)
+        {
+            request.Content = content;
+        }
+
+        var apiKey = await _apiKeyProvider.GetApiKeyAsync(cancellationToken);
+        var basic = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{apiKey}:"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return response;
     }
 
     public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
@@ -61,7 +74,6 @@ public class VitallyService
         if (!string.IsNullOrEmpty(sortBy))
             queryParams.Add($"sortBy={sortBy}");
 
-        // Add any resource-specific parameters (e.g., status for accounts)
         if (additionalParams != null)
         {
             foreach (var param in additionalParams)
@@ -73,12 +85,9 @@ public class VitallyService
         var queryString = string.Join("&", queryParams);
         var url = $"{_baseUrl}/resources/{resourceType}?{queryString}";
 
-        var response = await _httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Get, url);
         var jsonResponse = await response.Content.ReadAsStringAsync();
 
-        // Apply client-side field and trait filtering with resource-specific defaults
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: true, traits);
     }
 
@@ -86,12 +95,9 @@ public class VitallyService
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
 
-        var response = await _httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Get, url);
         var jsonResponse = await response.Content.ReadAsStringAsync();
 
-        // Apply client-side field and trait filtering with resource-specific defaults
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
     }
 
@@ -100,9 +106,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync(url, content);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Post, url, content);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -111,9 +115,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PutAsync(url, content);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Put, url, content);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -121,9 +123,7 @@ public class VitallyService
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
 
-        var response = await _httpClient.DeleteAsync(url);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Delete, url);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -141,9 +141,7 @@ public class VitallyService
             url = $"{url}?{query}";
         }
 
-        var response = await _httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Get, url);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -156,9 +154,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{path}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync(url, content);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Post, url, content);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -169,9 +165,7 @@ public class VitallyService
     {
         var url = $"{_baseUrl}/resources/{path}";
 
-        var response = await _httpClient.DeleteAsync(url);
-        response.EnsureSuccessStatusCode();
-
+        var response = await SendAsync(HttpMethod.Delete, url);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -183,12 +177,10 @@ public class VitallyService
     /// </summary>
     private static string FilterJsonFields(string jsonResponse, string? fields, string resourceType, bool isListResponse, string? traits = null)
     {
-        // Parse the fields parameter or use resource-specific defaults
         var requestedFields = string.IsNullOrWhiteSpace(fields)
             ? (ResourceDefaultFields.TryGetValue(resourceType, out var defaults) ? defaults : FallbackDefaultFields)
             : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        // Parse the traits parameter if specified
         var requestedTraits = string.IsNullOrWhiteSpace(traits)
             ? null
             : traits.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -201,7 +193,6 @@ public class VitallyService
 
         if (isListResponse)
         {
-            // Handle list response with results array
             if (document.RootElement.TryGetProperty("results", out var resultsElement))
             {
                 writer.WritePropertyName("results");
@@ -215,7 +206,6 @@ public class VitallyService
                 writer.WriteEndArray();
             }
 
-            // Preserve pagination cursor
             if (document.RootElement.TryGetProperty("next", out var nextElement))
             {
                 writer.WritePropertyName("next");
@@ -224,7 +214,6 @@ public class VitallyService
         }
         else
         {
-            // Handle single object response - write filtered fields directly
             WriteFilteredFields(writer, document.RootElement, requestedFields, requestedTraits);
         }
 
@@ -234,9 +223,6 @@ public class VitallyService
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    /// <summary>
-    /// Writes a filtered JSON object containing only the requested fields
-    /// </summary>
     private static void WriteFilteredObject(Utf8JsonWriter writer, JsonElement element, string[] fields, string[]? requestedTraits)
     {
         writer.WriteStartObject();
@@ -244,16 +230,12 @@ public class VitallyService
         writer.WriteEndObject();
     }
 
-    /// <summary>
-    /// Writes filtered fields to JSON writer, handling special trait filtering logic
-    /// </summary>
     private static void WriteFilteredFields(Utf8JsonWriter writer, JsonElement element, string[] fields, string[]? requestedTraits)
     {
         foreach (var field in fields)
         {
             if (element.TryGetProperty(field, out var value))
             {
-                // Special handling for traits field
                 if (field.Equals("traits", StringComparison.OrdinalIgnoreCase) && requestedTraits != null && value.ValueKind == JsonValueKind.Object)
                 {
                     writer.WritePropertyName(field);
@@ -268,9 +250,6 @@ public class VitallyService
         }
     }
 
-    /// <summary>
-    /// Writes a filtered traits object containing only the requested trait keys
-    /// </summary>
     private static void WriteFilteredTraits(Utf8JsonWriter writer, JsonElement traitsElement, string[] requestedTraits)
     {
         writer.WriteStartObject();

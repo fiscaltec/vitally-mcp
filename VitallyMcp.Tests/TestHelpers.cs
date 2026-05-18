@@ -1,4 +1,8 @@
 using System.Net;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 
@@ -29,6 +33,30 @@ public static class TestHelpers
             });
 
         return new HttpClient(mockHttpMessageHandler.Object);
+    }
+
+    /// <summary>
+    /// Builds a VitallyService for tests. Uses DevelopmentApiKey path so no Key Vault is required.
+    /// Defaults to US region with a test subdomain to preserve historical URL shapes in assertions.
+    /// </summary>
+    public static VitallyService BuildVitallyService(
+        HttpClient httpClient,
+        string region = "US",
+        string? subdomain = "test-subdomain",
+        string apiKey = "sk_live_test_key")
+    {
+        var options = Options.Create(new VitallyServerOptions
+        {
+            Region = region,
+            Subdomain = subdomain,
+            DevelopmentApiKey = apiKey
+        });
+        var provider = new VitallyApiKeyProvider(
+            options,
+            new HttpContextAccessor(),
+            new MemoryCache(new MemoryCacheOptions()),
+            NullLogger<VitallyApiKeyProvider>.Instance);
+        return new VitallyService(httpClient, options, provider);
     }
 
     /// <summary>

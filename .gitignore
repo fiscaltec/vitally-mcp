@@ -115,20 +115,14 @@ appsettings.*.json
 .env.*
 !.env.example
 
-# Project-specific: MCPB packaging artefacts and built executables
-*.mcpb
-mcpb/server/
-Output/mcpb/VitallyMcp.exe
-Output/mcpb/VitallyMcp-*.exe
-Output/*.mcpb
-Output/*.exe
-Output/SHA256SUMS.txt
-
 # Claude Code: local-only settings (committed: .claude/settings.json)
 .claude/settings.local.json
 .claude/worktrees/
 .worktrees/
 .remember/
+
+# Local MCP server config (committed: docs only)
+.mcp.json
 
 # OS junk
 ehthumbs.db

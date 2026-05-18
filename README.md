@@ -1,84 +1,148 @@
 # Vitally MCP Server
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop** and **Claude Code**.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop**, **Claude Code**, **VS Code**, and **Cursor**.
 
-Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, distributed as both a Windows MCPB bundle (Claude Desktop) and a standalone single-file executable (Claude Code or any direct-launch MCP host).
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Auth0 (OAuth 2.1 / RFC 9728). Users connect by URL — no install, no executable, no per-user secrets to distribute.
 
 [![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
-[![Release](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/release.yml)
 
 ## Features
 
-- **Full CRUD coverage** of 93 endpoints across 17 Vitally resource types: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
+- **Full CRUD coverage** of 92 endpoints across 17 Vitally resource types: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
 - **Permission-aware tools** — every tool is tagged `ReadOnly` / `Destructive` so MCP clients can enable or disable categories of operation in bulk.
-- **EU and US data centres** — defaults to EU (`rest.vitally-eu.io`); set `VITALLY_REGION=US` to point at `{subdomain}.rest.vitally.io`.
+- **EU and US data centres** — defaults to EU (`rest.vitally-eu.io`); set `Vitally:Region=US` to point at `{subdomain}.rest.vitally.io`.
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
 - **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
-- **In-process update check** — the `Check_for_updates` MCP tool reports whether a newer GitHub Release is available and returns architecture-matched download URLs.
+- **Streamable HTTP transport** (MCP 2025-06-18) in stateless mode — easy to scale horizontally, no sticky sessions required.
+- **OAuth 2.1 protection** via Auth0 — `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched per request from Azure Key Vault, identified by a claim on the user's access token.
 
-## Installation
+## Using the server (FISCAL users)
 
-Pre-built artefacts are published to [GitHub Releases](https://github.com/fiscaltec/vitally-mcp/releases). Every release contains four binaries plus a `SHA256SUMS.txt`:
+Point your MCP client at:
 
-| File | Audience |
-|---|---|
-| `VitallyMcp-{version}-win-x64.mcpb` | Claude Desktop on Intel/AMD64 |
-| `VitallyMcp-{version}-win-arm64.mcpb` | Claude Desktop on ARM64 |
-| `VitallyMcp-{version}-win-x64.exe` | Claude Code (or any direct-launch host) on Intel/AMD64 |
-| `VitallyMcp-{version}-win-arm64.exe` | Claude Code on ARM64 |
+```
+https://vitally-mcp.fiscaltec.com/mcp
+```
+
+The first time you connect, your client will redirect you through Auth0 to authenticate. Once authenticated, the server exchanges your identity for a Vitally API key and proxies your tool calls to Vitally.
 
 ### Claude Desktop
 
-1. Download the `.mcpb` file for your architecture from the latest release.
-2. Double-click — Claude Desktop installs the server and prompts for the configuration values declared in `manifest.json`.
-3. Provide `VITALLY_API_KEY`. Leave `VITALLY_REGION` blank to use the default (EU), or set it to `US` and supply `VITALLY_SUBDOMAIN` for a US tenant.
-4. Restart Claude Desktop.
+Settings → Connectors → Add custom connector → paste the URL above. Approve the Auth0 sign-in popup.
 
 ### Claude Code
 
-Claude Code expects a path to an executable. Download the `.exe` for your architecture (e.g. to `C:\Tools\VitallyMcp\VitallyMcp.exe`) and add the server to your MCP config (`~/.claude.json` or project-local `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "vitally": {
-      "command": "C:\\Tools\\VitallyMcp\\VitallyMcp.exe",
-      "env": {
-        "VITALLY_API_KEY": "sk_live_your_key",
-        "VITALLY_REGION": "EU"
-      }
-    }
-  }
-}
+```powershell
+claude mcp add --transport http vitally https://vitally-mcp.fiscaltec.com/mcp
 ```
 
-For a US tenant, swap to `"VITALLY_REGION": "US"` and add `"VITALLY_SUBDOMAIN": "your-subdomain"`.
+Run any MCP-using command (`claude` itself, or `/mcp`) and Claude Code will open the Auth0 sign-in flow on first use.
+
+### VS Code, Cursor, and other MCP-aware hosts
+
+Most modern MCP clients support the streamable HTTP transport. Add a server entry that points at the URL above; the client handles the OAuth flow automatically via the protected-resource metadata document.
 
 ## Configuration
 
-| Variable | Required | Default | Description |
+The server reads its configuration from `appsettings.json`, `appsettings.{Environment}.json`, or environment variables (using the standard ASP.NET Core double-underscore separator for nested keys, e.g. `Vitally__Region`).
+
+| Setting | Required | Default | Description |
 |---|---|---|---|
-| `VITALLY_API_KEY` | Yes | — | Vitally API key, format `sk_live_*`. Generate one under **Settings → Integrations → API Keys** in Vitally. |
-| `VITALLY_REGION` | No | `EU` | Data centre: `EU` (single shared host `rest.vitally-eu.io`) or `US` (per-tenant `{subdomain}.rest.vitally.io`). Case-insensitive. |
-| `VITALLY_SUBDOMAIN` | Only when `VITALLY_REGION=US` | — | Your Vitally subdomain, e.g. `fiscaltec` from `fiscaltec.vitally.io`. Ignored on EU because the EU API has no per-tenant subdomain. |
+| `Vitally:Region` | No | `EU` | Data centre: `EU` (single shared host `rest.vitally-eu.io`) or `US` (per-tenant `{subdomain}.rest.vitally.io`). Case-insensitive. |
+| `Vitally:Subdomain` | Only when `Region=US` | — | Vitally subdomain, e.g. `fiscaltec` from `fiscaltec.vitally.io`. Ignored on EU. |
+| `Vitally:KeyVaultUri` | Yes (prod) | — | Azure Key Vault URI, e.g. `https://kv-vitally-mcp.vault.azure.net/`. The server's managed identity must have **Key Vault Secrets User** on it. |
+| `Vitally:SecretRefClaim` | No | `https://vitally-mcp.fiscaltec.com/secret_ref` | Custom JWT claim that identifies which Key Vault secret to fetch for the authenticated user. |
+| `Vitally:DefaultSecretRef` | No | `vitally-shared` | Secret name to use when the claim is missing on the token. |
+| `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for resolved API keys. |
+| `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
+| `Auth0:Authority` | Yes | — | Auth0 tenant issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
+| `Auth0:Audience` | Yes | — | The Resource Server identifier configured in Auth0, e.g. `https://vitally-mcp.fiscaltec.com`. |
+| `Auth0:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
 
-## Updating
+See [`VitallyMcp/appsettings.Example.json`](VitallyMcp/appsettings.Example.json) for the full layout.
 
-Inside the host, ask Claude to call `Check_for_updates`. The tool returns:
-- the running version,
-- the latest GitHub Release version,
-- whether an update is available, and
-- pre-resolved download URLs matching your architecture for both `.mcpb` (Claude Desktop) and `.exe` (Claude Code).
+## Running locally
 
-To apply an update:
-- **Claude Desktop**: download the new `.mcpb` and double-click to reinstall.
-- **Claude Code**: download the new `.exe` and replace the file referenced by `command` in your MCP config.
+Prerequisites: .NET 10 SDK.
 
-There's no self-replacing binary by design: the Windows file lock on a running .exe makes that fragile, and the manual swap takes only a few seconds.
+```powershell
+# Restore + build + run the test suite
+dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+
+# Start the server in dev mode (no Auth0, no Key Vault — uses DevelopmentApiKey from env)
+$env:Auth0__NoAuth = "true"
+$env:Vitally__Region = "EU"
+$env:Vitally__DevelopmentApiKey = "sk_live_your_key"
+$env:ASPNETCORE_URLS = "http://localhost:5099"
+dotnet run --project VitallyMcp/VitallyMcp.csproj
+```
+
+Smoke test:
+
+```powershell
+# OAuth protected-resource metadata
+Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
+
+# MCP initialise (returns capabilities + server info)
+$body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
+Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
+```
+
+Then add the dev server to Claude Code:
+
+```powershell
+claude mcp add --transport http vitally-dev http://localhost:5099/mcp
+```
+
+## Self-host (replicators)
+
+Deploying your own instance for a different org or against a different Vitally tenant requires three things — none of which are in this repo, all of which are config:
+
+1. **An OIDC identity provider** that issues RS256-signed JWTs for your users. Auth0 is what FISCAL uses; any compliant provider works (Entra ID, Keycloak, Okta, etc.). Register an API / Resource Server with identifier matching your `Auth0:Audience` value.
+2. **An Azure Key Vault** (or compatible secret store; see the swap notes in [CLAUDE.md](CLAUDE.md)) containing your Vitally API key as a secret. Default secret name is `vitally-shared`; change via `Vitally:DefaultSecretRef`.
+3. **A container host** that can run the published Docker image. Anywhere ASP.NET Core 10 runs (Azure Container Apps, AWS App Runner, GCP Cloud Run, plain Kubernetes) — Container Apps is what FISCAL uses.
+
+The Bicep / `azd` templates that capture FISCAL's deployment will land in `infra/` once Phase 3 is complete and verified. They're a worked example, not the only shape that works.
+
+## Architecture
+
+```
+VitallyMcp/
+├── Program.cs                       # ASP.NET Core host, JwtBearer auth, MapMcp
+├── Auth0Options.cs                  # Authority + Audience + NoAuth dev flag
+├── VitallyServerOptions.cs          # Region, KeyVaultUri, claim/secret config
+├── VitallyApiKeyProvider.cs         # Resolves per-request API key from claim → KV
+├── VitallyService.cs                # HTTP client + client-side JSON filtering
+├── VitallyRateLimitHandler.cs       # 429 retry + rate-limit warnings
+└── Tools/                           # One file per Vitally resource type
+    ├── AccountsTools.cs
+    ├── OrganizationsTools.cs
+    ├── UsersTools.cs
+    ├── ConversationsTools.cs
+    ├── MessagesTools.cs
+    ├── NotesTools.cs
+    ├── ProjectsTools.cs
+    ├── ProjectTemplatesTools.cs
+    ├── TasksTools.cs
+    ├── NpsResponsesTools.cs
+    ├── AdminsTools.cs
+    ├── CustomObjectsTools.cs
+    ├── MeetingsTools.cs
+    ├── CustomTraitsTools.cs
+    └── SurveysTools.cs
+```
+
+The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against the Auth0 tenant configured in `Auth0:Authority` / `Auth0:Audience`. On each tool call, `VitallyApiKeyProvider` reads the `Vitally:SecretRefClaim` from the request's JWT, fetches the named secret from Key Vault (cached in-memory for 5 min), and `VitallyService` uses it to call Vitally on the user's behalf.
+
+The `VitallyService` exposes two call patterns:
+1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
+2. **Raw passthrough** (`GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) — for endpoints whose response shape differs from the standard envelope (surveys' `{data}`, custom-fields' bare array) or for sub-resource sub-paths (meeting participants, meeting transcripts).
+
+All HTTP traffic flows through `VitallyRateLimitHandler`, a `DelegatingHandler` registered via `AddHttpMessageHandler<>()` in `Program.cs`.
 
 ## Tool catalogue
 
-The server publishes ~95 MCP tools, one per Vitally REST endpoint. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk.
+The server publishes 92 MCP tools, one per Vitally REST endpoint. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk.
 
 | Resource | List / search | Get | Create | Update | Delete | Sub-resources |
 |---|:-:|:-:|:-:|:-:|:-:|---|
@@ -97,76 +161,16 @@ The server publishes ~95 MCP tools, one per Vitally REST endpoint. Each tool's `
 | Meetings | ✓ | ✓ | ✓ | ✓ | ✓ | by account, by organisation, participants, transcripts |
 | Custom traits | schema discovery | — | — | — | — | — |
 | Custom surveys | responses (list, get) | survey question | — | — | — | — |
-| Updates | check for updates | — | — | — | — | — |
 
-Full per-tool descriptions are in [`Output/mcpb/manifest.json`](Output/mcpb/manifest.json) and the developer guide in [`CLAUDE.md`](CLAUDE.md).
-
-## Building from source
-
-Prerequisites: .NET 10 SDK, Node.js 20+, PowerShell 7+, and the MCPB CLI (`npm install -g @anthropic-ai/mcpb`).
-
-```powershell
-# Restore + build + run the test suite (200+ tests)
-dotnet test VitallyMcp.sln -c Release --nologo --verbosity minimal
-
-# Standalone exe (Claude Code), auto-detects architecture
-.\Scripts\build-standalone.ps1
-
-# MCPB bundle (Claude Desktop), auto-detects architecture
-.\Scripts\build-mcpb.ps1
-
-# Both, with a version bump
-.\Scripts\build-all.ps1                # Revision bump
-.\Scripts\build-all.ps1 -BumpType Minor
-.\Scripts\build-all.ps1 -BumpType Major
-```
-
-See [`CLAUDE.md`](CLAUDE.md) for the deeper development guide, including the `VitallyService` filtering model, the rate-limit handler, the raw-passthrough pattern, and per-resource default field sets.
-
-## Releases
-
-Releases are produced automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a `vX.Y.Z` tag is pushed. The workflow pins the `.csproj` and manifest versions to the tag, runs the test suite, builds `win-x64` and `win-arm64` artefacts for both Claude Desktop and Claude Code, computes SHA-256 checksums, and creates a GitHub Release with auto-generated notes.
-
-## Architecture
-
-```
-VitallyMcp/
-├── Program.cs                       # Host + DI setup, MCP stdio server
-├── VitallyConfig.cs                 # Env-var loading and region selection
-├── VitallyService.cs                # HTTP client + client-side JSON filtering
-├── VitallyRateLimitHandler.cs       # 429 retry + rate-limit warnings
-├── UpdateCheckService.cs            # GitHub Releases probe for Check_for_updates
-└── Tools/                           # One file per Vitally resource type
-    ├── AccountsTools.cs
-    ├── OrganizationsTools.cs
-    ├── UsersTools.cs
-    ├── ConversationsTools.cs
-    ├── MessagesTools.cs
-    ├── NotesTools.cs
-    ├── ProjectsTools.cs
-    ├── ProjectTemplatesTools.cs
-    ├── TasksTools.cs
-    ├── NpsResponsesTools.cs
-    ├── AdminsTools.cs
-    ├── CustomObjectsTools.cs
-    ├── MeetingsTools.cs
-    ├── CustomTraitsTools.cs
-    ├── SurveysTools.cs
-    └── UpdatesTools.cs
-```
-
-The `VitallyService` exposes two call patterns:
-1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
-2. **Raw passthrough** (`GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) — for endpoints whose response shape differs from the standard envelope (surveys' `{data}`, custom-fields' bare array) or for sub-resource sub-paths (meeting participants, meeting transcripts).
-
-All HTTP traffic flows through `VitallyRateLimitHandler`, a `DelegatingHandler` registered via `AddHttpMessageHandler<>()` in `Program.cs`.
+Full per-tool descriptions are auto-generated from the `[McpServerTool]` attributes — call `tools/list` against the server to see them all.
 
 ## Security
 
-- Credentials are read from environment variables at startup. They are never written to disk by the server.
-- All API requests use HTTPS with HTTP Basic auth (Base64-encoded API key).
+- All MCP requests require a valid JWT signed by the configured Auth0 tenant. Tokens are validated server-side against the issuer + audience and the signature.
+- Vitally API keys are **not** distributed to clients or stored in tokens — they live in Key Vault, accessed by the server's managed identity.
+- Tokens are short-lived (per Auth0 default policy). The server keeps no session state; restart is transparent to clients.
 - Tools are tagged with `ReadOnly` and `Destructive` attributes so MCP clients can permission categories of operation in bulk.
-- The `.mcpb` files distributed in Releases do not contain credentials — the host injects them at runtime from the user's configuration.
+- HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
 
 ## Licence
 

@@ -4,163 +4,128 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is packaged as an MCPB (MCP Bundle) for easy distribution and installation on Windows.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** secured with Auth0; users connect to it by URL rather than installing a binary.
 
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
-- Permission management via ReadOnly and Destructive flags for MCP clients
-- Windows-specific MCPB packaging
-- .NET 10 single-file executable
-- Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA)
-- Multi-region support: EU (default, `rest.vitally-eu.io`) and US (`{subdomain}.rest.vitally.io`) via the `VITALLY_REGION` env var
+- Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
+- **Streamable HTTP transport** (MCP 2025-06-18) on the `ModelContextProtocol.AspNetCore` package, stateless mode
+- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`
+- **Per-request Vitally API key resolution**: the user's JWT carries a `secret_ref` claim; the server fetches the named secret from Azure Key Vault (with a short in-memory cache) and uses it to call Vitally on the user's behalf
+- .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
+- Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA) + `ModelContextProtocol.AspNetCore`
+- Multi-region support: EU (default, `rest.vitally-eu.io`) and US (`{subdomain}.rest.vitally.io`)
 - Rate-limit-aware HTTP pipeline: auto-retries on `429 Too Many Requests` and logs a warning when `X-RateLimit-Remaining` drops below threshold
-- In-process update check (`Check_for_updates` tool) against GitHub Releases
-- Distributed for both **Claude Desktop** (as `.mcpb`) and **Claude Code** (as a standalone `.exe`) from the same GitHub Release
-- Credentials and region managed via environment variables (VITALLY_API_KEY, VITALLY_SUBDOMAIN, VITALLY_REGION)
 
 ## Common Development Commands
 
-### Building and Publishing
+### Build, test, run
 
 ```powershell
-# Debug build
-dotnet build
+# Restore + build + run the test suite
+dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
 
-# Complete build (bumps version, builds standalone, creates MCPB)
-.\Scripts\build-all.ps1
+# Build only (Debug)
+dotnet build VitallyMcp.sln
 
-# Build standalone executable only
-.\Scripts\build-standalone.ps1
+# Run a single test class
+dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 
-# Build MCPB package only
-.\Scripts\build-mcpb.ps1
-
-# Skip version bump if needed
-.\Scripts\build-standalone.ps1 -SkipVersionBump
-.\Scripts\build-mcpb.ps1 -SkipVersionBump
+# Start the server in dev mode (no Auth0, no Key Vault)
+$env:Auth0__NoAuth = "true"
+$env:Vitally__Region = "EU"
+$env:Vitally__DevelopmentApiKey = "sk_live_your_key"
+$env:ASPNETCORE_URLS = "http://localhost:5099"
+dotnet run --project VitallyMcp/VitallyMcp.csproj
 ```
 
-### Version Management
+### Smoke-testing the server
+
+With the server running locally (or against the deployed URL with a real JWT in the `Authorization` header):
 
 ```powershell
-# Bump version (updates both .csproj and manifest.json)
-.\Scripts\bump-version.ps1                      # Bumps revision (1.1.2 -> 1.1.3)
-.\Scripts\bump-version.ps1 -BumpType Minor      # Bumps minor (1.1.3 -> 1.2.0)
-.\Scripts\bump-version.ps1 -BumpType Major      # Bumps major (1.2.0 -> 2.0.0)
+# OAuth metadata document — clients use this to discover the auth server
+Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
+
+# MCP initialise
+$body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
+Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
+
+# tools/list
+$body = @{ jsonrpc='2.0'; id=2; method='tools/list' } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 ```
-
-### Creating MCPB Package
-
-```powershell
-# Build and package as MCPB (auto-detects architecture, bumps version)
-.\Scripts\build-mcpb.ps1
-
-# Specify architecture explicitly
-.\Scripts\build-mcpb.ps1 -Architecture win-x64
-
-# Skip version bump
-.\Scripts\build-mcpb.ps1 -SkipVersionBump
-```
-
-This creates a versioned `.mcpb` file in the `Output/` directory (e.g., `VitallyMcp-1.1.3.mcpb`) that can be double-clicked to install.
-
-### Testing the Server
-
-To test the server locally without MCPB installation:
-
-1. Set environment variables in PowerShell:
-   ```powershell
-   $env:VITALLY_API_KEY = "sk_live_your_key"
-   # VITALLY_REGION defaults to "EU"; only set it if you're on a US tenant
-   # $env:VITALLY_REGION   = "US"
-   # $env:VITALLY_SUBDOMAIN = "your-subdomain"  # required only when VITALLY_REGION=US
-   ```
-
-2. Run the published executable:
-   ```powershell
-   .\bin\Release\net10.0\win-x64\publish\VitallyMcp.exe
-   ```
-
-3. Configure Claude Desktop or Claude Code to use the full path to the executable (see "Installing for End Users" below).
 
 ## Installing for End Users
 
-Releases are published at https://github.com/fiscaltec/vitally-mcp/releases. Each release contains four artefacts plus a `SHA256SUMS.txt`:
+FISCAL employees point their MCP client at `https://vitally-mcp.fiscaltec.com/mcp`. The client handles the Auth0 OAuth flow automatically on first use via the protected-resource metadata document.
 
-| Artefact | Audience |
+| Client | How to connect |
 |---|---|
-| `VitallyMcp-{version}-win-x64.mcpb` | Claude Desktop on Intel/AMD64 |
-| `VitallyMcp-{version}-win-arm64.mcpb` | Claude Desktop on ARM64 |
-| `VitallyMcp-{version}-win-x64.exe` | Claude Code (or any direct-launch MCP host) on Intel/AMD64 |
-| `VitallyMcp-{version}-win-arm64.exe` | Claude Code on ARM64 |
+| Claude Desktop | Settings → Connectors → Add custom connector → paste the URL |
+| Claude Code | `claude mcp add --transport http vitally https://vitally-mcp.fiscaltec.com/mcp` |
+| VS Code / Cursor / other | Add an MCP server entry pointing at the URL; client handles OAuth |
 
-### Claude Desktop
-
-Download the `.mcpb` for your architecture and double-click to install. Claude Desktop prompts for the env-var values declared in `manifest.json` (`VITALLY_API_KEY`, plus optional `VITALLY_REGION` and `VITALLY_SUBDOMAIN`).
-
-To update: download the new `.mcpb` and double-click — Claude Desktop replaces the previous version.
-
-### Claude Code
-
-Claude Code doesn't use the MCPB format; it expects a path to an executable in its MCP config. Download the `.exe` for your architecture (e.g. to `C:\Tools\VitallyMcp\VitallyMcp.exe`), then add to your Claude Code MCP config (`~/.claude.json` or project-local `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "vitally": {
-      "command": "C:\\Tools\\VitallyMcp\\VitallyMcp.exe",
-      "env": {
-        "VITALLY_API_KEY": "sk_live_your_key",
-        "VITALLY_REGION": "EU"
-      }
-    }
-  }
-}
-```
-
-If your tenant is on the US region, set `"VITALLY_REGION": "US"` and add `"VITALLY_SUBDOMAIN": "your-subdomain"` to the `env` block.
-
-To update: download the new `.exe` and replace the one referenced by `command`. No config change required as long as the path stays the same.
-
-### Updates
-
-Both clients can invoke the `Check_for_updates` MCP tool to compare their running version against the latest GitHub Release. The tool returns the current/latest versions, an `isUpToDate` flag, the release page URL, and pre-resolved download URLs matching the running architecture.
+To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
 
 ## Architecture
 
-### MCP Server Setup (Program.cs)
+### Hosting and transport (Program.cs)
 
-The server uses the official MCP C# SDK with automatic tool discovery:
-- Logs to stderr for MCP protocol compatibility
-- VitallyConfig loaded from environment variables
-- HttpClient injected via DI for VitallyService
-- Tools auto-discovered via `WithToolsFromAssembly()` attribute scanning
+The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft.NET.Sdk.Web`. Key wiring:
 
-### Configuration (VitallyConfig.cs)
+- Binds `VitallyServerOptions` from the `Vitally:` configuration section, calls `Validate()` at startup to fail-fast on bad config.
+- Binds `Auth0Options` from `Auth0:`.
+- Conditionally registers `SecretClient` (Azure Key Vault) as singleton when `Vitally:KeyVaultUri` is set; uses `DefaultAzureCredential` so it works with managed identity in production and `az login` locally.
+- `IHttpContextAccessor` + `IMemoryCache` registered for the API key provider.
+- `VitallyApiKeyProvider` registered scoped.
+- `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
+- `JwtBearer` authentication added unless `Auth0:NoAuth=true`.
+- MCP server registered via `AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithToolsFromAssembly()`.
+- `MapGet("/.well-known/oauth-protected-resource", ...)` publishes the RFC 9728 metadata document.
+- `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 
-Environment variable loading with validation:
-- `VITALLY_API_KEY` - Required API key (format: sk_live_*)
-- `VITALLY_REGION` - Optional, `EU` (default) or `US`. Case-insensitive and trimmed. Invalid values throw.
-- `VITALLY_SUBDOMAIN` - Required only when `VITALLY_REGION` is `US` (e.g., "fiscaltec"). Ignored for `EU` because that region uses a single shared host with no subdomain prefix.
-- Throws `InvalidOperationException` with helpful messages if required values are missing for the chosen region
+### Configuration (VitallyServerOptions.cs + Auth0Options.cs)
+
+`VitallyServerOptions` (singleton, bound from `Vitally:` section):
+- `Region` — `EU` (default) or `US`. Validated at startup.
+- `Subdomain` — required only when `Region=US`.
+- `KeyVaultUri` — Azure Key Vault URI. When unset, the server requires `DevelopmentApiKey` instead (local dev only).
+- `SecretRefClaim` — JWT claim name carrying the secret reference (default `https://vitally-mcp.fiscaltec.com/secret_ref`).
+- `DefaultSecretRef` — secret name to fetch when the claim is missing on the token (default `vitally-shared`).
+- `SecretCacheDuration` — TTL for the in-memory API key cache (default 5 min).
+- `DevelopmentApiKey` — local-only fallback used when `KeyVaultUri` is unset.
+- `BaseUrl` — computed: EU → `https://rest.vitally-eu.io`; US → `https://{Subdomain}.rest.vitally.io`.
+
+`Auth0Options` (singleton, bound from `Auth0:` section):
+- `Authority` — issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
+- `Audience` — the Auth0 Resource Server identifier, e.g. `https://vitally-mcp.fiscaltec.com`.
+- `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
+
+### Per-request API key resolution (VitallyApiKeyProvider.cs)
+
+Scoped. Resolution order on each call to `GetApiKeyAsync()`:
+
+1. If no `SecretClient` is registered (i.e. `KeyVaultUri` not set) and `DevelopmentApiKey` is set, return it. If neither is set, throw.
+2. Read the JWT claim named in `SecretRefClaim` from `HttpContext.User`. If absent, use `DefaultSecretRef`.
+3. Check `IMemoryCache` for `"vitally-api-key::{secretRef}"`. Return if hit.
+4. Call `SecretClient.GetSecretAsync(secretRef)`, cache the value for `SecretCacheDuration`, return.
+
+This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache expires on its own) and per-user keys require only a different value in the user's `app_metadata.vitally_secret_ref` on the Auth0 side — no server code changes.
 
 ### HTTP Service (VitallyService.cs)
 
-Centralised HTTP client for Vitally REST API:
-- Base URL depends on `VitallyConfig.Region` (default `EU`):
-  - EU: `https://rest.vitally-eu.io` (single shared host, no subdomain — matches Vitally's docs)
-  - US: `https://{subdomain}.rest.vitally.io`
-- Basic authentication using Base64-encoded API key
-- **Client-side JSON filtering** to reduce response sizes for LLM consumption
-- **Resource-specific default fields** optimised per resource type
-- Standard methods (apply field/trait filtering and the `{results, next}` envelope):
-  - `GetResourcesAsync()` - List resources with pagination, sorting, and filtering
-  - `GetResourceByIdAsync()` - Get single resource by ID
-  - `CreateResourceAsync()` / `UpdateResourceAsync()` / `DeleteResourceAsync()` - POST / PUT / DELETE the standard `/resources/{type}[/{id}]` paths
-- Raw pass-through methods (no field filtering — for endpoints whose response shape is not the standard `{results, next}` envelope, e.g. surveys returning `{data, next}`, customFields returning a bare array, or for sub-resource paths like meeting participants):
-  - `GetRawAsync(path, queryParams)` - GET with URL-encoded query string
-  - `PostRawAsync(path, jsonBody)` - POST raw JSON
-  - `DeleteRawAsync(path)` - DELETE arbitrary path
+Scoped via `AddHttpClient<VitallyService>()`. Per-request auth: the constructor takes the per-request `VitallyApiKeyProvider`, and the private `SendAsync(method, url, content?)` helper builds each `HttpRequestMessage`, fetches the API key from the provider, sets the `Authorization: Basic` header on the message, and dispatches via `_httpClient.SendAsync`. The shared `HttpClient` is *not* mutated — there's no `DefaultRequestHeaders.Authorization`, so multi-user safety is preserved.
+
+Standard methods (apply field/trait filtering and the `{results, next}` envelope):
+- `GetResourcesAsync` — list with pagination, sorting, filtering
+- `GetResourceByIdAsync`
+- `CreateResourceAsync` / `UpdateResourceAsync` / `DeleteResourceAsync`
+
+Raw pass-through methods (no field filtering — for endpoints whose response shape is not the standard `{results, next}` envelope, e.g. surveys returning `{data, next}`, customFields returning a bare array, or for sub-resource paths like meeting participants):
+- `GetRawAsync(path, queryParams)` — GET with URL-encoded query string
+- `PostRawAsync(path, jsonBody)`
+- `DeleteRawAsync(path)`
 
 ### Rate-Limit Handler (VitallyRateLimitHandler.cs)
 
@@ -180,9 +145,9 @@ All thresholds are public mutable properties, so they can be tweaked in tests or
 
 **Client-Side Filtering:**
 - The Vitally API does NOT support field or trait selection natively
-- VitallyService implements client-side JSON filtering after receiving full API response
+- `VitallyService` implements client-side JSON filtering after receiving full API response
 - Uses `System.Text.Json.JsonDocument` to parse and filter fields and traits
-- Only includes fields that actually exist on the resource (via TryGetProperty)
+- Only includes fields that actually exist on the resource (via `TryGetProperty`)
 - Preserves pagination metadata (`next` field) in filtered responses
 - **Trait filtering:** When traits parameter is specified, filters the traits object to include only requested trait keys
 - **Default behaviour:** Traits are excluded by default to reduce response size - use traits parameter to include specific traits
@@ -240,7 +205,7 @@ Each resource type has a dedicated tool class:
 - Decorated with `[McpServerToolType]` for discovery
 - Static methods decorated with `[McpServerTool]` and `[Description]`
 - Pattern: `List{Resource}` and `Get{Resource}` methods
-- Dependency injection: VitallyService injected as method parameter
+- Dependency injection: `VitallyService` injected as method parameter
 - All parameters use `[Description]` attributes for MCP tool schema generation
 
 **Example tool pattern:**
@@ -267,96 +232,37 @@ public static class AccountsTools
 }
 ```
 
-**Note:** The `status` parameter is specific to AccountsTools, and `archived` is specific to MeetingsTools. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects, Meetings, Project Templates). Other resource types have the standard parameters (limit, from, fields, sortBy).
+**Note:** The `status` parameter is specific to `AccountsTools`, and `archived` is specific to `MeetingsTools`. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects, Meetings, Project Templates). Other resource types have the standard parameters (limit, from, fields, sortBy).
 
 **Raw pass-through tools:** `CustomTraitsTools`, `SurveysTools`, and the participant/transcript methods on `MeetingsTools` call `GetRawAsync` / `PostRawAsync` / `DeleteRawAsync` directly. They do not accept a `fields` parameter because Vitally returns these endpoints with a non-standard JSON envelope (`{data}` for surveys, bare arrays for `customFields`).
-
-### Build Scripts (Scripts/)
-
-The project includes several PowerShell build scripts:
-
-**bump-version.ps1**:
-- Reads current version from `VitallyMcp.csproj`
-- Increments version based on type (Revision, Minor, Major)
-- Updates both `.csproj` and `Output/mcpb/manifest.json`
-- Returns new version for use by other scripts
-
-**build-standalone.ps1**:
-- Bumps revision version (unless -SkipVersionBump specified)
-- Publishes self-contained executable for specified/detected architecture
-- Outputs to `bin/{Configuration}/net10.0/{Architecture}/publish/`
-
-**build-mcpb.ps1**:
-- Bumps revision version (unless -SkipVersionBump specified)
-- Publishes self-contained executable
-- Stages files in `Output/mcpb/` (executable at top level)
-- Runs `mcpb pack` to create versioned bundle
-- Moves `.mcpb` file to `Output/VitallyMcp-{version}.mcpb`
-- Cleans up temporary files
-
-**build-all.ps1**:
-- Bumps version once (revision by default, configurable via -BumpType)
-- Optionally builds standalone executable
-- Builds MCPB package
-- Comprehensive build for release distribution
-
-### MCPB Packaging (Output/mcpb/)
-
-The MCPB manifest (`Output/mcpb/manifest.json`) defines:
-- Server metadata (name, version, description, author)
-- Binary entry point (`VitallyMcp.exe` at top level)
-- Environment variable mappings for user configuration
-- Tool descriptions for MCP clients
-
-Build process:
-1. Version is bumped automatically (or skipped with -SkipVersionBump)
-2. Auto-detects system architecture (x64/ARM64)
-3. Publishes self-contained executable
-4. Stages files in `Output/mcpb/` (executable at top level)
-5. Runs `mcpb pack` to create versioned bundle (e.g., `VitallyMcp-1.1.3.mcpb`)
-6. Cleans up temporary executable from mcpb directory
 
 ## Adding New Resource Types
 
 To add support for a new Vitally resource:
 
-1. Create `Tools/{ResourceName}Tools.cs` following the pattern in AccountsTools.cs
+1. Create `Tools/{ResourceName}Tools.cs` following the pattern in `AccountsTools.cs`
 2. Implement `List{ResourceName}` and `Get{ResourceName}` methods
-3. Use VitallyService with appropriate resource type string
+3. Use `VitallyService` with appropriate resource type string
 4. **If the endpoint returns the standard `{results, next}` envelope:** add an entry to `ResourceDefaultFields` in `VitallyService.cs` with the optimised default field set
 5. **If the endpoint returns a non-standard envelope** (e.g. `{data}`) or is a sub-resource path (e.g. `meetings/:id/participants`): use `GetRawAsync` / `PostRawAsync` / `DeleteRawAsync` — these bypass client-side filtering and return the body unchanged
 6. **For sub-paths under an existing resource** (e.g. `admins/search`): add an explicit entry to `ResourceDefaultFields` for the full path — the lookup is exact-match, not prefix-match
-7. Tools are automatically discovered via assembly scanning
+7. Tools are automatically discovered via assembly scanning — no manual registration needed
 8. Add a matching `Tools/{ResourceName}ToolsTests.cs` under `VitallyMcp.Tests/Tools/`
-9. Update `Output/mcpb/manifest.json` to document the new tools
 
 ## Important Notes
 
 - **UK English**: Use UK spelling (organisations, authorisation, etc.) in all code comments and documentation
-- **Permission management**: Tools use ReadOnly = true flag for GET/LIST operations and Destructive = true flag for CREATE/UPDATE/DELETE operations. This allows MCP clients to bulk enable/disable operations by permission level.
+- **Permission management**: Tools use `ReadOnly = true` flag for GET/LIST operations and `Destructive = true` flag for CREATE/UPDATE/DELETE operations. This allows MCP clients to bulk enable/disable operations by permission level.
 - **Write operations**: All resources support full CRUD operations (where applicable). JSON body parameters accept complete request bodies for create/update operations.
-- **Environment variables**: Never hardcode credentials - always use environment variable loading
-- **Error handling**: VitallyService uses EnsureSuccessStatusCode() - HTTP errors propagate to MCP client
-- **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively)
-- **Trait filtering**: Traits are excluded by default - use traits parameter to include specific trait keys (requires "traits" in fields parameter)
-- **Resource-specific defaults**: Each resource type has optimised default fields (see table above)
-- **Field existence**: Only includes fields that actually exist on the resource - no null/undefined placeholders
-- **Pagination**: Use `from` parameter (not `cursor`) - this matches the Vitally API spec
-- **JSON responses**: Tools return filtered JSON strings to reduce LLM context usage
-- **Windows-specific**: MCPB packages are Windows-only (win-x64/win-arm64 runtimes)
-- **MCP SDK**: Using `ModelContextProtocol` 1.3.0 GA. The historical preview-to-GA upgrade from 0.4.0-preview.3 was source-compatible for this project's surface (stdio transport + attribute-based tools).
-
-## Distribution
-
-When distributing the MCPB:
-1. Build using `.\Scripts\build-all.ps1` or `.\Scripts\build-mcpb.ps1`
-2. Distribute the versioned `.mcpb` file from `Output/` directory (never commit `.mcpb` files to git)
-3. Provide users with environment variable template
-4. Users double-click to install and configure via Claude Desktop
-
-The `.gitignore` is configured to exclude:
-- `Output/mcpb/VitallyMcp.exe` - Temporary executable staging
-- `Output/*.mcpb` - Generated MCPB packages
+- **Configuration**: Never hardcode credentials. Production deployments use Key Vault via managed identity; local dev uses `Vitally:DevelopmentApiKey` (env var `Vitally__DevelopmentApiKey`).
+- **Error handling**: `VitallyService` uses `EnsureSuccessStatusCode()` — HTTP errors propagate to the MCP client as JSON-RPC errors.
+- **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively).
+- **Trait filtering**: Traits are excluded by default — use the `traits` parameter to include specific trait keys (requires `"traits"` in the `fields` parameter).
+- **Resource-specific defaults**: Each resource type has optimised default fields (see table above).
+- **Field existence**: Only includes fields that actually exist on the resource — no null/undefined placeholders.
+- **Pagination**: Use the `from` parameter (not `cursor`) — this matches the Vitally API spec.
+- **JSON responses**: Tools return filtered JSON strings to reduce LLM context usage.
+- **MCP SDK**: Using `ModelContextProtocol` 1.3.0 GA plus `ModelContextProtocol.AspNetCore` 1.3.0 for HTTP hosting.
 
 ## Testing
 
@@ -371,16 +277,34 @@ dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 ```
 
 **Coverage:**
-- `VitallyConfigTests` — environment variable loading and validation
+- `VitallyApiKeyProviderTests` — dev-fallback resolution (no SecretClient → returns `DevelopmentApiKey`; missing both → throws)
 - `VitallyServiceTests` — JSON field/trait filtering, pagination, resource-specific defaults, plus all six service methods (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`, `GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) including HTTP-verb / URL / auth-header verification via Moq protected verification
+- `VitallyRateLimitHandlerTests` — 429 retry behaviour, header parsing, low-remaining warnings
 - `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
 
-**When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.CreateMockHttpClient` (no URL assertions) or `TestHelpers.CreateMockHttpClientWithHandler` (when you want to assert verb + path).
+**When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
 
-**Manual testing considerations** (require live Vitally credentials):
-- Test pagination by using low limit values (e.g., limit=5) and verify `from` parameter works with `next` cursor
+**Manual testing considerations** (require live Vitally credentials and a real Auth0 token in production):
+- Test pagination by using low limit values (e.g., `limit=5`) and verify `from` parameter works with `next` cursor
 - Test client-side field filtering by specifying various field combinations
 - Test trait filtering by combining `fields="traits"` with `traits="trait1,trait2"`
 - For accounts, test the status filter with: `active`, `churned`, `activeOrChurned`
 - For meetings, test the `archived` filter
-- Verify error handling with invalid IDs/missing env vars
+- For local dev without Auth0, set `Auth0__NoAuth=true` and `Vitally__DevelopmentApiKey=<your key>`
+- Verify error handling with invalid IDs / missing config
+
+## Deployment
+
+The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0**, with the container image hosted in Azure Container Registry. CI builds the image on push to `main` and updates the Container App revision.
+
+| Component | Resource | Notes |
+|---|---|---|
+| Hosting | Azure Container Apps (consumption plan) | Scale-to-zero; HTTPS-native ingress; managed cert on `vitally-mcp.fiscaltec.com` |
+| Secrets | Azure Key Vault | `vitally-shared` is the default secret name; managed identity has `Key Vault Secrets User` |
+| Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
+| Image registry | Azure Container Registry (Basic SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
+| Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally-mcp.fiscaltec.com`; post-login Action injects the `secret_ref` claim |
+| CI/CD | GitHub Actions → OIDC federation → Azure | No long-lived secrets in GitHub |
+
+The Bicep / `azd` templates that capture this deployment land in `infra/` once verified end-to-end. They're a worked example rather than a hard contract — anyone replicating can swap Container Apps for App Service, ACR for GHCR, etc., without touching the application code.

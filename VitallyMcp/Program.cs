@@ -1,35 +1,82 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Extensions.Options;
 using VitallyMcp;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-// Configure logging to standard error
-builder.Logging.AddConsole(consoleLogOptions =>
+builder.Services.AddOptions<VitallyServerOptions>()
+    .Bind(builder.Configuration.GetSection(VitallyServerOptions.SectionName))
+    .PostConfigure(o => o.Validate());
+
+builder.Services.AddOptions<Auth0Options>()
+    .Bind(builder.Configuration.GetSection(Auth0Options.SectionName));
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
+
+var vitallySection = builder.Configuration.GetSection(VitallyServerOptions.SectionName);
+var keyVaultUri = vitallySection["KeyVaultUri"];
+if (!string.IsNullOrWhiteSpace(keyVaultUri))
 {
-    consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
-});
+    builder.Services.AddSingleton(new SecretClient(new Uri(keyVaultUri), new DefaultAzureCredential()));
+}
 
-// Load Vitally configuration from environment variables
-var vitallyConfig = VitallyConfig.FromEnvironment();
-
-// Register VitallyConfig as a singleton
-builder.Services.AddSingleton(vitallyConfig);
-
-// Register the rate-limit-aware HTTP handler and wire it into the VitallyService's HttpClient
+builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddTransient<VitallyRateLimitHandler>();
+
 builder.Services.AddHttpClient<VitallyService>()
     .AddHttpMessageHandler<VitallyRateLimitHandler>();
 
-// Update-check service uses a separate HttpClient (target is GitHub, not Vitally,
-// so no Vitally auth header and no rate-limit handler).
-builder.Services.AddHttpClient<UpdateCheckService>();
+var auth0Section = builder.Configuration.GetSection(Auth0Options.SectionName);
+var noAuth = auth0Section.GetValue<bool>("NoAuth");
 
-// Configure MCP server with stdio transport and automatic tool discovery
-builder.Services
-    .AddMcpServer()
-    .WithStdioServerTransport()
+if (!noAuth)
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = auth0Section["Authority"];
+            options.Audience = auth0Section["Audience"];
+        });
+    builder.Services.AddAuthorization();
+}
+
+builder.Services.AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
 
-await builder.Build().RunAsync();
+var app = builder.Build();
+
+if (noAuth)
+{
+    app.Logger.LogWarning("Vitally MCP server running with NoAuth=true. This is for local development only — DO NOT use in production.");
+}
+else
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+
+app.MapGet("/.well-known/oauth-protected-resource", (IOptions<Auth0Options> auth0) =>
+{
+    var o = auth0.Value;
+    return Results.Json(new
+    {
+        resource = o.Audience,
+        authorization_servers = new[] { o.Authority?.TrimEnd('/') },
+        bearer_methods_supported = new[] { "header" }
+    });
+});
+
+var mcp = app.MapMcp("/mcp");
+if (!noAuth)
+{
+    mcp.RequireAuthorization();
+}
+
+app.Run();
+
+// Make Program accessible to integration tests in the test project.
+public partial class Program { }
