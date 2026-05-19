@@ -13,12 +13,8 @@ public class TasksToolsTests
 
     private VitallyService CreateService(HttpClient httpClient)
     {
-        var config = new VitallyConfig
-        {
-            Subdomain = TestSubdomain,
-            ApiKey = TestApiKey
-        };
-        return new VitallyService(httpClient, config);
+        return TestHelpers.BuildVitallyService(httpClient, subdomain: TestSubdomain, apiKey: TestApiKey);
+
     }
 
     [Fact]
