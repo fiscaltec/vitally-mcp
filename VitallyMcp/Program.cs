@@ -10,10 +10,9 @@ builder.Services.AddOptions<VitallyServerOptions>()
     .Bind(builder.Configuration.GetSection(VitallyServerOptions.SectionName))
     .PostConfigure(o => o.Validate());
 
-builder.Services.AddOptions<Auth0Options>()
-    .Bind(builder.Configuration.GetSection(Auth0Options.SectionName));
+builder.Services.AddOptions<EntraOptions>()
+    .Bind(builder.Configuration.GetSection(EntraOptions.SectionName));
 
-builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
 
 var vitallySection = builder.Configuration.GetSection(VitallyServerOptions.SectionName);
@@ -29,16 +28,16 @@ builder.Services.AddTransient<VitallyRateLimitHandler>();
 builder.Services.AddHttpClient<VitallyService>()
     .AddHttpMessageHandler<VitallyRateLimitHandler>();
 
-var auth0Section = builder.Configuration.GetSection(Auth0Options.SectionName);
-var noAuth = auth0Section.GetValue<bool>("NoAuth");
+var entraSection = builder.Configuration.GetSection(EntraOptions.SectionName);
+var noAuth = entraSection.GetValue<bool>("NoAuth");
 
 if (!noAuth)
 {
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = auth0Section["Authority"];
-            options.Audience = auth0Section["Audience"];
+            options.Authority = entraSection["Authority"];
+            options.Audience = entraSection["Audience"];
         });
     builder.Services.AddAuthorization();
 }
@@ -59,9 +58,9 @@ else
     app.UseAuthorization();
 }
 
-app.MapGet("/.well-known/oauth-protected-resource", (IOptions<Auth0Options> auth0) =>
+app.MapGet("/.well-known/oauth-protected-resource", (IOptions<EntraOptions> entra) =>
 {
-    var o = auth0.Value;
+    var o = entra.Value;
     return Results.Json(new
     {
         resource = o.Audience,

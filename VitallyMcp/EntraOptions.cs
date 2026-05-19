@@ -1,8 +1,8 @@
 namespace VitallyMcp;
 
-public class Auth0Options
+public class EntraOptions
 {
-    public const string SectionName = "Auth0";
+    public const string SectionName = "Entra";
 
     public string Authority { get; set; } = string.Empty;
 

@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -38,7 +37,6 @@ public class VitallyApiKeyProviderTests
     private static VitallyApiKeyProvider BuildProvider(VitallyServerOptions options) =>
         new(
             Options.Create(options),
-            new HttpContextAccessor(),
             new MemoryCache(new MemoryCacheOptions()),
             NullLogger<VitallyApiKeyProvider>.Instance);
 }

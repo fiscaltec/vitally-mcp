@@ -1,5 +1,4 @@
 using System.Net;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -53,7 +52,6 @@ public static class TestHelpers
         });
         var provider = new VitallyApiKeyProvider(
             options,
-            new HttpContextAccessor(),
             new MemoryCache(new MemoryCacheOptions()),
             NullLogger<VitallyApiKeyProvider>.Instance);
         return new VitallyService(httpClient, options, provider);
