@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop**, **Claude Code**, **VS Code**, and **Cursor**.
 
-Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.0 / RFC 9728). Users connect by URL — no install, no executable, no per-user secrets to distribute.
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Auth0 (OAuth 2.0 / RFC 9728). Users connect by URL — no install, no executable, no per-user secrets to distribute.
 
 [![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
 
@@ -14,7 +14,7 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
 - **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
 - **Streamable HTTP transport** (MCP 2025-06-18) in stateless mode — easy to scale horizontally, no sticky sessions required.
-- **OAuth 2.0 protection** via Microsoft Entra — `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
+- **OAuth 2.0 protection** via Auth0 — `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
 
 ## Using the server (FISCAL users)
 
@@ -24,7 +24,7 @@ Point your MCP client at:
 https://vitally.fiscaltec.com/mcp
 ```
 
-The first time you connect, your client will redirect you through Microsoft Entra to authenticate. Once authenticated, the server proxies your tool calls to Vitally using a service-account API key it fetches from Azure Key Vault.
+The first time you connect, your client will redirect you through Auth0 to authenticate. Once authenticated, the server proxies your tool calls to Vitally using a service-account API key it fetches from Azure Key Vault.
 
 ### Claude Desktop
 
@@ -54,9 +54,10 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Vitally:DefaultSecretRef` | No | `vitally-shared` | Key Vault secret name holding the Vitally API key. |
 | `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for the resolved API key. |
 | `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
-| `Entra:Authority` | Yes | — | Entra v2 issuer URL, e.g. `https://login.microsoftonline.com/{tenant-id}/v2.0`. |
-| `Entra:Audience` | Yes | — | The Entra application's identifier URI, e.g. `api://vitally.fiscaltec.com`. |
-| `Entra:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
+| `OAuth:Authority` | Yes | — | OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
+| `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. |
+| `OAuth:Resource` | No | — | Canonical resource identifier published in `/.well-known/oauth-protected-resource`. Falls back to `Audience` when blank; set explicitly when clients need the metadata `resource` to match the server's URL/origin (per RFC 9728 + RFC 8707 validators). |
+| `OAuth:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
 
 See [`VitallyMcp/appsettings.Example.json`](VitallyMcp/appsettings.Example.json) for the full layout.
 
@@ -68,8 +69,8 @@ Prerequisites: .NET 10 SDK.
 # Restore + build + run the test suite
 dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
 
-# Start the server in dev mode (no Entra, no Key Vault — uses DevelopmentApiKey from env)
-$env:Entra__NoAuth = "true"
+# Start the server in dev mode (no Auth0, no Key Vault — uses DevelopmentApiKey from env)
+$env:OAuth__NoAuth = "true"
 $env:Vitally__Region = "EU"
 $env:Vitally__DevelopmentApiKey = "sk_live_your_key"
 $env:ASPNETCORE_URLS = "http://localhost:5099"
@@ -97,7 +98,7 @@ claude mcp add --transport http vitally-dev http://localhost:5099/mcp
 
 Deploying your own instance for a different org or against a different Vitally tenant requires three things — none of which are in this repo, all of which are config:
 
-1. **An OIDC identity provider** that issues RS256-signed JWTs for your users. Microsoft Entra ID is what FISCAL uses; any compliant provider works (Auth0, Keycloak, Okta, etc.). Register an Application with identifier URI matching your `Entra:Audience` value, plus a delegated scope (e.g. `Tools.Access`) and public-client redirect URI `http://localhost` for MCP-client OAuth flows.
+1. **An OIDC identity provider** that issues RS256-signed JWTs for your users. Auth0 ID is what FISCAL uses; any compliant provider works (Auth0, Keycloak, Okta, etc.). Register an Application with identifier URI matching your `OAuth:Audience` value, plus a delegated scope (e.g. `Tools.Access`) and public-client redirect URI `http://localhost` for MCP-client OAuth flows.
 2. **An Azure Key Vault** (or compatible secret store; see the swap notes in [CLAUDE.md](CLAUDE.md)) containing your Vitally API key as a secret. Default secret name is `vitally-shared`; change via `Vitally:DefaultSecretRef`.
 3. **A container host** that can run the published Docker image. Anywhere ASP.NET Core 10 runs (Azure Container Apps, AWS App Runner, GCP Cloud Run, plain Kubernetes) — Container Apps is what FISCAL uses.
 
@@ -108,7 +109,7 @@ The Bicep / `azd` templates that capture FISCAL's deployment will land in `infra
 ```
 VitallyMcp/
 ├── Program.cs                       # ASP.NET Core host, JwtBearer auth, MapMcp
-├── EntraOptions.cs                  # Authority + Audience + NoAuth dev flag
+├── OAuthOptions.cs                  # Authority + Audience + Resource + NoAuth dev flag
 ├── VitallyServerOptions.cs          # Region, KeyVaultUri, secret config
 ├── VitallyApiKeyProvider.cs         # Fetches the API key from Key Vault (cached)
 ├── VitallyService.cs                # HTTP client + client-side JSON filtering
@@ -131,7 +132,7 @@ VitallyMcp/
     └── SurveysTools.cs
 ```
 
-The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against the Microsoft Entra tenant configured in `Entra:Authority` / `Entra:Audience`. On each tool call, `VitallyApiKeyProvider` fetches the `vitally-shared` secret from Key Vault (cached in-memory for 5 min, using the server's user-assigned managed identity), and `VitallyService` uses it to call Vitally on behalf of all authenticated users.
+The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against the Auth0 tenant configured in `OAuth:Authority` / `OAuth:Audience`. On each tool call, `VitallyApiKeyProvider` fetches the `vitally-shared` secret from Key Vault (cached in-memory for 5 min, using the server's user-assigned managed identity), and `VitallyService` uses it to call Vitally on behalf of all authenticated users.
 
 The `VitallyService` exposes two call patterns:
 1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
@@ -165,9 +166,9 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 
 ## Security
 
-- All MCP requests require a valid JWT signed by the configured Microsoft Entra tenant. Tokens are validated server-side against the issuer + audience and the signature.
+- All MCP requests require a valid JWT signed by the configured Auth0 tenant. Tokens are validated server-side against the issuer + audience and the signature.
 - Vitally API keys are **not** distributed to clients or stored in tokens — they live in Key Vault, accessed by the server's managed identity.
-- Tokens are short-lived (per Entra default policy). The server keeps no session state; restart is transparent to clients.
+- Tokens are short-lived (8h access, with refresh rotation). The server keeps no session state; restart is transparent to clients.
 - Tools are tagged with `ReadOnly` and `Destructive` attributes so MCP clients can permission categories of operation in bulk.
 - HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
 

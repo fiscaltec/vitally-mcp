@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** secured with Microsoft Entra; users connect to it by URL rather than installing a binary.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** secured with Auth0 (which federates to Microsoft Entra for FISCAL identity); users connect to it by URL rather than installing a binary.
 
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
 - **Streamable HTTP transport** (MCP 2025-06-18) on the `ModelContextProtocol.AspNetCore` package, stateless mode
-- **Microsoft Entra OAuth 2.0 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`
+- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. Auth0 supports Dynamic Client Registration (RFC 7591) which MCP clients require. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop).
 - **On-demand Vitally API key fetch**: the server fetches the `vitally-shared` secret from Azure Key Vault via its user-assigned managed identity (with a short in-memory cache) and uses it to call Vitally on behalf of all authenticated users. Future per-user keys can be added by reintroducing claim-based secret resolution.
 - .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
 - Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA) + `ModelContextProtocol.AspNetCore`
@@ -31,8 +31,8 @@ dotnet build VitallyMcp.sln
 # Run a single test class
 dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 
-# Start the server in dev mode (no Entra, no Key Vault)
-$env:Entra__NoAuth = "true"
+# Start the server in dev mode (no Auth0, no Key Vault)
+$env:OAuth__NoAuth = "true"
 $env:Vitally__Region = "EU"
 $env:Vitally__DevelopmentApiKey = "sk_live_your_key"
 $env:ASPNETCORE_URLS = "http://localhost:5099"
@@ -58,7 +58,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'appl
 
 ## Installing for End Users
 
-FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the Microsoft Entra OAuth flow automatically on first use via the protected-resource metadata document.
+FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the Auth0 OAuth flow automatically on first use via the protected-resource metadata document (Auth0 federates to Entra for the actual sign-in).
 
 | Client | How to connect |
 |---|---|
@@ -75,17 +75,17 @@ To update: nothing for end users. The server is the source of truth; new deploys
 The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft.NET.Sdk.Web`. Key wiring:
 
 - Binds `VitallyServerOptions` from the `Vitally:` configuration section, calls `Validate()` at startup to fail-fast on bad config.
-- Binds `EntraOptions` from `Entra:`.
+- Binds `OAuthOptions` from `OAuth:` (provider-agnostic — works with Auth0, Entra direct, Keycloak, etc.).
 - Conditionally registers `SecretClient` (Azure Key Vault) as singleton when `Vitally:KeyVaultUri` is set; uses `DefaultAzureCredential` so it works with managed identity in production and `az login` locally.
 - `IHttpContextAccessor` + `IMemoryCache` registered for the API key provider.
 - `VitallyApiKeyProvider` registered scoped.
 - `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
-- `JwtBearer` authentication added unless `Entra:NoAuth=true`.
+- `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
 - MCP server registered via `AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithToolsFromAssembly()`.
 - `MapGet("/.well-known/oauth-protected-resource", ...)` publishes the RFC 9728 metadata document.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 
-### Configuration (VitallyServerOptions.cs + EntraOptions.cs)
+### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 
 `VitallyServerOptions` (singleton, bound from `Vitally:` section):
 - `Region` — `EU` (default) or `US`. Validated at startup.
@@ -96,9 +96,10 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `DevelopmentApiKey` — local-only fallback used when `KeyVaultUri` is unset.
 - `BaseUrl` — computed: EU → `https://rest.vitally-eu.io`; US → `https://{Subdomain}.rest.vitally.io`.
 
-`EntraOptions` (singleton, bound from `Entra:` section):
-- `Authority` — Entra v2 issuer URL, e.g. `https://login.microsoftonline.com/{tenant-id}/v2.0`.
-- `Audience` — the Entra application's identifier URI, e.g. `api://vitally.fiscaltec.com`.
+`OAuthOptions` (singleton, bound from `OAuth:` section):
+- `Authority` — OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
+- `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. Validated against the JWT `aud` claim.
+- `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance).
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
 
 ### API key resolution (VitallyApiKeyProvider.cs)
@@ -109,7 +110,7 @@ Scoped. Resolution order on each call to `GetApiKeyAsync()`:
 2. Check `IMemoryCache` for `"vitally-api-key::{DefaultSecretRef}"`. Return if hit.
 3. Call `SecretClient.GetSecretAsync(DefaultSecretRef)` (uses the Container App's user-assigned managed identity), cache the value for `SecretCacheDuration`, return.
 
-This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache expires on its own). Per-user keys can be re-introduced later by extending the provider to read an Entra group/role claim and selecting a different secret name per user — no other architecture changes needed.
+This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache expires on its own). Per-user keys can be re-introduced later by extending the provider to read the `https://vitally.fiscaltec.com/secret_ref` claim (set by the Auth0 Action) and selecting a different secret name per user — no other architecture changes needed.
 
 ### HTTP Service (VitallyService.cs)
 
@@ -282,18 +283,18 @@ dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 
 **When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
 
-**Manual testing considerations** (require live Vitally credentials and a real Entra token in production):
+**Manual testing considerations** (require live Vitally credentials and a real Auth0-issued token in production):
 - Test pagination by using low limit values (e.g., `limit=5`) and verify `from` parameter works with `next` cursor
 - Test client-side field filtering by specifying various field combinations
 - Test trait filtering by combining `fields="traits"` with `traits="trait1,trait2"`
 - For accounts, test the status filter with: `active`, `churned`, `activeOrChurned`
 - For meetings, test the `archived` filter
-- For local dev without Entra, set `Entra__NoAuth=true` and `Vitally__DevelopmentApiKey=<your key>`
+- For local dev without Auth0, set `OAuth__NoAuth=true` and `Vitally__DevelopmentApiKey=<your key>`
 - Verify error handling with invalid IDs / missing config
 
 ## Deployment
 
-The deployment shape is **Azure Container Apps + Azure Key Vault + Microsoft Entra**, with the container image hosted in Azure Container Registry. CI builds the image on push to `main` and updates the Container App revision.
+The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with Auth0 federating to Microsoft Entra for FISCAL employee sign-in), and the container image hosted in Azure Container Registry. CI builds the image on push to `main` and updates the Container App revision.
 
 | Component | Resource | Notes |
 |---|---|---|
@@ -302,7 +303,7 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Microsoft Ent
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Basic SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Microsoft Entra single-tenant app `Vitally MCP` | Identifier URI `api://vitally.fiscaltec.com`, delegated scope `Tools.Access`, public-client redirect `http://localhost` for DCR-style OAuth clients |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com`; post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
 | CI/CD | GitHub Actions → OIDC federation → Azure | No long-lived secrets in GitHub |
 
 The Bicep / `azd` templates that capture this deployment land in `infra/` once verified end-to-end. They're a worked example rather than a hard contract — anyone replicating can swap Container Apps for App Service, ACR for GHCR, etc., without touching the application code.

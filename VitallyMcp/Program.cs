@@ -10,8 +10,8 @@ builder.Services.AddOptions<VitallyServerOptions>()
     .Bind(builder.Configuration.GetSection(VitallyServerOptions.SectionName))
     .PostConfigure(o => o.Validate());
 
-builder.Services.AddOptions<EntraOptions>()
-    .Bind(builder.Configuration.GetSection(EntraOptions.SectionName));
+builder.Services.AddOptions<OAuthOptions>()
+    .Bind(builder.Configuration.GetSection(OAuthOptions.SectionName));
 
 builder.Services.AddMemoryCache();
 
@@ -28,16 +28,16 @@ builder.Services.AddTransient<VitallyRateLimitHandler>();
 builder.Services.AddHttpClient<VitallyService>()
     .AddHttpMessageHandler<VitallyRateLimitHandler>();
 
-var entraSection = builder.Configuration.GetSection(EntraOptions.SectionName);
-var noAuth = entraSection.GetValue<bool>("NoAuth");
+var oauthSection = builder.Configuration.GetSection(OAuthOptions.SectionName);
+var noAuth = oauthSection.GetValue<bool>("NoAuth");
 
 if (!noAuth)
 {
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = entraSection["Authority"];
-            options.Audience = entraSection["Audience"];
+            options.Authority = oauthSection["Authority"];
+            options.Audience = oauthSection["Audience"];
         });
     builder.Services.AddAuthorization();
 }
@@ -58,9 +58,9 @@ else
     app.UseAuthorization();
 }
 
-app.MapGet("/.well-known/oauth-protected-resource", (IOptions<EntraOptions> entra) =>
+app.MapGet("/.well-known/oauth-protected-resource", (IOptions<OAuthOptions> oauth) =>
 {
-    var o = entra.Value;
+    var o = oauth.Value;
     var resource = string.IsNullOrWhiteSpace(o.Resource) ? o.Audience : o.Resource;
     return Results.Json(new
     {
