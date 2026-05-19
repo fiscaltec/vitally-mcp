@@ -13,7 +13,7 @@ public class VitallyServerOptions
 
     public string? KeyVaultUri { get; set; }
 
-    public string SecretRefClaim { get; set; } = "https://vitally-mcp.fiscaltec.com/secret_ref";
+    public string SecretRefClaim { get; set; } = "https://vitally.fiscaltec.com/secret_ref";
 
     public string DefaultSecretRef { get; set; } = "vitally-shared";
 

@@ -21,7 +21,7 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 Point your MCP client at:
 
 ```
-https://vitally-mcp.fiscaltec.com/mcp
+https://vitally.fiscaltec.com/mcp
 ```
 
 The first time you connect, your client will redirect you through Auth0 to authenticate. Once authenticated, the server exchanges your identity for a Vitally API key and proxies your tool calls to Vitally.
@@ -33,7 +33,7 @@ Settings → Connectors → Add custom connector → paste the URL above. Approv
 ### Claude Code
 
 ```powershell
-claude mcp add --transport http vitally https://vitally-mcp.fiscaltec.com/mcp
+claude mcp add --transport http vitally https://vitally.fiscaltec.com/mcp
 ```
 
 Run any MCP-using command (`claude` itself, or `/mcp`) and Claude Code will open the Auth0 sign-in flow on first use.
@@ -51,12 +51,12 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Vitally:Region` | No | `EU` | Data centre: `EU` (single shared host `rest.vitally-eu.io`) or `US` (per-tenant `{subdomain}.rest.vitally.io`). Case-insensitive. |
 | `Vitally:Subdomain` | Only when `Region=US` | — | Vitally subdomain, e.g. `fiscaltec` from `fiscaltec.vitally.io`. Ignored on EU. |
 | `Vitally:KeyVaultUri` | Yes (prod) | — | Azure Key Vault URI, e.g. `https://kv-vitally-mcp.vault.azure.net/`. The server's managed identity must have **Key Vault Secrets User** on it. |
-| `Vitally:SecretRefClaim` | No | `https://vitally-mcp.fiscaltec.com/secret_ref` | Custom JWT claim that identifies which Key Vault secret to fetch for the authenticated user. |
+| `Vitally:SecretRefClaim` | No | `https://vitally.fiscaltec.com/secret_ref` | Custom JWT claim that identifies which Key Vault secret to fetch for the authenticated user. |
 | `Vitally:DefaultSecretRef` | No | `vitally-shared` | Secret name to use when the claim is missing on the token. |
 | `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for resolved API keys. |
 | `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
 | `Auth0:Authority` | Yes | — | Auth0 tenant issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
-| `Auth0:Audience` | Yes | — | The Resource Server identifier configured in Auth0, e.g. `https://vitally-mcp.fiscaltec.com`. |
+| `Auth0:Audience` | Yes | — | The Resource Server identifier configured in Auth0, e.g. `https://vitally.fiscaltec.com`. |
 | `Auth0:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
 
 See [`VitallyMcp/appsettings.Example.json`](VitallyMcp/appsettings.Example.json) for the full layout.

@@ -58,12 +58,12 @@ Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'appl
 
 ## Installing for End Users
 
-FISCAL employees point their MCP client at `https://vitally-mcp.fiscaltec.com/mcp`. The client handles the Auth0 OAuth flow automatically on first use via the protected-resource metadata document.
+FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the Auth0 OAuth flow automatically on first use via the protected-resource metadata document.
 
 | Client | How to connect |
 |---|---|
 | Claude Desktop | Settings → Connectors → Add custom connector → paste the URL |
-| Claude Code | `claude mcp add --transport http vitally https://vitally-mcp.fiscaltec.com/mcp` |
+| Claude Code | `claude mcp add --transport http vitally https://vitally.fiscaltec.com/mcp` |
 | VS Code / Cursor / other | Add an MCP server entry pointing at the URL; client handles OAuth |
 
 To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
@@ -91,7 +91,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `Region` — `EU` (default) or `US`. Validated at startup.
 - `Subdomain` — required only when `Region=US`.
 - `KeyVaultUri` — Azure Key Vault URI. When unset, the server requires `DevelopmentApiKey` instead (local dev only).
-- `SecretRefClaim` — JWT claim name carrying the secret reference (default `https://vitally-mcp.fiscaltec.com/secret_ref`).
+- `SecretRefClaim` — JWT claim name carrying the secret reference (default `https://vitally.fiscaltec.com/secret_ref`).
 - `DefaultSecretRef` — secret name to fetch when the claim is missing on the token (default `vitally-shared`).
 - `SecretCacheDuration` — TTL for the in-memory API key cache (default 5 min).
 - `DevelopmentApiKey` — local-only fallback used when `KeyVaultUri` is unset.
@@ -99,7 +99,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 
 `Auth0Options` (singleton, bound from `Auth0:` section):
 - `Authority` — issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
-- `Audience` — the Auth0 Resource Server identifier, e.g. `https://vitally-mcp.fiscaltec.com`.
+- `Audience` — the Auth0 Resource Server identifier, e.g. `https://vitally.fiscaltec.com`.
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
 
 ### Per-request API key resolution (VitallyApiKeyProvider.cs)
@@ -299,12 +299,12 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0**, with
 
 | Component | Resource | Notes |
 |---|---|---|
-| Hosting | Azure Container Apps (consumption plan) | Scale-to-zero; HTTPS-native ingress; managed cert on `vitally-mcp.fiscaltec.com` |
+| Hosting | Azure Container Apps (consumption plan) | Scale-to-zero; HTTPS-native ingress; managed cert on `vitally.fiscaltec.com` |
 | Secrets | Azure Key Vault | `vitally-shared` is the default secret name; managed identity has `Key Vault Secrets User` |
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Basic SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally-mcp.fiscaltec.com`; post-login Action injects the `secret_ref` claim |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com`; post-login Action injects the `secret_ref` claim |
 | CI/CD | GitHub Actions → OIDC federation → Azure | No long-lived secrets in GitHub |
 
 The Bicep / `azd` templates that capture this deployment land in `infra/` once verified end-to-end. They're a worked example rather than a hard contract — anyone replicating can swap Container Apps for App Service, ACR for GHCR, etc., without touching the application code.
