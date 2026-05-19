@@ -61,9 +61,10 @@ else
 app.MapGet("/.well-known/oauth-protected-resource", (IOptions<EntraOptions> entra) =>
 {
     var o = entra.Value;
+    var resource = string.IsNullOrWhiteSpace(o.Resource) ? o.Audience : o.Resource;
     return Results.Json(new
     {
-        resource = o.Audience,
+        resource,
         authorization_servers = new[] { o.Authority?.TrimEnd('/') },
         bearer_methods_supported = new[] { "header" }
     });
