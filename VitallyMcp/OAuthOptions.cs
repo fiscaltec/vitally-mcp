@@ -33,4 +33,15 @@ public class OAuthOptions
     /// When true, JWT authentication is skipped. Local development only — never enable in production.
     /// </summary>
     public bool NoAuth { get; set; }
+
+    /// <summary>
+    /// OAuth client_id of a pre-registered Auth0 native application that all MCP clients share.
+    /// When set, the server intercepts RFC 7591 Dynamic Client Registration calls and returns this
+    /// client_id to every caller — eliminating per-session client proliferation in Auth0 and the
+    /// per-session manual API-grant clicks that DCR third-party clients otherwise require.
+    /// The pre-registered Auth0 app must be native/public, first-party, with redirect URI
+    /// <c>http://localhost</c> (loopback pattern matches any port), and have a client_grant on
+    /// the Vitally MCP API. Leave empty to fall through to Auth0's native DCR endpoint.
+    /// </summary>
+    public string SharedClientId { get; set; } = string.Empty;
 }
