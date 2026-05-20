@@ -17,14 +17,8 @@ public class VitallyServiceTests
     private VitallyService CreateService(HttpClient httpClient)
     {
         // Explicit US region so the subdomain-in-URL assertions below still hold.
-        // EU is the default region; tests that exercise EU build their own VitallyConfig.
-        var config = new VitallyConfig
-        {
-            Subdomain = TestSubdomain,
-            ApiKey = TestApiKey,
-            Region = VitallyConfig.RegionUs
-        };
-        return new VitallyService(httpClient, config);
+        // EU is the default region; tests that exercise EU build their own options.
+        return TestHelpers.BuildVitallyService(httpClient, region: "US", subdomain: TestSubdomain, apiKey: TestApiKey);
     }
 
     #region Default Field Tests
@@ -845,13 +839,7 @@ public class VitallyServiceTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
-        var config = new VitallyConfig
-        {
-            Subdomain = "ignored-on-eu",
-            ApiKey = TestApiKey,
-            Region = VitallyConfig.RegionEu
-        };
-        var service = new VitallyService(client, config);
+        var service = TestHelpers.BuildVitallyService(client, region: "EU", subdomain: "ignored-on-eu", apiKey: TestApiKey);
 
         // Act
         await service.GetResourcesAsync("accounts");
@@ -871,13 +859,7 @@ public class VitallyServiceTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
-        var config = new VitallyConfig
-        {
-            Subdomain = "tenant-x",
-            ApiKey = TestApiKey,
-            Region = VitallyConfig.RegionUs
-        };
-        var service = new VitallyService(client, config);
+        var service = TestHelpers.BuildVitallyService(client, region: "US", subdomain: "tenant-x", apiKey: TestApiKey);
 
         // Act
         await service.GetResourcesAsync("accounts");
