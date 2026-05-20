@@ -153,6 +153,10 @@ app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, I
     foreach (var kv in query)
     {
         if (kv.Key == "redirect_uri") continue;
+        // Strip `prompt` — some MCP clients send `prompt=consent` which forces Auth0 to
+        // re-prompt every session even when a user_grant already exists. Without prompt=*
+        // Auth0 honours the cached grant and silently issues an authorization code.
+        if (kv.Key == "prompt") continue;
         foreach (var v in kv.Value)
         {
             sb.Append(Uri.EscapeDataString(kv.Key)).Append('=').Append(Uri.EscapeDataString(v ?? string.Empty)).Append('&');
