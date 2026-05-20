@@ -9,10 +9,10 @@ using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// PostConfigure + a forced IOptions resolution after build() gives us fail-fast startup
-// validation without the boilerplate of a separate IValidateOptions implementation. If
-// Validate() throws, the app crashes immediately after Build() rather than serving
-// requests with bad config.
+// PostConfigure + a forced IOptions resolution after WebApplicationBuilder.Build() gives
+// us fail-fast startup validation without the boilerplate of a separate IValidateOptions
+// implementation. If Validate() throws, the app crashes immediately after Build() rather
+// than serving requests with bad config.
 builder.Services.AddOptions<VitallyServerOptions>()
     .Bind(builder.Configuration.GetSection(VitallyServerOptions.SectionName))
     .PostConfigure(o => o.Validate());
