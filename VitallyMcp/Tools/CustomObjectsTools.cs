@@ -46,12 +46,16 @@ public static class CustomObjectsTools
         [Description("Comma-separated list of fields to include. Defaults to: id,createdAt,updatedAt. Client-side filtering.")] string? fields = null)
     {
         // Parse search query (key=value pairs separated by &) into a parameter dictionary.
-        // Malformed pairs (anything without exactly one '=') are silently dropped.
-        var additionalParams = searchQuery
-            .Split('&')
-            .Select(part => part.Split('=', 2))
-            .Where(kv => kv.Length == 2)
-            .ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim());
+        // - Split on the first '=' so values can themselves contain '=' (e.g. a=b=c -> key "a", value "b=c").
+        // - Pairs without an '=' are silently dropped.
+        // - Duplicate keys: last value wins, matching typical lenient URL-form parsing.
+        var additionalParams = new Dictionary<string, string>();
+        foreach (var part in searchQuery.Split('&'))
+        {
+            var keyValue = part.Split('=', 2);
+            if (keyValue.Length != 2) continue;
+            additionalParams[keyValue[0].Trim()] = keyValue[1].Trim();
+        }
 
         return await vitallyService.GetResourcesAsync($"customObjects/{customObjectId}/instances/search", 100, null, fields, null, additionalParams, null);
     }

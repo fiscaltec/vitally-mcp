@@ -11,7 +11,7 @@ namespace VitallyMcp.Tests;
 /// HttpMessageHandler so each test can stage a sequence of responses (e.g. 429 then 200).
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
-    Justification = "Test class — HttpClient and HttpResponseMessage instances created here are owned by the test method invocation and live only for its duration. Adding explicit disposal would obscure the test setup without changing real-world behaviour (xUnit isolates tests in their own process).")]
+    Justification = "Test class — HttpClient and HttpResponseMessage instances created here are scoped to a single test method invocation and become eligible for garbage collection as soon as the test returns. The leaked sockets/timers don't accumulate across the test suite because the process exits after the run. Adding explicit disposal would obscure the test setup without changing real behaviour.")]
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
     Justification = "Test class — see CA2000 suppression above.")]
 public class VitallyRateLimitHandlerTests
