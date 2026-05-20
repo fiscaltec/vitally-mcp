@@ -14,7 +14,8 @@ builder.Services.AddOptions<VitallyServerOptions>()
     .PostConfigure(o => o.Validate());
 
 builder.Services.AddOptions<OAuthOptions>()
-    .Bind(builder.Configuration.GetSection(OAuthOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(OAuthOptions.SectionName))
+    .PostConfigure(o => o.Validate());
 
 builder.Services.AddMemoryCache();
 
@@ -51,10 +52,14 @@ builder.Services.AddMcpServer()
 
 // Honour X-Forwarded-Proto / X-Forwarded-Host from Container Apps ingress so absolute URLs
 // (issuer, registration_endpoint, etc.) emit the public https scheme rather than the
-// internal http scheme the container sees.
+// internal http scheme the container sees. KnownNetworks/KnownProxies are cleared because
+// the ACA ingress hop isn't on the default loopback-only trust list — and we don't know
+// the ingress IP range in advance. ForwardLimit=1 bounds the trust to exactly one hop
+// (the ingress), so a client can't smuggle a second X-Forwarded-* through.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedFor;
+    options.ForwardLimit = 1;
     options.KnownNetworks.Clear();
     options.KnownProxies.Clear();
 });

@@ -39,6 +39,18 @@ public class VitallyServerOptions
                 "Vitally:Subdomain is required when Vitally:Region is 'US'.");
         }
 
+        KeyVaultUri = KeyVaultUri?.Trim();
+        DevelopmentApiKey = DevelopmentApiKey?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(KeyVaultUri))
+        {
+            if (!Uri.TryCreate(KeyVaultUri, UriKind.Absolute, out var vaultUri) || vaultUri.Scheme != Uri.UriSchemeHttps)
+            {
+                throw new InvalidOperationException(
+                    $"Vitally:KeyVaultUri must be an absolute https URI (got '{KeyVaultUri}').");
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(KeyVaultUri) && string.IsNullOrWhiteSpace(DevelopmentApiKey))
         {
             throw new InvalidOperationException(

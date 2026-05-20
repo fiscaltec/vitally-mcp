@@ -52,4 +52,40 @@ public class OAuthOptions
     /// secret to MCP clients. Optional: leave empty for public-client mode (consent screen will show).
     /// </summary>
     public string SharedClientSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>
+    /// so misconfiguration surfaces at startup rather than at the first failed token validation.
+    /// </summary>
+    public void Validate()
+    {
+        Authority = Authority?.Trim() ?? string.Empty;
+        Audience = Audience?.Trim() ?? string.Empty;
+        Resource = Resource?.Trim() ?? string.Empty;
+        SharedClientId = SharedClientId?.Trim() ?? string.Empty;
+        SharedClientSecret = SharedClientSecret?.Trim() ?? string.Empty;
+
+        if (NoAuth)
+        {
+            // Dev-mode bypass; remaining fields not required.
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Authority))
+        {
+            throw new InvalidOperationException("OAuth:Authority is required when OAuth:NoAuth is false.");
+        }
+        if (!Uri.TryCreate(Authority, UriKind.Absolute, out var authorityUri) || authorityUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException($"OAuth:Authority must be an absolute https URI (got '{Authority}').");
+        }
+        if (string.IsNullOrWhiteSpace(Audience))
+        {
+            throw new InvalidOperationException("OAuth:Audience is required when OAuth:NoAuth is false.");
+        }
+        if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
+        {
+            throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
+        }
+    }
 }
