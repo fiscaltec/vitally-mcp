@@ -54,8 +54,10 @@ public class OAuthOptions
     public string SharedClientSecret { get; set; } = string.Empty;
 
     /// <summary>
-    /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>
-    /// so misconfiguration surfaces at startup rather than at the first failed token validation.
+    /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>,
+    /// then triggered immediately after <c>builder.Build()</c> by resolving
+    /// <c>IOptions&lt;OAuthOptions&gt;</c>, so misconfiguration throws at startup rather than at
+    /// the first failed token validation.
     /// </summary>
     public void Validate()
     {

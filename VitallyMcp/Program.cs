@@ -9,6 +9,10 @@ using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// PostConfigure + a forced IOptions resolution after build() gives us fail-fast startup
+// validation without the boilerplate of a separate IValidateOptions implementation. If
+// Validate() throws, the app crashes immediately after Build() rather than serving
+// requests with bad config.
 builder.Services.AddOptions<VitallyServerOptions>()
     .Bind(builder.Configuration.GetSection(VitallyServerOptions.SectionName))
     .PostConfigure(o => o.Validate());
@@ -19,11 +23,17 @@ builder.Services.AddOptions<OAuthOptions>()
 
 builder.Services.AddMemoryCache();
 
+// SecretClient registration uses the *validated* options (via IOptions) rather than raw
+// config, so trimmed/URI-checked KeyVaultUri is what's constructed. Conditional on the
+// raw config being present so the registration only fires when KV is actually configured.
 var vitallySection = builder.Configuration.GetSection(VitallyServerOptions.SectionName);
-var keyVaultUri = vitallySection["KeyVaultUri"];
-if (!string.IsNullOrWhiteSpace(keyVaultUri))
+if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 {
-    builder.Services.AddSingleton(new SecretClient(new Uri(keyVaultUri), new DefaultAzureCredential()));
+    builder.Services.AddSingleton(sp =>
+    {
+        var opts = sp.GetRequiredService<IOptions<VitallyServerOptions>>().Value;
+        return new SecretClient(new Uri(opts.KeyVaultUri!), new DefaultAzureCredential());
+    });
 }
 
 builder.Services.AddScoped<VitallyApiKeyProvider>();
@@ -52,10 +62,19 @@ builder.Services.AddMcpServer()
 
 // Honour X-Forwarded-Proto / X-Forwarded-Host from Container Apps ingress so absolute URLs
 // (issuer, registration_endpoint, etc.) emit the public https scheme rather than the
-// internal http scheme the container sees. KnownNetworks/KnownProxies are cleared because
-// the ACA ingress hop isn't on the default loopback-only trust list — and we don't know
-// the ingress IP range in advance. ForwardLimit=1 bounds the trust to exactly one hop
-// (the ingress), so a client can't smuggle a second X-Forwarded-* through.
+// internal http scheme the container sees.
+//
+// Trust model: the container is not directly reachable from the public internet — the
+// Container Apps ingress is the only path in, and it overwrites/normalises the
+// X-Forwarded-* headers from clients before forwarding. So we trust those headers
+// implicitly via network isolation, not via authentication of the headers themselves.
+// KnownNetworks/KnownProxies are cleared because we don't know the ACA ingress IP range
+// statically. ForwardLimit=1 is defence-in-depth: it limits how many entries the
+// middleware will process, preventing client-supplied chained headers from being honoured
+// even if the ingress ever stops normalising them. If this app ever became reachable
+// outside of an ingress (e.g. via private endpoint exposure), this configuration would
+// need to tighten — either via KnownNetworks pinning or by removing ForwardedHeaders
+// support entirely.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedFor;
@@ -65,6 +84,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 var app = builder.Build();
+
+// Fail-fast: force resolution of bound + PostConfigured options now so misconfiguration
+// throws at startup rather than at first request.
+_ = app.Services.GetRequiredService<IOptions<VitallyServerOptions>>().Value;
+_ = app.Services.GetRequiredService<IOptions<OAuthOptions>>().Value;
 
 app.UseForwardedHeaders();
 
