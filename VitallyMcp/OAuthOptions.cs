@@ -44,4 +44,12 @@ public class OAuthOptions
     /// the Vitally MCP API. Leave empty to fall through to Auth0's native DCR endpoint.
     /// </summary>
     public string SharedClientId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Client secret of the SharedClientId application. Injected server-side by the OAuth proxy's
+    /// /oauth/token endpoint when forwarding token requests upstream — so the shared Auth0 app can
+    /// be a confidential client (verifiable first-party = skip consent screen) without exposing the
+    /// secret to MCP clients. Optional: leave empty for public-client mode (consent screen will show).
+    /// </summary>
+    public string SharedClientSecret { get; set; } = string.Empty;
 }

@@ -127,3 +127,6 @@ appsettings.*.json
 # OS junk
 ehthumbs.db
 [Dd]esktop.ini
+
+# Auth0 credentials
+.auth0-shared-credentials.env
