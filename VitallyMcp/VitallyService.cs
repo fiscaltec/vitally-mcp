@@ -66,19 +66,22 @@ public class VitallyService
 
     public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
     {
+        // URL-encode keys and values to handle spaces, ampersands, equals signs etc. in
+        // user-supplied filter values (e.g. customFieldValue="Acme Corp"). The Vitally REST
+        // API treats query strings as standard application/x-www-form-urlencoded.
         var queryParams = new List<string> { $"limit={limit}" };
 
         if (!string.IsNullOrEmpty(from))
-            queryParams.Add($"from={from}");
+            queryParams.Add($"from={Uri.EscapeDataString(from)}");
 
         if (!string.IsNullOrEmpty(sortBy))
-            queryParams.Add($"sortBy={sortBy}");
+            queryParams.Add($"sortBy={Uri.EscapeDataString(sortBy)}");
 
         if (additionalParams != null)
         {
             foreach (var param in additionalParams)
             {
-                queryParams.Add($"{param.Key}={param.Value}");
+                queryParams.Add($"{Uri.EscapeDataString(param.Key)}={Uri.EscapeDataString(param.Value)}");
             }
         }
 

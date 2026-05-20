@@ -33,6 +33,8 @@ public class VitallyServerOptions
         }
         Region = region;
 
+        Subdomain = Subdomain?.Trim();
+
         if (region == RegionUs && string.IsNullOrWhiteSpace(Subdomain))
         {
             throw new InvalidOperationException(

@@ -48,11 +48,18 @@ var noAuth = oauthSection.GetValue<bool>("NoAuth");
 if (!noAuth)
 {
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
+        .AddJwtBearer();
+
+    // Configure JwtBearer from the *validated* OAuthOptions (trimmed/URI-checked by
+    // OAuthOptions.Validate) rather than the raw IConfiguration values. This guarantees
+    // that what JwtBearer sees matches what passed validation.
+    builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+        .Configure<IOptions<OAuthOptions>>((jwt, oauth) =>
         {
-            options.Authority = oauthSection["Authority"];
-            options.Audience = oauthSection["Audience"];
+            jwt.Authority = oauth.Value.Authority;
+            jwt.Audience = oauth.Value.Audience;
         });
+
     builder.Services.AddAuthorization();
 }
 
