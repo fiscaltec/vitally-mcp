@@ -230,6 +230,10 @@ public class VitallyService
         writer.WriteEndObject();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1860",
+        Justification = "JsonElement.TryGetProperty uses an out parameter that LINQ Where cannot expose without a redundant second call. The explicit foreach is clearer and more efficient than the LINQ rewrite.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
+        Justification = "Same as above — TryGetProperty out parameter pattern.")]
     private static void WriteFilteredFields(Utf8JsonWriter writer, JsonElement element, string[] fields, string[]? requestedTraits)
     {
         foreach (var field in fields)
@@ -250,6 +254,8 @@ public class VitallyService
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
+        Justification = "JsonElement.TryGetProperty out parameter doesn't translate to LINQ Where without a redundant second call.")]
     private static void WriteFilteredTraits(Utf8JsonWriter writer, JsonElement traitsElement, string[] requestedTraits)
     {
         writer.WriteStartObject();

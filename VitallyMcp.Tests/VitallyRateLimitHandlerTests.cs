@@ -10,6 +10,10 @@ namespace VitallyMcp.Tests;
 /// Tests for the VitallyRateLimitHandler delegating handler. Drives an inner queueable
 /// HttpMessageHandler so each test can stage a sequence of responses (e.g. 429 then 200).
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+    Justification = "Test class — HttpClient and HttpResponseMessage instances created here are owned by the test method invocation and live only for its duration. Adding explicit disposal would obscure the test setup without changing real-world behaviour (xUnit isolates tests in their own process).")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+    Justification = "Test class — see CA2000 suppression above.")]
 public class VitallyRateLimitHandlerTests
 {
     /// <summary>

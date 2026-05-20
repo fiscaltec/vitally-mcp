@@ -45,17 +45,13 @@ public static class CustomObjectsTools
         [Description("Search criteria as query parameters (e.g., id, externalId, customerId, organizationId, customFieldId, customFieldValue)")] string searchQuery,
         [Description("Comma-separated list of fields to include. Defaults to: id,createdAt,updatedAt. Client-side filtering.")] string? fields = null)
     {
-        var additionalParams = new Dictionary<string, string>();
-        // Parse search query into parameters
-        var queryParts = searchQuery.Split('&');
-        foreach (var part in queryParts)
-        {
-            var keyValue = part.Split('=');
-            if (keyValue.Length == 2)
-            {
-                additionalParams[keyValue[0].Trim()] = keyValue[1].Trim();
-            }
-        }
+        // Parse search query (key=value pairs separated by &) into a parameter dictionary.
+        // Malformed pairs (anything without exactly one '=') are silently dropped.
+        var additionalParams = searchQuery
+            .Split('&')
+            .Select(part => part.Split('=', 2))
+            .Where(kv => kv.Length == 2)
+            .ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim());
 
         return await vitallyService.GetResourcesAsync($"customObjects/{customObjectId}/instances/search", 100, null, fields, null, additionalParams, null);
     }
