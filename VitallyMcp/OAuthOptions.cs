@@ -67,24 +67,35 @@ public class OAuthOptions
         SharedClientId = SharedClientId?.Trim() ?? string.Empty;
         SharedClientSecret = SharedClientSecret?.Trim() ?? string.Empty;
 
-        if (NoAuth)
+        // The OAuth proxy endpoints (/oauth/authorize, /oauth/token, /.well-known/*)
+        // use Authority to build upstream URLs even when JWT validation is skipped, so
+        // Authority is required whenever the proxy is enabled — including NoAuth dev mode.
+        var proxyEnabled = !string.IsNullOrWhiteSpace(SharedClientId);
+
+        if (NoAuth && !proxyEnabled)
         {
-            // Dev-mode bypass; remaining fields not required.
+            // Dev-mode bypass with no proxy: nothing else to validate.
             return;
         }
 
         if (string.IsNullOrWhiteSpace(Authority))
         {
-            throw new InvalidOperationException("OAuth:Authority is required when OAuth:NoAuth is false.");
+            throw new InvalidOperationException(
+                NoAuth
+                    ? "OAuth:Authority is required when OAuth:SharedClientId is set — the OAuth proxy uses it to build upstream URLs."
+                    : "OAuth:Authority is required when OAuth:NoAuth is false.");
         }
         if (!Uri.TryCreate(Authority, UriKind.Absolute, out var authorityUri) || authorityUri.Scheme != Uri.UriSchemeHttps)
         {
             throw new InvalidOperationException($"OAuth:Authority must be an absolute https URI (got '{Authority}').");
         }
-        if (string.IsNullOrWhiteSpace(Audience))
+
+        // Audience is only used by JwtBearer, which is skipped when NoAuth=true.
+        if (!NoAuth && string.IsNullOrWhiteSpace(Audience))
         {
             throw new InvalidOperationException("OAuth:Audience is required when OAuth:NoAuth is false.");
         }
+
         if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
         {
             throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");

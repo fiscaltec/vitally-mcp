@@ -43,12 +43,22 @@ public class VitallyServerOptions
 
         KeyVaultUri = KeyVaultUri?.Trim();
         DevelopmentApiKey = DevelopmentApiKey?.Trim();
+        DefaultSecretRef = DefaultSecretRef?.Trim() ?? string.Empty;
 
         if (!string.IsNullOrWhiteSpace(KeyVaultUri)
             && (!Uri.TryCreate(KeyVaultUri, UriKind.Absolute, out var vaultUri) || vaultUri.Scheme != Uri.UriSchemeHttps))
         {
             throw new InvalidOperationException(
                 $"Vitally:KeyVaultUri must be an absolute https URI (got '{KeyVaultUri}').");
+        }
+
+        // Without a non-empty secret name, VitallyApiKeyProvider would later call
+        // SecretClient.GetSecretAsync("") and fail at first use. Required only when
+        // Key Vault is actually in play (dev mode uses DevelopmentApiKey directly).
+        if (!string.IsNullOrWhiteSpace(KeyVaultUri) && string.IsNullOrWhiteSpace(DefaultSecretRef))
+        {
+            throw new InvalidOperationException(
+                "Vitally:DefaultSecretRef cannot be empty when Vitally:KeyVaultUri is set.");
         }
 
         if (string.IsNullOrWhiteSpace(KeyVaultUri) && string.IsNullOrWhiteSpace(DevelopmentApiKey))
