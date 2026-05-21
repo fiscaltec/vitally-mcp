@@ -205,6 +205,15 @@ public class OAuthOptions
             var incomingPath = uri.AbsolutePath.TrimEnd('/');
             var allowedPath = allowedUri.AbsolutePath.TrimEnd('/');
 
+            // Special-case root-path entries: TrimEnd reduces "/" to "" for both sides, and
+            // the StartsWith("" + "/") check below would then match every path on the host —
+            // turning a "https://example.com" allowlist entry into an unintended wildcard.
+            // Require an exact root match in that case (incoming path also empty/root).
+            if (allowedPath.Length == 0)
+            {
+                return incomingPath.Length == 0;
+            }
+
             return incomingPath.Equals(allowedPath, StringComparison.Ordinal)
                 || incomingPath.StartsWith(allowedPath + "/", StringComparison.Ordinal);
         });

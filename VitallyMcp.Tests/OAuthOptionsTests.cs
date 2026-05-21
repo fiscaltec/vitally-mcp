@@ -130,6 +130,33 @@ public class OAuthOptionsTests
         options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("https://example.com", "https://example.com")]
+    [InlineData("https://example.com", "https://example.com/")]
+    [InlineData("https://example.com/", "https://example.com")]
+    public void IsRedirectUriAllowed_RootPathEntry_MatchesOnlyRoot(string allowed, string redirectUri)
+    {
+        // Regression guard: a root-path allowlist entry must not become a wildcard. After
+        // TrimEnd('/'), the path on both sides reduces to "", and the path-segment prefix
+        // check would match every path on the host without the explicit root special case.
+        var options = ValidOptions([allowed]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("https://example.com/anything")]
+    [InlineData("https://example.com/api/mcp/auth_callback")]
+    [InlineData("https://example.com/admin")]
+    public void IsRedirectUriAllowed_RootPathEntry_DoesNotWildcardOtherPaths(string redirectUri)
+    {
+        // The exploit Copilot flagged: with allowed="https://example.com", the path-segment
+        // prefix check used to accept any subpath as a match. It must not.
+        var options = ValidOptions(["https://example.com"]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
+    }
+
     [Fact]
     public void IsRedirectUriAllowed_EmptyOrWhitespace_Rejected()
     {
