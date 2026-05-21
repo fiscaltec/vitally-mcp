@@ -60,9 +60,27 @@ public class VitallyService
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            // EnsureSuccessStatusCode discards the response body, but Vitally returns the
+            // actual failure reason in the body (e.g. {"message": "externalId is required"}).
+            // Surfacing it gives the LLM something concrete to act on instead of "Response
+            // status code does not indicate success".
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            var statusCode = response.StatusCode;
+            var reason = response.ReasonPhrase;
+            response.Dispose();
+            var bodySnippet = string.IsNullOrWhiteSpace(body) ? "(empty body)" : Truncate(body, 1024);
+            throw new HttpRequestException(
+                $"Vitally API returned {(int)statusCode} {reason} for {method} {url}. Body: {bodySnippet}",
+                inner: null,
+                statusCode: statusCode);
+        }
         return response;
     }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "…(truncated)";
 
     public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
     {

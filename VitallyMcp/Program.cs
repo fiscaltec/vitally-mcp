@@ -86,7 +86,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedFor;
     options.ForwardLimit = 1;
-    options.KnownNetworks.Clear();
+    // KnownIPNetworks replaces the legacy KnownNetworks per ASPDEPR005 (.NET 10).
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
 
@@ -179,6 +180,17 @@ app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, I
     if (string.IsNullOrWhiteSpace(clientRedirectUri) || string.IsNullOrWhiteSpace(state))
     {
         return Results.BadRequest(new { error = "invalid_request", error_description = "Missing redirect_uri or state" });
+    }
+
+    // Without this check, /oauth/callback would happily redirect victims to any attacker-
+    // supplied URL with the authorisation code in the query string — and because we replace
+    // the upstream redirect_uri with our own fixed callback, Auth0's own allowlist offers
+    // no protection (every redirect_uri passes there). Loopback any-port is allowed per RFC
+    // 8252 §7.3 (Claude Code, VS Code, Cursor, MCP Inspector); cloud-hosted MCP callbacks
+    // must be listed in OAuth:AllowedClientRedirectUris.
+    if (!o.IsRedirectUriAllowed(clientRedirectUri))
+    {
+        return Results.BadRequest(new { error = "invalid_request", error_description = "redirect_uri is not allowed" });
     }
 
     cache.Set($"oauth-proxy:state:{state}", clientRedirectUri, TimeSpan.FromMinutes(10));
@@ -301,10 +313,22 @@ app.MapPost("/oauth/register", async (HttpContext ctx, IOptions<OAuthOptions> oa
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Select(s => s!)
                 .ToArray();
-            if (uris.Length > 0) redirectUris = uris;
+            // Echo back only redirect_uris that the proxy would actually accept on /authorize.
+            // Letting a non-allowed URI through here would mislead well-behaved clients into
+                // configuring a redirect that we'd then reject at the authorize step.
+            var accepted = uris.Where(o.IsRedirectUriAllowed).ToArray();
+            if (accepted.Length == 0 && uris.Length > 0)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "invalid_redirect_uri",
+                    error_description = "None of the requested redirect_uris are permitted by this server."
+                });
+            }
+            if (accepted.Length > 0) redirectUris = accepted;
         }
     }
-    catch
+    catch (JsonException)
     {
         // Tolerate clients that send empty or malformed bodies — they still get the static client_id back.
     }

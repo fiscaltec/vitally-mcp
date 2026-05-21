@@ -54,6 +54,17 @@ public class OAuthOptions
     public string SharedClientSecret { get; set; } = string.Empty;
 
     /// <summary>
+    /// Allowlist of non-loopback redirect URIs that the OAuth proxy will accept on
+    /// <c>/oauth/authorize</c> and <c>/oauth/register</c>. Loopback URIs (<c>http://localhost</c>,
+    /// <c>http://127.0.0.1</c>, <c>http://[::1]</c>) on any port are always accepted per RFC 8252
+    /// §7.3 — those don't need to be listed. Add cloud-hosted MCP callbacks here, e.g.
+    /// <c>https://claude.ai/api/mcp/auth_callback</c>.
+    /// Empty by default — set explicitly when a hosted MCP client (not a local app) needs to
+    /// complete the flow. Without the allowlist, only local clients can authenticate.
+    /// </summary>
+    public string[] AllowedClientRedirectUris { get; set; } = [];
+
+    /// <summary>
     /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>,
     /// then triggered immediately after <c>builder.Build()</c> by resolving
     /// <c>IOptions&lt;OAuthOptions&gt;</c>, so misconfiguration throws at startup rather than at
@@ -100,5 +111,73 @@ public class OAuthOptions
         {
             throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
         }
+
+        // Normalise the allowlist: trim, strip trailing slashes (we match by prefix below so
+        // both stored and incoming values need the same shape), and fail fast on invalid URIs
+        // rather than at first request.
+        AllowedClientRedirectUris = (AllowedClientRedirectUris ?? [])
+            .Select(u => u?.Trim() ?? string.Empty)
+            .Where(u => !string.IsNullOrWhiteSpace(u))
+            .Select(u => u.TrimEnd('/'))
+            .ToArray();
+
+        foreach (var entry in AllowedClientRedirectUris)
+        {
+            if (!Uri.TryCreate(entry, UriKind.Absolute, out var allowed)
+                || (allowed.Scheme != Uri.UriSchemeHttps && allowed.Scheme != Uri.UriSchemeHttp))
+            {
+                throw new InvalidOperationException(
+                    $"OAuth:AllowedClientRedirectUris entries must be absolute http/https URIs (got '{entry}').");
+            }
+        }
     }
+
+    /// <summary>
+    /// Returns true if <paramref name="redirectUri"/> is acceptable as an OAuth proxy redirect
+    /// target. Loopback URIs on any port are always allowed (RFC 8252 §7.3 covers MCP clients
+    /// like Claude Code, VS Code, Cursor that bind ephemeral local ports). Non-loopback URIs
+    /// must prefix-match an entry in <see cref="AllowedClientRedirectUris"/>.
+    /// </summary>
+    public bool IsRedirectUriAllowed(string redirectUri)
+    {
+        if (string.IsNullOrWhiteSpace(redirectUri))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        // RFC 8252 loopback redirect: http://localhost / 127.0.0.1 / [::1] on any port.
+        // Only http (not https) is the recognised scheme for loopback callbacks per the RFC,
+        // because native clients can't reasonably provision a TLS cert on localhost.
+        if (uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri.Host))
+        {
+            return true;
+        }
+
+        // Non-loopback: prefix-match against the configured allowlist. Prefix (rather than
+        // equality) lets a single entry like "https://claude.ai/api/mcp/auth_callback" cover
+        // the same URI with appended query/fragment that some clients add before redirecting.
+        var normalised = redirectUri.TrimEnd('/');
+        foreach (var allowed in AllowedClientRedirectUris)
+        {
+            if (normalised.Equals(allowed, StringComparison.OrdinalIgnoreCase)
+                || normalised.StartsWith(allowed + "/", StringComparison.OrdinalIgnoreCase)
+                || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host == "127.0.0.1"
+        || host == "[::1]"
+        || host == "::1";
 }

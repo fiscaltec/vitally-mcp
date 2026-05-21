@@ -57,6 +57,9 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `OAuth:Authority` | Yes | — | OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
 | `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. |
 | `OAuth:Resource` | No | — | Canonical resource identifier published in `/.well-known/oauth-protected-resource`. Falls back to `Audience` when blank; set explicitly when clients need the metadata `resource` to match the server's URL/origin (per RFC 9728 + RFC 8707 validators). |
+| `OAuth:SharedClientId` | No | — | Enables the OAuth proxy / DCR shim (see [OAuth proxy](#oauth-proxy) below). When set, every Dynamic Client Registration call returns this fixed Auth0 client_id, and the server proxies `/oauth/authorize` and `/oauth/token` to the upstream issuer. Leave empty to fall through to the upstream's native DCR. |
+| `OAuth:SharedClientSecret` | No | — | Confidential-client secret for `SharedClientId`. Injected server-side on token exchange so the shared Auth0 app can stay confidential without exposing the secret to MCP clients. |
+| `OAuth:AllowedClientRedirectUris` | No | `[]` | Allowlist of non-loopback `redirect_uri` values the OAuth proxy will accept. Loopback URIs (`http://localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252. Add cloud-hosted MCP callbacks here, e.g. `https://claude.ai/api/mcp/auth_callback`. |
 | `OAuth:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
 
 See [`VitallyMcp/appsettings.Example.json`](VitallyMcp/appsettings.Example.json) for the full layout.
@@ -102,7 +105,7 @@ Deploying your own instance for a different org or against a different Vitally t
 2. **An Azure Key Vault** (or compatible secret store; see the swap notes in [CLAUDE.md](CLAUDE.md)) containing your Vitally API key as a secret. Default secret name is `vitally-shared`; change via `Vitally:DefaultSecretRef`.
 3. **A container host** that can run the published Docker image. Anywhere ASP.NET Core 10 runs (Azure Container Apps, AWS App Runner, GCP Cloud Run, plain Kubernetes) — Container Apps is what FISCAL uses.
 
-The Bicep / `azd` templates that capture FISCAL's deployment will land in `infra/` once Phase 3 is complete and verified. They're a worked example, not the only shape that works.
+FISCAL's deployment uses Azure Container Apps + Azure Key Vault + Auth0 (which federates to Microsoft Entra for sign-in) — see the [Deployment](CLAUDE.md#deployment) section in `CLAUDE.md` for the shape. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code. Bicep / `azd` templates aren't shipped in this repo — the surface is small enough that the README description is the contract.
 
 ## Architecture
 
@@ -133,6 +136,21 @@ VitallyMcp/
 ```
 
 The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against the Auth0 tenant configured in `OAuth:Authority` / `OAuth:Audience`. On each tool call, `VitallyApiKeyProvider` fetches the `vitally-shared` secret from Key Vault (cached in-memory for 5 min, using the server's user-assigned managed identity), and `VitallyService` uses it to call Vitally on behalf of all authenticated users.
+
+### OAuth proxy
+
+When `OAuth:SharedClientId` is set the server runs an OAuth 2.0 proxy in front of the upstream Auth0 tenant. It serves:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 protected-resource metadata — clients use it to discover the authorisation server. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — points `authorization_endpoint` and `token_endpoint` at the proxy and `registration_endpoint` at our DCR shim. |
+| `GET /oauth/authorize` | Captures the client's `redirect_uri`, swaps it for our fixed `/oauth/callback`, and 302s the user upstream to Auth0. Validates the client `redirect_uri` against the loopback + allowlist rules before stashing. |
+| `GET /oauth/callback` | Receives the Auth0 redirect, looks up the original client `redirect_uri` from `state`, and 302s the user back to it with the code. |
+| `POST /oauth/token` | Forwards the code-exchange to Auth0 and injects `SharedClientSecret` so the shared app stays confidential without exposing the secret to MCP clients. |
+| `POST /oauth/register` | RFC 7591 Dynamic Client Registration shim — always returns `SharedClientId`, regardless of what the caller requests, so every MCP client converges on a single first-party Auth0 app. Echoes back only `redirect_uris` that the allowlist accepts. |
+
+This setup exists because MCP clients implement RFC 7591 (DCR) and RFC 8252 (loopback redirect with ephemeral ports), but Auth0 third-party DCR clients trigger a per-session API consent screen and don't natively accept arbitrary loopback ports. The proxy collapses everything onto one pre-registered "first-party" Auth0 app, skipping the consent and accepting any loopback port (Claude Code, VS Code, Cursor, MCP Inspector all rotate ports between sessions). To support hosted MCP clients (e.g. Claude.ai), add their callback URL to `OAuth:AllowedClientRedirectUris`.
 
 The `VitallyService` exposes two call patterns:
 1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
@@ -171,6 +189,7 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - Tokens are short-lived (8h access, with refresh rotation). The server keeps no session state; restart is transparent to clients.
 - Tools are tagged with `ReadOnly` and `Destructive` attributes so MCP clients can permission categories of operation in bulk.
 - HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
+- The OAuth proxy validates every client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus the implicit RFC 8252 loopback rule). Without this check, an attacker could exfiltrate authorisation codes via the proxy's `/oauth/callback` reflector; with it, the proxy refuses anything that isn't a loopback URI or an explicitly-allowlisted hosted callback.
 
 ## Licence
 

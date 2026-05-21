@@ -34,8 +34,7 @@ Examples:
 
 - [ ] `CLAUDE.md` reflects the change (if applicable)
 - [ ] `README.md` reflects the change (if applicable)
-- [ ] `Output/mcpb/manifest.json` updated (if tools added/renamed)
-- [ ] `CHANGELOG.md` updated (or covered by an upcoming release-please PR)
+- [ ] `CHANGELOG.md` updated under `[Unreleased]`
 
 ## Linked issues
 
