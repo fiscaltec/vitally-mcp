@@ -9,11 +9,17 @@ namespace VitallyMcp.Tests;
 /// <summary>
 /// Tests for the VitallyRateLimitHandler delegating handler. Drives an inner queueable
 /// HttpMessageHandler so each test can stage a sequence of responses (e.g. 429 then 200).
+/// Implements IDisposable so xUnit cleans up the HttpClient + handler chain (and any
+/// undequeued HttpResponseMessages still sitting in the QueueingHandler) at the end of
+/// every test, rather than relying on the GC.
 /// </summary>
-public class VitallyRateLimitHandlerTests
+public class VitallyRateLimitHandlerTests : IDisposable
 {
+    private readonly List<HttpClient> _clients = new();
+
     /// <summary>
     /// Test handler that returns responses from a queue and records all received requests.
+    /// Disposes any unconsumed responses + received requests on its own disposal.
     /// </summary>
     private sealed class QueueingHandler : HttpMessageHandler
     {
@@ -25,6 +31,22 @@ public class VitallyRateLimitHandlerTests
         {
             Requests.Add(request);
             return Task.FromResult(Responses.Dequeue());
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                while (Responses.Count > 0)
+                {
+                    Responses.Dequeue().Dispose();
+                }
+                foreach (var req in Requests)
+                {
+                    req.Dispose();
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -51,7 +73,7 @@ public class VitallyRateLimitHandlerTests
         return response;
     }
 
-    private static (HttpClient client, QueueingHandler inner, Mock<ILogger<VitallyRateLimitHandler>> logger) BuildClient(
+    private (HttpClient client, QueueingHandler inner, Mock<ILogger<VitallyRateLimitHandler>> logger) BuildClient(
         Action<VitallyRateLimitHandler>? configure = null)
     {
         var inner = new QueueingHandler();
@@ -64,7 +86,22 @@ public class VitallyRateLimitHandlerTests
             MaxRetryDelay = TimeSpan.FromMilliseconds(50)
         };
         configure?.Invoke(handler);
-        return (new HttpClient(handler), inner, logger);
+        var client = new HttpClient(handler);
+        _clients.Add(client);
+        return (client, inner, logger);
+    }
+
+    public void Dispose()
+    {
+        // Disposing the HttpClient disposes its handler chain (the VitallyRateLimitHandler
+        // and the inner QueueingHandler), which in turn disposes any undequeued responses
+        // and recorded requests.
+        foreach (var client in _clients)
+        {
+            client.Dispose();
+        }
+        _clients.Clear();
+        GC.SuppressFinalize(this);
     }
 
     [Fact]
@@ -73,7 +110,7 @@ public class VitallyRateLimitHandlerTests
         var (client, inner, _) = BuildClient();
         inner.Responses.Enqueue(Ok());
 
-        var response = await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         inner.Requests.Should().HaveCount(1);
@@ -86,7 +123,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(TooManyRequests());
         inner.Responses.Enqueue(Ok());
 
-        var response = await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         inner.Requests.Should().HaveCount(2);
@@ -101,7 +138,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(Ok());
 
         var start = DateTimeOffset.UtcNow;
-        var response = await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
         var elapsed = DateTimeOffset.UtcNow - start;
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -117,7 +154,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(TooManyRequests());
         inner.Responses.Enqueue(TooManyRequests());
 
-        var response = await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         response.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
         inner.Requests.Should().HaveCount(3);
@@ -129,7 +166,7 @@ public class VitallyRateLimitHandlerTests
         var (client, inner, logger) = BuildClient(h => h.LowRemainingThreshold = 50);
         inner.Responses.Enqueue(Ok(rateLimitRemaining: 10));
 
-        await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         VerifyWarningLoggedContaining(logger, "10 requests remaining");
     }
@@ -140,7 +177,7 @@ public class VitallyRateLimitHandlerTests
         var (client, inner, logger) = BuildClient(h => h.LowRemainingThreshold = 50);
         inner.Responses.Enqueue(Ok(rateLimitRemaining: 500));
 
-        await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         logger.Verify(
             l => l.Log(
@@ -158,7 +195,7 @@ public class VitallyRateLimitHandlerTests
         var (client, inner, logger) = BuildClient();
         inner.Responses.Enqueue(Ok(rateLimitRemaining: null));
 
-        await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         logger.Verify(
             l => l.Log(
@@ -177,7 +214,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(TooManyRequests());
         inner.Responses.Enqueue(Ok());
 
-        await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         VerifyWarningLoggedContaining(logger, "rate limited");
     }
@@ -189,7 +226,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(TooManyRequests());
         inner.Responses.Enqueue(TooManyRequests());
 
-        await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         VerifyWarningLoggedContaining(logger, "retries exhausted");
     }
@@ -205,7 +242,7 @@ public class VitallyRateLimitHandlerTests
         inner.Responses.Enqueue(response429);
         inner.Responses.Enqueue(Ok());
 
-        var response = await client.GetAsync("http://example.test/x");
+        using var response = await client.GetAsync("http://example.test/x");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         inner.Requests.Should().HaveCount(2);

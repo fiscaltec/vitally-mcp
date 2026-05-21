@@ -873,6 +873,41 @@ public class VitallyServiceTests
             ItExpr.IsAny<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GetResourcesAsync_ShouldUrlEncodeQueryParameters()
+    {
+        // Arrange — values contain a space, an ampersand, an equals sign, and a slash,
+        // each of which would corrupt the URL if concatenated verbatim.
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+        var additionalParams = new Dictionary<string, string>
+        {
+            ["customFieldValue"] = "Acme Corp",        // space
+            ["filter"] = "name=John&Co",                // & and =
+            ["path"] = "a/b"                            // slash
+        };
+
+        // Act
+        await service.GetResourcesAsync(
+            "customObjects/inst/instances/search",
+            limit: 10,
+            from: "cursor with space",
+            sortBy: "createdAt desc",
+            additionalParams: additionalParams);
+
+        // Assert — every value in the resulting URL is percent-encoded.
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.Query.Contains("from=cursor%20with%20space")
+                && req.RequestUri.Query.Contains("sortBy=createdAt%20desc")
+                && req.RequestUri.Query.Contains("customFieldValue=Acme%20Corp")
+                && req.RequestUri.Query.Contains("filter=name%3DJohn%26Co")
+                && req.RequestUri.Query.Contains("path=a%2Fb")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
     #endregion
 
     #region Resource-Specific Defaults — newly-added resources
