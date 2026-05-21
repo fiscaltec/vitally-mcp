@@ -315,7 +315,7 @@ app.MapPost("/oauth/register", async (HttpContext ctx, IOptions<OAuthOptions> oa
                 .ToArray();
             // Echo back only redirect_uris that the proxy would actually accept on /authorize.
             // Letting a non-allowed URI through here would mislead well-behaved clients into
-                // configuring a redirect that we'd then reject at the authorize step.
+            // configuring a redirect that we'd then reject at the authorize step.
             var accepted = uris.Where(o.IsRedirectUriAllowed).ToArray();
             if (accepted.Length == 0 && uris.Length > 0)
             {

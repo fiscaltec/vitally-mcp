@@ -47,7 +47,7 @@ public class VitallyService
         _baseUrl = _options.BaseUrl;
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, HttpContent? content = null, CancellationToken cancellationToken = default)
+    private async Task<string> SendAsync(HttpMethod method, string url, HttpContent? content = null, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(method, url);
         if (content is not null)
@@ -59,24 +59,25 @@ public class VitallyService
         var basic = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{apiKey}:"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
+        // Dispose the HttpResponseMessage as soon as we've extracted the body — every Vitally
+        // call ends up reading the full body as a string anyway, so there's no benefit to
+        // leaking the response to callers (and several callers previously failed to dispose).
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
         if (!response.IsSuccessStatusCode)
         {
             // EnsureSuccessStatusCode discards the response body, but Vitally returns the
             // actual failure reason in the body (e.g. {"message": "externalId is required"}).
             // Surfacing it gives the LLM something concrete to act on instead of "Response
             // status code does not indicate success".
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            var statusCode = response.StatusCode;
-            var reason = response.ReasonPhrase;
-            response.Dispose();
             var bodySnippet = string.IsNullOrWhiteSpace(body) ? "(empty body)" : Truncate(body, 1024);
             throw new HttpRequestException(
-                $"Vitally API returned {(int)statusCode} {reason} for {method} {url}. Body: {bodySnippet}",
+                $"Vitally API returned {(int)response.StatusCode} {response.ReasonPhrase} for {method} {url}. Body: {bodySnippet}",
                 inner: null,
-                statusCode: statusCode);
+                statusCode: response.StatusCode);
         }
-        return response;
+        return body;
     }
 
     private static string Truncate(string value, int max) =>
@@ -107,9 +108,7 @@ public class VitallyService
         var queryString = string.Join("&", queryParams);
         var url = $"{_baseUrl}/resources/{resourceType}?{queryString}";
 
-        var response = await SendAsync(HttpMethod.Get, url);
-        var jsonResponse = await response.Content.ReadAsStringAsync();
-
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: true, traits);
     }
 
@@ -117,9 +116,7 @@ public class VitallyService
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
 
-        var response = await SendAsync(HttpMethod.Get, url);
-        var jsonResponse = await response.Content.ReadAsStringAsync();
-
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
     }
 
@@ -128,8 +125,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await SendAsync(HttpMethod.Post, url, content);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Post, url, content);
     }
 
     public async Task<string> UpdateResourceAsync(string resourceType, string id, string jsonBody)
@@ -137,16 +133,14 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await SendAsync(HttpMethod.Put, url, content);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Put, url, content);
     }
 
     public async Task<string> DeleteResourceAsync(string resourceType, string id)
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
 
-        var response = await SendAsync(HttpMethod.Delete, url);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Delete, url);
     }
 
     /// <summary>
@@ -163,8 +157,7 @@ public class VitallyService
             url = $"{url}?{query}";
         }
 
-        var response = await SendAsync(HttpMethod.Get, url);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Get, url);
     }
 
     /// <summary>
@@ -176,8 +169,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{path}";
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var response = await SendAsync(HttpMethod.Post, url, content);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Post, url, content);
     }
 
     /// <summary>
@@ -187,8 +179,7 @@ public class VitallyService
     {
         var url = $"{_baseUrl}/resources/{path}";
 
-        var response = await SendAsync(HttpMethod.Delete, url);
-        return await response.Content.ReadAsStringAsync();
+        return await SendAsync(HttpMethod.Delete, url);
     }
 
     /// <summary>

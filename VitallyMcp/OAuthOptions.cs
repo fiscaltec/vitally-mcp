@@ -121,14 +121,13 @@ public class OAuthOptions
             .Select(u => u.TrimEnd('/'))
             .ToArray();
 
-        foreach (var entry in AllowedClientRedirectUris)
+        var invalid = AllowedClientRedirectUris.FirstOrDefault(entry =>
+            !Uri.TryCreate(entry, UriKind.Absolute, out var allowed)
+            || (allowed.Scheme != Uri.UriSchemeHttps && allowed.Scheme != Uri.UriSchemeHttp));
+        if (invalid is not null)
         {
-            if (!Uri.TryCreate(entry, UriKind.Absolute, out var allowed)
-                || (allowed.Scheme != Uri.UriSchemeHttps && allowed.Scheme != Uri.UriSchemeHttp))
-            {
-                throw new InvalidOperationException(
-                    $"OAuth:AllowedClientRedirectUris entries must be absolute http/https URIs (got '{entry}').");
-            }
+            throw new InvalidOperationException(
+                $"OAuth:AllowedClientRedirectUris entries must be absolute http/https URIs (got '{invalid}').");
         }
     }
 
@@ -160,19 +159,15 @@ public class OAuthOptions
 
         // Non-loopback: prefix-match against the configured allowlist. Prefix (rather than
         // equality) lets a single entry like "https://claude.ai/api/mcp/auth_callback" cover
-        // the same URI with appended query/fragment that some clients add before redirecting.
+        // the same URI with appended path segment, query, or fragment that some clients add
+        // before redirecting. The trailing-character check (`/`, `?`, `#`) prevents prefix
+        // spoofing like "https://claude.ai/api/mcp/auth_callback.evil.com".
         var normalised = redirectUri.TrimEnd('/');
-        foreach (var allowed in AllowedClientRedirectUris)
-        {
-            if (normalised.Equals(allowed, StringComparison.OrdinalIgnoreCase)
-                || normalised.StartsWith(allowed + "/", StringComparison.OrdinalIgnoreCase)
-                || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return AllowedClientRedirectUris.Any(allowed =>
+            normalised.Equals(allowed, StringComparison.OrdinalIgnoreCase)
+            || normalised.StartsWith(allowed + "/", StringComparison.OrdinalIgnoreCase)
+            || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase)
+            || normalised.StartsWith(allowed + "#", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsLoopbackHost(string host) =>

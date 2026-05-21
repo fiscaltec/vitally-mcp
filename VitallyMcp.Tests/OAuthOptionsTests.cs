@@ -52,6 +52,8 @@ public class OAuthOptionsTests
     [InlineData("https://claude.ai/api/mcp/auth_callback")]
     [InlineData("https://claude.ai/api/mcp/auth_callback/")]
     [InlineData("https://claude.ai/api/mcp/auth_callback?session=abc")]
+    [InlineData("https://claude.ai/api/mcp/auth_callback#fragment")]
+    [InlineData("https://claude.ai/api/mcp/auth_callback/extra/path?q=1#frag")]
     public void IsRedirectUriAllowed_AllowedHosted_Accepted(string redirectUri)
     {
         var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
