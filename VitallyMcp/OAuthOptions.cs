@@ -52,4 +52,53 @@ public class OAuthOptions
     /// secret to MCP clients. Optional: leave empty for public-client mode (consent screen will show).
     /// </summary>
     public string SharedClientSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>,
+    /// then triggered immediately after <c>builder.Build()</c> by resolving
+    /// <c>IOptions&lt;OAuthOptions&gt;</c>, so misconfiguration throws at startup rather than at
+    /// the first failed token validation.
+    /// </summary>
+    public void Validate()
+    {
+        Authority = Authority?.Trim() ?? string.Empty;
+        Audience = Audience?.Trim() ?? string.Empty;
+        Resource = Resource?.Trim() ?? string.Empty;
+        SharedClientId = SharedClientId?.Trim() ?? string.Empty;
+        SharedClientSecret = SharedClientSecret?.Trim() ?? string.Empty;
+
+        // The OAuth proxy endpoints (/oauth/authorize, /oauth/token, /.well-known/*)
+        // use Authority to build upstream URLs even when JWT validation is skipped, so
+        // Authority is required whenever the proxy is enabled — including NoAuth dev mode.
+        var proxyEnabled = !string.IsNullOrWhiteSpace(SharedClientId);
+
+        if (NoAuth && !proxyEnabled)
+        {
+            // Dev-mode bypass with no proxy: nothing else to validate.
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Authority))
+        {
+            throw new InvalidOperationException(
+                NoAuth
+                    ? "OAuth:Authority is required when OAuth:SharedClientId is set — the OAuth proxy uses it to build upstream URLs."
+                    : "OAuth:Authority is required when OAuth:NoAuth is false.");
+        }
+        if (!Uri.TryCreate(Authority, UriKind.Absolute, out var authorityUri) || authorityUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException($"OAuth:Authority must be an absolute https URI (got '{Authority}').");
+        }
+
+        // Audience is only used by JwtBearer, which is skipped when NoAuth=true.
+        if (!NoAuth && string.IsNullOrWhiteSpace(Audience))
+        {
+            throw new InvalidOperationException("OAuth:Audience is required when OAuth:NoAuth is false.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
+        {
+            throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
+        }
+    }
 }

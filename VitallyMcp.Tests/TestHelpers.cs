@@ -14,7 +14,13 @@ public static class TestHelpers
 {
     /// <summary>
     /// Creates a mock HttpClient that returns the specified JSON response.
+    /// The HttpResponseMessage and HttpClient created here are owned by the test method
+    /// that calls this helper; lifetime is bounded by the test method's duration.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "Test mock — HttpResponseMessage is returned via Moq to the consuming HttpClient; lifetime is bounded by the test run.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+        Justification = "Test mock — HttpResponseMessage is owned by the Moq setup and bounded by the test method's lifetime.")]
     public static HttpClient CreateMockHttpClient(string jsonResponse, HttpStatusCode statusCode = HttpStatusCode.OK)
     {
         var mockHttpMessageHandler = new Mock<HttpMessageHandler>();
@@ -59,7 +65,12 @@ public static class TestHelpers
 
     /// <summary>
     /// Creates a mock HttpClient that allows verification of the request URL.
+    /// The HttpResponseMessage and HttpClient are owned by the test method.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "Test mock — see CreateMockHttpClient.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+        Justification = "Test mock — see CreateMockHttpClient.")]
     public static (HttpClient client, Mock<HttpMessageHandler> handler) CreateMockHttpClientWithHandler(
         string jsonResponse,
         HttpStatusCode statusCode = HttpStatusCode.OK)

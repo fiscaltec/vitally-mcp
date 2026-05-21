@@ -66,19 +66,23 @@ public class VitallyService
 
     public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
     {
+        // Percent-encode keys and values (RFC 3986 query-string encoding via
+        // Uri.EscapeDataString — spaces become %20, not +) so user-supplied filter values
+        // containing spaces, ampersands, equals signs etc. don't corrupt the URL
+        // (e.g. customFieldValue="Acme Corp" -> customFieldValue=Acme%20Corp).
         var queryParams = new List<string> { $"limit={limit}" };
 
         if (!string.IsNullOrEmpty(from))
-            queryParams.Add($"from={from}");
+            queryParams.Add($"from={Uri.EscapeDataString(from)}");
 
         if (!string.IsNullOrEmpty(sortBy))
-            queryParams.Add($"sortBy={sortBy}");
+            queryParams.Add($"sortBy={Uri.EscapeDataString(sortBy)}");
 
         if (additionalParams != null)
         {
             foreach (var param in additionalParams)
             {
-                queryParams.Add($"{param.Key}={param.Value}");
+                queryParams.Add($"{Uri.EscapeDataString(param.Key)}={Uri.EscapeDataString(param.Value)}");
             }
         }
 
@@ -230,6 +234,10 @@ public class VitallyService
         writer.WriteEndObject();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1860",
+        Justification = "JsonElement.TryGetProperty uses an out parameter that LINQ Where cannot expose without a redundant second call. The explicit foreach is clearer and more efficient than the LINQ rewrite.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
+        Justification = "Same as above — TryGetProperty out parameter pattern.")]
     private static void WriteFilteredFields(Utf8JsonWriter writer, JsonElement element, string[] fields, string[]? requestedTraits)
     {
         foreach (var field in fields)
@@ -250,6 +258,8 @@ public class VitallyService
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
+        Justification = "JsonElement.TryGetProperty out parameter doesn't translate to LINQ Where without a redundant second call.")]
     private static void WriteFilteredTraits(Utf8JsonWriter writer, JsonElement traitsElement, string[] requestedTraits)
     {
         writer.WriteStartObject();
