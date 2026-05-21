@@ -150,6 +150,16 @@ public class OAuthOptions
             return false;
         }
 
+        // Reject whitespace-padded input outright. Uri.TryCreate tolerates leading whitespace
+        // and parses successfully, but the allowlist string comparisons below would still see
+        // the original (un-normalised) value and reject what looks superficially like a valid
+        // match. Better to reject explicitly than silently normalise — a well-behaved client
+        // never sends padding.
+        if (redirectUri.Length != redirectUri.Trim().Length)
+        {
+            return false;
+        }
+
         if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
         {
             return false;
@@ -163,9 +173,9 @@ public class OAuthOptions
             return false;
         }
 
-        // RFC 8252 loopback redirect: http://localhost / 127.0.0.1 / [::1] on any port.
-        // Only http (not https) is the recognised scheme for loopback callbacks per the RFC,
-        // because native clients can't reasonably provision a TLS cert on localhost.
+        // RFC 8252 loopback redirect: http on localhost or any IPv4/IPv6 loopback address on
+        // any port. Only http (not https) is the recognised scheme for loopback callbacks per
+        // the RFC, because native clients can't reasonably provision a TLS cert on localhost.
         if (uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri.Host))
         {
             return true;
@@ -185,7 +195,8 @@ public class OAuthOptions
 
     private static bool IsLoopbackHost(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-        || host == "127.0.0.1"
-        || host == "[::1]"
-        || host == "::1";
+        // Covers the full IPv4 127.0.0.0/8 loopback range plus IPv6 ::1.
+        // Uri.Host strips the brackets from IPv6 literals, so "::1" (not "[::1]") is what
+        // arrives here for an input like http://[::1]:8080/.
+        || (System.Net.IPAddress.TryParse(host, out var ip) && System.Net.IPAddress.IsLoopback(ip));
 }

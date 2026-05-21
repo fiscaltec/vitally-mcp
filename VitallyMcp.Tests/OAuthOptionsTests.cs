@@ -13,6 +13,7 @@ public class OAuthOptionsTests
     [InlineData("http://127.0.0.1")]
     [InlineData("http://127.0.0.1:9000")]
     [InlineData("http://127.0.0.1:9000/cb")]
+    [InlineData("http://127.0.0.2")]  // anywhere in 127.0.0.0/8
     [InlineData("http://[::1]")]
     [InlineData("http://[::1]:1234/x")]
     public void IsRedirectUriAllowed_LoopbackAnyPort_AllowedWithoutAllowlist(string redirectUri)
@@ -21,6 +22,21 @@ public class OAuthOptionsTests
 
         options.IsRedirectUriAllowed(redirectUri).Should().BeTrue(
             "RFC 8252 §7.3 requires native clients on loopback to use any ephemeral port");
+    }
+
+    [Theory]
+    [InlineData(" http://localhost:8080")]                // leading space
+    [InlineData("http://localhost:8080 ")]                // trailing space
+    [InlineData(" https://claude.ai/api/mcp/auth_callback")]
+    [InlineData("\thttp://localhost:8080")]
+    public void IsRedirectUriAllowed_WhitespacePadded_Rejected(string redirectUri)
+    {
+        // Uri.TryCreate tolerates leading whitespace and parses the URI, but the allowlist
+        // string comparison would still see the un-normalised raw value. Reject explicitly
+        // rather than silently normalise — a well-behaved client never sends padding.
+        var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
     }
 
     [Theory]
