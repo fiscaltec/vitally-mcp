@@ -52,13 +52,26 @@ public class OAuthOptionsTests
     [InlineData("https://claude.ai/api/mcp/auth_callback")]
     [InlineData("https://claude.ai/api/mcp/auth_callback/")]
     [InlineData("https://claude.ai/api/mcp/auth_callback?session=abc")]
-    [InlineData("https://claude.ai/api/mcp/auth_callback#fragment")]
-    [InlineData("https://claude.ai/api/mcp/auth_callback/extra/path?q=1#frag")]
+    [InlineData("https://claude.ai/api/mcp/auth_callback/extra/path?q=1")]
     public void IsRedirectUriAllowed_AllowedHosted_Accepted(string redirectUri)
     {
         var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
 
         options.IsRedirectUriAllowed(redirectUri).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("https://claude.ai/api/mcp/auth_callback#fragment")]
+    [InlineData("https://claude.ai/api/mcp/auth_callback?state=x#fragment")]
+    [InlineData("http://localhost:8080/cb#fragment")]
+    public void IsRedirectUriAllowed_FragmentInUri_Rejected(string redirectUri)
+    {
+        // OAuth 2.0 §3.1.2 forbids fragment components in redirect_uri. They would also
+        // silently break the /oauth/callback append (code+state would land in the fragment
+        // rather than the query string).
+        var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
     }
 
     [Theory]
@@ -108,6 +121,28 @@ public class OAuthOptionsTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*AllowedClientRedirectUris*");
+    }
+
+    [Theory]
+    [InlineData("http://example.com/cb")]
+    [InlineData("http://internal.local:8080/cb")]
+    [InlineData("http://localhost:8080/cb")]
+    public void Validate_HttpAllowlistEntry_Throws(string entry)
+    {
+        // Per OAuth 2.0 Security BCP, non-loopback redirect URIs must use https. We don't
+        // accept http even for loopback in the allowlist — loopback is already covered by
+        // IsRedirectUriAllowed's RFC 8252 exemption and never needs to be listed.
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "https://api.example.com",
+            AllowedClientRedirectUris = [entry]
+        };
+
+        var act = () => options.Validate();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*https*");
     }
 
     [Fact]

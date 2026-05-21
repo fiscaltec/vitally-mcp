@@ -121,21 +121,27 @@ public class OAuthOptions
             .Select(u => u.TrimEnd('/'))
             .ToArray();
 
+        // HTTPS-only per OAuth 2.0 Security BCP — non-loopback redirect URIs must be over TLS
+        // to prevent authorisation-code interception on the network. Loopback http is handled
+        // separately by IsRedirectUriAllowed and never needs to appear in this list.
         var invalid = AllowedClientRedirectUris.FirstOrDefault(entry =>
             !Uri.TryCreate(entry, UriKind.Absolute, out var allowed)
-            || (allowed.Scheme != Uri.UriSchemeHttps && allowed.Scheme != Uri.UriSchemeHttp));
+            || allowed.Scheme != Uri.UriSchemeHttps);
         if (invalid is not null)
         {
             throw new InvalidOperationException(
-                $"OAuth:AllowedClientRedirectUris entries must be absolute http/https URIs (got '{invalid}').");
+                $"OAuth:AllowedClientRedirectUris entries must be absolute https URIs (got '{invalid}'). Loopback http redirects do not need to be listed — they are allowed automatically per RFC 8252.");
         }
     }
 
     /// <summary>
     /// Returns true if <paramref name="redirectUri"/> is acceptable as an OAuth proxy redirect
-    /// target. Loopback URIs on any port are always allowed (RFC 8252 §7.3 covers MCP clients
-    /// like Claude Code, VS Code, Cursor that bind ephemeral local ports). Non-loopback URIs
-    /// must prefix-match an entry in <see cref="AllowedClientRedirectUris"/>.
+    /// target. Loopback http URIs on any port are always allowed (RFC 8252 §7.3 covers MCP
+    /// clients like Claude Code, VS Code, Cursor that bind ephemeral local ports). Non-loopback
+    /// URIs must prefix-match an entry in <see cref="AllowedClientRedirectUris"/>. URIs that
+    /// contain a fragment are always rejected per OAuth 2.0 §3.1.2 — the proxy appends
+    /// <c>?state=&amp;code=</c> on redirect-back, which a fragment would silently break by
+    /// trapping those params on the client side of the URL.
     /// </summary>
     public bool IsRedirectUriAllowed(string redirectUri)
     {
@@ -145,6 +151,14 @@ public class OAuthOptions
         }
 
         if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        // Fragments are forbidden in redirect_uri per OAuth 2.0 §3.1.2, and they would in
+        // practice corrupt our callback append (the code+state get trapped in the fragment
+        // and never reach the client).
+        if (!string.IsNullOrEmpty(uri.Fragment))
         {
             return false;
         }
@@ -159,15 +173,14 @@ public class OAuthOptions
 
         // Non-loopback: prefix-match against the configured allowlist. Prefix (rather than
         // equality) lets a single entry like "https://claude.ai/api/mcp/auth_callback" cover
-        // the same URI with appended path segment, query, or fragment that some clients add
-        // before redirecting. The trailing-character check (`/`, `?`, `#`) prevents prefix
-        // spoofing like "https://claude.ai/api/mcp/auth_callback.evil.com".
+        // the same URI with appended path segment or query that some clients add before
+        // redirecting. The trailing-character check (`/`, `?`) prevents prefix spoofing like
+        // "https://claude.ai/api/mcp/auth_callback.evil.com".
         var normalised = redirectUri.TrimEnd('/');
         return AllowedClientRedirectUris.Any(allowed =>
             normalised.Equals(allowed, StringComparison.OrdinalIgnoreCase)
             || normalised.StartsWith(allowed + "/", StringComparison.OrdinalIgnoreCase)
-            || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase)
-            || normalised.StartsWith(allowed + "#", StringComparison.OrdinalIgnoreCase));
+            || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsLoopbackHost(string host) =>
