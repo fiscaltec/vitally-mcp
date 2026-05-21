@@ -11,17 +11,19 @@ All notable changes to this project are documented here. Format based on
 - **Remote HTTP MCP server** using the streamable HTTP transport (MCP
   2025-06-18, stateless mode) on the `ModelContextProtocol.AspNetCore`
   package. Replaces the previous stdio transport.
-- **Auth0 OAuth 2.1 protection** on the `/mcp` endpoint via JwtBearer.
-  Publishes a `/.well-known/oauth-protected-resource` metadata document
-  (RFC 9728) so MCP clients discover the authorisation server automatically.
-- **Per-request Vitally API key resolution** via the new
-  `VitallyApiKeyProvider`: reads the `Vitally:SecretRefClaim` from the
-  authenticated user's access token, fetches the named secret from Azure
-  Key Vault (with a 5-minute in-memory cache), and falls back to the
-  configured `DefaultSecretRef` when the claim is absent.
-- **Configurable Auth0 + Key Vault settings** under the `Vitally:` and
-  `Auth0:` configuration sections. See `appsettings.Example.json`.
-- **`Auth0:NoAuth` development flag** that skips JWT validation for local
+- **OAuth 2.0 protection** on the `/mcp` endpoint via JwtBearer, with
+  Auth0 as the authorisation server federating to Microsoft Entra for
+  FISCAL identity. Publishes a `/.well-known/oauth-protected-resource`
+  metadata document (RFC 9728) so MCP clients discover the authorisation
+  server automatically.
+- **On-demand Vitally API key fetch** via the new `VitallyApiKeyProvider`:
+  fetches the secret named by `Vitally:DefaultSecretRef` from Azure Key
+  Vault using the Container App's managed identity, caches it for
+  `Vitally:SecretCacheDuration`. (A future per-user variant can be added
+  by re-introducing claim-based secret resolution; not in this release.)
+- **Configurable OAuth + Key Vault settings** under the `Vitally:` and
+  `OAuth:` configuration sections. See `appsettings.Example.json`.
+- **`OAuth:NoAuth` development flag** that skips JWT validation for local
   smoke tests; logs a loud warning at startup.
 
 ### Changed
@@ -32,8 +34,8 @@ All notable changes to this project are documented here. Format based on
   work against Vitally but receive no further updates.
 - **BREAKING — Configuration shape.** `VITALLY_API_KEY`, `VITALLY_REGION`,
   and `VITALLY_SUBDOMAIN` environment variables are replaced by the
-  `Vitally:` and `Auth0:` configuration sections (or the
-  `Vitally__*` / `Auth0__*` env-var equivalents in ASP.NET Core style).
+  `Vitally:` and `OAuth:` configuration sections (or the
+  `Vitally__*` / `OAuth__*` env-var equivalents in ASP.NET Core style).
   Local self-hosters set `Vitally:DevelopmentApiKey` instead of
   `VITALLY_API_KEY`.
 - `VitallyMcp.csproj` switched from `Microsoft.NET.Sdk` to
