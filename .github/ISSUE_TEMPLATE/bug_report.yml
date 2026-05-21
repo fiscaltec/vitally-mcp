@@ -61,31 +61,34 @@ body:
       options:
         - Claude Desktop
         - Claude Code
+        - VS Code
+        - Cursor
         - Other (please describe in 'Additional context')
     validations:
       required: true
 
   - type: input
-    id: version
+    id: server-url
     attributes:
-      label: Server version
-      description: Run the `Check_for_updates` tool, or check `--version` on the binary.
-      placeholder: e.g. 3.0.0
+      label: Server URL
+      description: The URL your MCP client is pointed at, e.g. https://vitally.fiscaltec.com/mcp or a self-hosted instance URL.
+      placeholder: https://vitally.fiscaltec.com/mcp
     validations:
       required: true
 
   - type: input
-    id: arch
+    id: time-utc
     attributes:
-      label: Architecture
-      placeholder: win-x64 / win-arm64
+      label: Time of failure (UTC)
+      description: Approximate timestamp — helps correlate with Application Insights / Log Analytics.
+      placeholder: e.g. 2026-05-21T14:32Z
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: Relevant logs (stderr / Claude Desktop log pane)
+      label: Relevant logs (client-side error pane, JSON-RPC error response, etc.)
       render: shell
 
   - type: textarea

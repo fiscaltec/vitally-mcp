@@ -542,6 +542,24 @@ public class VitallyServiceTests
         await act.Should().ThrowAsync<HttpRequestException>();
     }
 
+    [Fact]
+    public async Task SendAsync_OnNonSuccessStatus_ExceptionMessageIncludesResponseBody()
+    {
+        // Vitally returns the real failure reason in the response body (e.g. "externalId is
+        // required") - this must reach the caller so the LLM can react. Don't regress.
+        var client = TestHelpers.CreateMockHttpClient(
+            """{"message":"externalId is required"}""",
+            HttpStatusCode.BadRequest);
+        var service = CreateService(client);
+
+        var act = () => service.CreateResourceAsync("accounts", "{}");
+
+        var exception = await act.Should().ThrowAsync<HttpRequestException>();
+        exception.Which.Message.Should().Contain("externalId is required");
+        exception.Which.Message.Should().Contain("400");
+        exception.Which.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     #endregion
 
     #region UpdateResourceAsync Tests

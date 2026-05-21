@@ -54,6 +54,17 @@ public class OAuthOptions
     public string SharedClientSecret { get; set; } = string.Empty;
 
     /// <summary>
+    /// Allowlist of non-loopback redirect URIs that the OAuth proxy will accept on
+    /// <c>/oauth/authorize</c> and <c>/oauth/register</c>. Loopback URIs (<c>http://localhost</c>,
+    /// <c>http://127.0.0.1</c>, <c>http://[::1]</c>) on any port are always accepted per RFC 8252
+    /// §7.3 — those don't need to be listed. Add cloud-hosted MCP callbacks here, e.g.
+    /// <c>https://claude.ai/api/mcp/auth_callback</c>.
+    /// Empty by default — set explicitly when a hosted MCP client (not a local app) needs to
+    /// complete the flow. Without the allowlist, only local clients can authenticate.
+    /// </summary>
+    public string[] AllowedClientRedirectUris { get; set; } = [];
+
+    /// <summary>
     /// Fail-fast configuration sanity check. Wired via <c>PostConfigure</c> in <c>Program.cs</c>,
     /// then triggered immediately after <c>builder.Build()</c> by resolving
     /// <c>IOptions&lt;OAuthOptions&gt;</c>, so misconfiguration throws at startup rather than at
@@ -100,5 +111,118 @@ public class OAuthOptions
         {
             throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
         }
+
+        // Normalise the allowlist: trim, strip trailing slashes (we match by prefix below so
+        // both stored and incoming values need the same shape), and fail fast on invalid URIs
+        // rather than at first request.
+        AllowedClientRedirectUris = (AllowedClientRedirectUris ?? [])
+            .Select(u => u?.Trim() ?? string.Empty)
+            .Where(u => !string.IsNullOrWhiteSpace(u))
+            .Select(u => u.TrimEnd('/'))
+            .ToArray();
+
+        // HTTPS-only per OAuth 2.0 Security BCP — non-loopback redirect URIs must be over TLS
+        // to prevent authorisation-code interception on the network. Loopback http is handled
+        // separately by IsRedirectUriAllowed and never needs to appear in this list.
+        var invalid = AllowedClientRedirectUris.FirstOrDefault(entry =>
+            !Uri.TryCreate(entry, UriKind.Absolute, out var allowed)
+            || allowed.Scheme != Uri.UriSchemeHttps);
+        if (invalid is not null)
+        {
+            throw new InvalidOperationException(
+                $"OAuth:AllowedClientRedirectUris entries must be absolute https URIs (got '{invalid}'). Loopback http redirects do not need to be listed — they are allowed automatically per RFC 8252.");
+        }
     }
+
+    /// <summary>
+    /// Returns true if <paramref name="redirectUri"/> is acceptable as an OAuth proxy redirect
+    /// target. Loopback http URIs on any port are always allowed (RFC 8252 §7.3 covers MCP
+    /// clients like Claude Code, VS Code, Cursor that bind ephemeral local ports). Non-loopback
+    /// URIs must prefix-match an entry in <see cref="AllowedClientRedirectUris"/>. URIs that
+    /// contain a fragment are always rejected per OAuth 2.0 §3.1.2 — the proxy appends
+    /// <c>?state=&amp;code=</c> on redirect-back, which a fragment would silently break by
+    /// trapping those params on the client side of the URL.
+    /// </summary>
+    public bool IsRedirectUriAllowed(string redirectUri)
+    {
+        if (string.IsNullOrWhiteSpace(redirectUri))
+        {
+            return false;
+        }
+
+        // Reject whitespace-padded input outright. Uri.TryCreate tolerates leading whitespace
+        // and parses successfully, but the allowlist string comparisons below would still see
+        // the original (un-normalised) value and reject what looks superficially like a valid
+        // match. Better to reject explicitly than silently normalise — a well-behaved client
+        // never sends padding.
+        if (redirectUri.Length != redirectUri.Trim().Length)
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        // Fragments are forbidden in redirect_uri per OAuth 2.0 §3.1.2, and they would in
+        // practice corrupt our callback append (the code+state get trapped in the fragment
+        // and never reach the client).
+        if (!string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+
+        // RFC 8252 loopback redirect: http on localhost or any IPv4/IPv6 loopback address on
+        // any port. Only http (not https) is the recognised scheme for loopback callbacks per
+        // the RFC, because native clients can't reasonably provision a TLS cert on localhost.
+        if (uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri.Host))
+        {
+            return true;
+        }
+
+        // Non-loopback: component-wise match against the configured allowlist. Per RFC 3986
+        // §6.2.2 scheme and host are case-insensitive but path/query are case-sensitive, so
+        // we compare components separately rather than doing a single OrdinalIgnoreCase string
+        // match (which would let an attacker route through e.g. "/AUTH_CALLBACK" if the server
+        // treats that as a different endpoint than "/auth_callback"). The path comparison uses
+        // a strict path-segment prefix (allowed-path or allowed-path + "/") so spoofs like
+        // "/api/mcp/auth_callback.evil.com" or "/api/mcp/auth_callback_extra" still fail.
+        return AllowedClientRedirectUris.Any(allowed =>
+        {
+            if (!Uri.TryCreate(allowed, UriKind.Absolute, out var allowedUri))
+            {
+                return false; // Validate() ensures every entry parses, so this is belt-and-braces.
+            }
+
+            if (!string.Equals(uri.Scheme, allowedUri.Scheme, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(uri.Host, allowedUri.Host, StringComparison.OrdinalIgnoreCase)
+                || uri.Port != allowedUri.Port)
+            {
+                return false;
+            }
+
+            var incomingPath = uri.AbsolutePath.TrimEnd('/');
+            var allowedPath = allowedUri.AbsolutePath.TrimEnd('/');
+
+            // Special-case root-path entries: TrimEnd reduces "/" to "" for both sides, and
+            // the StartsWith("" + "/") check below would then match every path on the host —
+            // turning a "https://example.com" allowlist entry into an unintended wildcard.
+            // Require an exact root match in that case (incoming path also empty/root).
+            if (allowedPath.Length == 0)
+            {
+                return incomingPath.Length == 0;
+            }
+
+            return incomingPath.Equals(allowedPath, StringComparison.Ordinal)
+                || incomingPath.StartsWith(allowedPath + "/", StringComparison.Ordinal);
+        });
+    }
+
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        // Covers the full IPv4 127.0.0.0/8 loopback range plus IPv6 ::1.
+        // Uri.Host strips the brackets from IPv6 literals, so "::1" (not "[::1]") is what
+        // arrives here for an input like http://[::1]:8080/.
+        || (System.Net.IPAddress.TryParse(host, out var ip) && System.Net.IPAddress.IsLoopback(ip));
 }

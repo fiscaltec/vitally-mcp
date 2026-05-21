@@ -24,8 +24,8 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build and test (windows-latest, net10.0)
-    runs-on: windows-latest
+    name: Build and test (ubuntu-latest, net10.0)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository

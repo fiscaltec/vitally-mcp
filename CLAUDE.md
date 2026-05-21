@@ -10,7 +10,7 @@ This is a Model Context Protocol (MCP) server implementation in C# that provides
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
 - **Streamable HTTP transport** (MCP 2025-06-18) on the `ModelContextProtocol.AspNetCore` package, stateless mode
-- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. Auth0 supports Dynamic Client Registration (RFC 7591) which MCP clients require. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop).
+- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts the upstream Auth0 tenant when `OAuth:SharedClientId` is set — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop).
 - **On-demand Vitally API key fetch**: the server fetches the `vitally-shared` secret from Azure Key Vault via its user-assigned managed identity (with a short in-memory cache) and uses it to call Vitally on behalf of all authenticated users. Future per-user keys can be added by reintroducing claim-based secret resolution.
 - .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
 - Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA) + `ModelContextProtocol.AspNetCore`
@@ -77,12 +77,19 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - Binds `VitallyServerOptions` from the `Vitally:` configuration section, calls `Validate()` at startup to fail-fast on bad config.
 - Binds `OAuthOptions` from `OAuth:` (provider-agnostic — works with Auth0, Entra direct, Keycloak, etc.).
 - Conditionally registers `SecretClient` (Azure Key Vault) as singleton when `Vitally:KeyVaultUri` is set; uses `DefaultAzureCredential` so it works with managed identity in production and `az login` locally.
-- `IHttpContextAccessor` + `IMemoryCache` registered for the API key provider.
+- `IMemoryCache` registered for the API key cache and OAuth proxy state cache.
 - `VitallyApiKeyProvider` registered scoped.
 - `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
 - `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
+- `ForwardedHeadersOptions` configured to honour `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-For` from the Container Apps ingress (trust model: network isolation, not header authentication — see comments in `Program.cs`).
 - MCP server registered via `AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithToolsFromAssembly()`.
-- `MapGet("/.well-known/oauth-protected-resource", ...)` publishes the RFC 9728 metadata document.
+- OAuth proxy endpoints (only active when `OAuth:SharedClientId` is set):
+  - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata.
+  - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata pointing `registration_endpoint` at our DCR shim.
+  - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), stashes it keyed by `state`, and proxies to Auth0 with our own fixed callback.
+  - `GET /oauth/callback` — reverses the stash, redirects to the original client URI.
+  - `POST /oauth/token` — proxies code/refresh exchanges to Auth0, server-side-injecting `SharedClientSecret`.
+  - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
@@ -100,6 +107,9 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `Authority` — OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
 - `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. Validated against the JWT `aud` claim.
 - `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance).
+- `SharedClientId` — pre-registered Auth0 native-app client_id that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active.
+- `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`.
+- `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
 
 ### API key resolution (VitallyApiKeyProvider.cs)
@@ -115,6 +125,8 @@ This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache exp
 ### HTTP Service (VitallyService.cs)
 
 Scoped via `AddHttpClient<VitallyService>()`. Per-request auth: the constructor takes the per-request `VitallyApiKeyProvider`, and the private `SendAsync(method, url, content?)` helper builds each `HttpRequestMessage`, fetches the API key from the provider, sets the `Authorization: Basic` header on the message, and dispatches via `_httpClient.SendAsync`. The shared `HttpClient` is *not* mutated — there's no `DefaultRequestHeaders.Authorization`, so multi-user safety is preserved.
+
+On non-2xx responses `SendAsync` reads the response body, disposes the response, and throws `HttpRequestException` with `StatusCode` set and a message that includes a truncated copy of the response body. This deliberately replaces `EnsureSuccessStatusCode()` because Vitally returns the actual failure reason (e.g. `{"message":"externalId is required"}`) in the body, and surfacing it gives the LLM something concrete to act on.
 
 Standard methods (apply field/trait filtering and the `{results, next}` envelope):
 - `GetResourcesAsync` — list with pagination, sorting, filtering
@@ -254,7 +266,7 @@ To add support for a new Vitally resource:
 - **Permission management**: Tools use `ReadOnly = true` flag for GET/LIST operations and `Destructive = true` flag for CREATE/UPDATE/DELETE operations. This allows MCP clients to bulk enable/disable operations by permission level.
 - **Write operations**: All resources support full CRUD operations (where applicable). JSON body parameters accept complete request bodies for create/update operations.
 - **Configuration**: Never hardcode credentials. Production deployments use Key Vault via managed identity; local dev uses `Vitally:DevelopmentApiKey` (env var `Vitally__DevelopmentApiKey`).
-- **Error handling**: `VitallyService` uses `EnsureSuccessStatusCode()` — HTTP errors propagate to the MCP client as JSON-RPC errors.
+- **Error handling**: `VitallyService.SendAsync` throws `HttpRequestException` with the Vitally response body included in the message on non-2xx responses, so MCP clients see the actual failure reason in JSON-RPC errors.
 - **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively).
 - **Trait filtering**: Traits are excluded by default — use the `traits` parameter to include specific trait keys (requires `"traits"` in the `fields` parameter).
 - **Resource-specific defaults**: Each resource type has optimised default fields (see table above).
@@ -306,4 +318,4 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com`; post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
 | CI/CD | GitHub Actions → OIDC federation → Azure | No long-lived secrets in GitHub |
 
-The Bicep / `azd` templates that capture this deployment land in `infra/` once verified end-to-end. They're a worked example rather than a hard contract — anyone replicating can swap Container Apps for App Service, ACR for GHCR, etc., without touching the application code.
+Bicep / `azd` templates aren't currently shipped in this repo — the table above is the contract. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code.
