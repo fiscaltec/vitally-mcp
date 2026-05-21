@@ -181,16 +181,33 @@ public class OAuthOptions
             return true;
         }
 
-        // Non-loopback: prefix-match against the configured allowlist. Prefix (rather than
-        // equality) lets a single entry like "https://claude.ai/api/mcp/auth_callback" cover
-        // the same URI with appended path segment or query that some clients add before
-        // redirecting. The trailing-character check (`/`, `?`) prevents prefix spoofing like
-        // "https://claude.ai/api/mcp/auth_callback.evil.com".
-        var normalised = redirectUri.TrimEnd('/');
+        // Non-loopback: component-wise match against the configured allowlist. Per RFC 3986
+        // §6.2.2 scheme and host are case-insensitive but path/query are case-sensitive, so
+        // we compare components separately rather than doing a single OrdinalIgnoreCase string
+        // match (which would let an attacker route through e.g. "/AUTH_CALLBACK" if the server
+        // treats that as a different endpoint than "/auth_callback"). The path comparison uses
+        // a strict path-segment prefix (allowed-path or allowed-path + "/") so spoofs like
+        // "/api/mcp/auth_callback.evil.com" or "/api/mcp/auth_callback_extra" still fail.
         return AllowedClientRedirectUris.Any(allowed =>
-            normalised.Equals(allowed, StringComparison.OrdinalIgnoreCase)
-            || normalised.StartsWith(allowed + "/", StringComparison.OrdinalIgnoreCase)
-            || normalised.StartsWith(allowed + "?", StringComparison.OrdinalIgnoreCase));
+        {
+            if (!Uri.TryCreate(allowed, UriKind.Absolute, out var allowedUri))
+            {
+                return false; // Validate() ensures every entry parses, so this is belt-and-braces.
+            }
+
+            if (!string.Equals(uri.Scheme, allowedUri.Scheme, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(uri.Host, allowedUri.Host, StringComparison.OrdinalIgnoreCase)
+                || uri.Port != allowedUri.Port)
+            {
+                return false;
+            }
+
+            var incomingPath = uri.AbsolutePath.TrimEnd('/');
+            var allowedPath = allowedUri.AbsolutePath.TrimEnd('/');
+
+            return incomingPath.Equals(allowedPath, StringComparison.Ordinal)
+                || incomingPath.StartsWith(allowedPath + "/", StringComparison.Ordinal);
+        });
     }
 
     private static bool IsLoopbackHost(string host) =>

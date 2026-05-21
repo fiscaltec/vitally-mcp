@@ -97,8 +97,34 @@ public class OAuthOptionsTests
     public void IsRedirectUriAllowed_PrefixCannotBeSpoofed(string redirectUri)
     {
         // Make sure the prefix match doesn't allow attacker-controlled subdomain or appended
-        // path segment to look like a legitimate callback. Only "/"-delimited or "?"-delimited
-        // extensions count as matching the same callback.
+        // path segment to look like a legitimate callback. Only "/"-delimited extensions count
+        // as matching the same callback (the path comparison enforces a path-segment boundary).
+        var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("https://CLAUDE.AI/api/mcp/auth_callback")]
+    [InlineData("https://Claude.Ai/api/mcp/auth_callback")]
+    [InlineData("HTTPS://claude.ai/api/mcp/auth_callback")]
+    public void IsRedirectUriAllowed_SchemeAndHostAreCaseInsensitive(string redirectUri)
+    {
+        // RFC 3986 §6.2.2: scheme and host are case-insensitive equivalence components.
+        var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
+
+        options.IsRedirectUriAllowed(redirectUri).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("https://claude.ai/API/MCP/AUTH_CALLBACK")]
+    [InlineData("https://claude.ai/api/MCP/auth_callback")]
+    [InlineData("https://claude.ai/api/mcp/Auth_Callback")]
+    public void IsRedirectUriAllowed_PathIsCaseSensitive(string redirectUri)
+    {
+        // RFC 3986 §6.2.2.3: path/query are assumed case-sensitive. Treating them as
+        // case-insensitive would let a client route through a different endpoint than the
+        // one the server administrator allowlisted.
         var options = ValidOptions(["https://claude.ai/api/mcp/auth_callback"]);
 
         options.IsRedirectUriAllowed(redirectUri).Should().BeFalse();
