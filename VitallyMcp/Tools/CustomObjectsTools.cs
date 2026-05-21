@@ -49,12 +49,15 @@ public static class CustomObjectsTools
         // - Split on the first '=' so values can themselves contain '=' (e.g. a=b=c -> key "a", value "b=c").
         // - Pairs without an '=' are silently dropped.
         // - Duplicate keys: last value wins, matching typical lenient URL-form parsing.
+        // - Percent-decode keys/values so callers can pass either raw ("Acme Corp") or
+        //   already-encoded ("Acme%20Corp") values; VitallyService.GetResourcesAsync then
+        //   re-encodes consistently, avoiding double-encoding (%20 -> %2520).
         var additionalParams = new Dictionary<string, string>();
         foreach (var part in searchQuery.Split('&'))
         {
             var keyValue = part.Split('=', 2);
             if (keyValue.Length != 2) continue;
-            additionalParams[keyValue[0].Trim()] = keyValue[1].Trim();
+            additionalParams[Uri.UnescapeDataString(keyValue[0].Trim())] = Uri.UnescapeDataString(keyValue[1].Trim());
         }
 
         return await vitallyService.GetResourcesAsync($"customObjects/{customObjectId}/instances/search", 100, null, fields, null, additionalParams, null);
