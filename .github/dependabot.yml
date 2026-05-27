@@ -26,6 +26,13 @@ updates:
       microsoft-extensions:
         patterns:
           - "Microsoft.Extensions.*"
+      # Azure SDK packages share a transitive Azure.Core dependency. Bumping them in
+      # separate PRs caused a CS0433 'DefaultAzureCredential' collision (KeyVault.Secrets
+      # pulled a newer Azure.Core than the pinned Azure.Identity). Grouping them means the
+      # set builds or fails as a unit.
+      azure:
+        patterns:
+          - "Azure.*"
       test-framework:
         patterns:
           - "xunit*"
@@ -48,4 +55,22 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "ci"
+      include: "scope"
+
+  # Track the Dockerfile base images (dotnet/sdk + dotnet/aspnet). The floating "10.0"
+  # tags already pick up patch/minor on rebuild; this surfaces major bumps (e.g. .NET 11
+  # base images) as a PR so the runtime doesn't silently drift behind a new release.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "build"
       include: "scope"
