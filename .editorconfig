@@ -52,3 +52,12 @@ csharp_preferred_modifier_order = public,private,protected,internal,file,static,
 
 # Namespace style (file-scoped is the .NET 6+ default we use)
 csharp_style_namespace_declarations = file_scoped:warning
+
+# Test project — xunit.v3 analyzer tuning.
+[VitallyMcp.Tests/**.cs]
+# xUnit1051: prefer TestContext.Current.CancellationToken on cancellable calls.
+# Disabled here deliberately: the suite is fully in-memory/mocked and runs in ~1s,
+# so there is no long-running operation where cancellation responsiveness matters.
+# Threading the token through every HttpClient/ReadAsStringAsync call would add noise
+# with no practical benefit. Re-enable if slow or genuinely cancellable tests appear.
+dotnet_diagnostic.xUnit1051.severity = none
