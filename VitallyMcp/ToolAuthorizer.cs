@@ -73,37 +73,20 @@ public class ToolAuthorizer
     /// </summary>
     public static bool HasPermission(ClaimsPrincipal user, string required, string? customClaimType = null)
     {
-        foreach (var claim in user.FindAll("permissions"))
+        if (user.FindAll("permissions").Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
         {
-            if (string.Equals(claim.Value, required, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return true;
         }
 
-        if (!string.IsNullOrWhiteSpace(customClaimType))
+        if (!string.IsNullOrWhiteSpace(customClaimType)
+            && user.FindAll(customClaimType).Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
         {
-            foreach (var claim in user.FindAll(customClaimType))
-            {
-                if (string.Equals(claim.Value, required, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
+            return true;
         }
 
         var scope = user.FindFirst("scope")?.Value;
-        if (!string.IsNullOrEmpty(scope))
-        {
-            foreach (var s in scope.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (string.Equals(s, required, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return !string.IsNullOrEmpty(scope)
+            && scope.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Any(s => string.Equals(s, required, StringComparison.Ordinal));
     }
 }

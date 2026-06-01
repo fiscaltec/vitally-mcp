@@ -57,7 +57,7 @@ public class VitallyServiceAuthorizationTests
     [Fact]
     public async Task Delete_Allowed_WhenCallerHasDeletePermission()
     {
-        var (http, handler) = TestHelpers.CreateMockHttpClientWithHandler("{}", HttpStatusCode.OK);
+        var http = TestHelpers.CreateMockHttpClient("{}", HttpStatusCode.OK);
         var service = TestHelpers.BuildVitallyService(
             http, authorizer: TestHelpers.BuildEnabledAuthorizer("vitally:delete"));
 

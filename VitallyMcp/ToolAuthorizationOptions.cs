@@ -56,7 +56,7 @@ public class ToolAuthorizationOptions
             || string.IsNullOrWhiteSpace(DeletePermission))
         {
             throw new InvalidOperationException(
-                "Authorization:ReadPermission, WritePermission and DeletePermission must all be set when Authorization:Enabled is true. "
+                "Authorization:ReadPermission, Authorization:WritePermission and Authorization:DeletePermission must all be set when Authorization:Enabled is true. "
                 + "Set Authorization:Enabled=false only for local development.");
         }
     }

@@ -119,7 +119,7 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         // audience with no user sign-in. The guard must reject before any upstream call.
         using var client = _factory.CreateClient();
 
-        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["grant_type"] = grantType,
             ["client_id"] = "test-client-id"

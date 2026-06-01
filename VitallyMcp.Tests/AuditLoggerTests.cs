@@ -60,8 +60,8 @@ public class AuditLoggerTests
         logger.Entries.Should().ContainSingle();
         var (level, message) = logger.Entries[0];
         level.Should().Be(LogLevel.Information);
-        message.Should().Contain("alice@fiscaltec.com");
-        message.Should().Contain("auth0|123");
+        message.Should().Contain("auth0|123", "the stable subject id is the audit actor key");
+        message.Should().NotContain("alice@fiscaltec.com", "email must not be written to the audit log");
         message.Should().Contain("DELETE");
         message.Should().Contain("/resources/accounts/acc-1");
         message.Should().NotContain("limit=20", "the query string must be stripped from the audit record");
@@ -101,7 +101,8 @@ public class AuditLoggerTests
         logger.Entries.Should().ContainSingle();
         var (level, message) = logger.Entries[0];
         level.Should().Be(LogLevel.Warning);
-        message.Should().Contain("bob@fiscaltec.com");
+        message.Should().Contain("auth0|999", "the stable subject id is the audit actor key");
+        message.Should().NotContain("bob@fiscaltec.com", "email must not be written to the audit log");
         message.Should().Contain("DENIED");
     }
 

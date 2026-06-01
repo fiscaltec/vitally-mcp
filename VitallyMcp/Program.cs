@@ -113,8 +113,9 @@ _ = app.Services.GetRequiredService<IOptions<ToolAuthorizationOptions>>().Value;
 
 app.UseForwardedHeaders();
 
-// Unauthenticated liveness/readiness probe for Container Apps. Deliberately mapped before the
-// auth middleware so platform health checks don't need a token.
+// Unauthenticated liveness/readiness probe for Container Apps. This endpoint carries no
+// RequireAuthorization() (and the MCP endpoint's auth requirement doesn't apply to it), so
+// platform health checks reach it without a token.
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 if (noAuth)
