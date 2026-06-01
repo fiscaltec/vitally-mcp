@@ -110,7 +110,17 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `SharedClientId` — pre-registered Auth0 native-app client_id that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active.
 - `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`.
 - `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
+- `PublicBaseUrl` — canonical public origin (e.g. `https://vitally.fiscaltec.com`). When set, `/.well-known/*` metadata and the OAuth proxy callback are built from this instead of the request `Host`, defending against Host-header injection into the metadata documents. Empty in local dev (falls back to request scheme+host so loopback works). Validated as absolute https.
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
+
+`ToolAuthorizationOptions` (singleton, bound from `Authorization:` section):
+- `Enabled` (default `true`), `ReadPermission` (`vitally:read`), `WritePermission` (`vitally:write`), `DeletePermission` (`vitally:delete`), `CustomPermissionsClaim` (default `https://vitally.fiscaltec.com/permissions`).
+- Permissions are read from the JWT `permissions` claim (Auth0 RBAC), the namespaced `CustomPermissionsClaim` (for the Entra-group→Action→custom-claim assignment model), or space-delimited `scope`. The Entra-group-driven model is the chosen assignment approach: a post-login Auth0 Action maps Entra group membership to the `vitally:*` permissions and writes them to the custom claim.
+- Server-side RBAC backstop. `ToolAuthorizer.EnsureAuthorized(method)` is called from **`VitallyService.SendAsync`** — the single point every Vitally call funnels through — so all ~92 tools are covered without per-tool annotation. The HTTP verb maps to the tier: GET → read, POST/PUT/PATCH → write, DELETE → delete (unknown verbs fall back to the strictest). Permissions are read from the JWT `permissions` claim (Auth0 RBAC), the namespaced `CustomPermissionsClaim`, or space-delimited `scope` (same three sources as above). Bypassed when `Enabled=false` or `OAuth:NoAuth=true`. **The `ReadOnly`/`Destructive` tool attributes are advisory client hints; this is the actual enforcement — when adding a new call path, route it through `VitallyService.SendAsync` so it stays covered, and never call the Vitally API around it.**
+
+`AuditOptions` (singleton, bound from `Audit:` section):
+- `Enabled` (default `true`), `IncludeReads` (default `false`).
+- `AuditLogger` is invoked from **`VitallyService.SendAsync`** (same choke point): `LogAction` after each upstream response and `LogDenied` on an RBAC denial. Records the authenticated user's stable subject id (`sub` claim, falling back to NameIdentifier, else `anonymous`), HTTP verb, resource path (query string stripped) and status code via structured logging — so the named properties become queryable dimensions in Application Insights / Log Analytics. **Log the `sub` (opaque, attributable Entra object id), never the email — keep personal data out of telemetry. Never log request/response bodies here either — they can contain customer PII (traits, transcripts).** This is the attribution mechanism while a single shared Vitally key is in use (per-user keys via the `secret_ref` claim remain a future option).
 
 ### API key resolution (VitallyApiKeyProvider.cs)
 
@@ -306,7 +316,7 @@ dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
 
 ## Deployment
 
-The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with Auth0 federating to Microsoft Entra for FISCAL employee sign-in), and the container image hosted in Azure Container Registry. CI builds the image on push to `main` and updates the Container App revision.
+The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with Auth0 federating to Microsoft Entra for FISCAL employee sign-in), and the container image hosted in Azure Container Registry. `.github/workflows/deploy.yml` builds the image in ACR (via GitHub OIDC, no long-lived credentials) and rolls the Container App to the new revision. It is currently **manual-trigger only** (`workflow_dispatch`) until the target infrastructure is provisioned in the separate Terraform repo, at which point the `push` trigger can be enabled. It expects repo variables `ACR_NAME` / `RESOURCE_GROUP` / `CONTAINER_APP` / `IMAGE_NAME` and secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`.
 
 | Component | Resource | Notes |
 |---|---|---|
@@ -316,6 +326,7 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Image registry | Azure Container Registry (Basic SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
 | Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com`; post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
-| CI/CD | GitHub Actions → OIDC federation → Azure | No long-lived secrets in GitHub |
+| CI/CD | GitHub Actions → OIDC federation → Azure | `deploy.yml` (manual until Terraform infra lands); no long-lived secrets in GitHub |
+| IaC | Terraform (separate repo) | Infrastructure-as-code is **not** in this repo — it lives in the Terraform repo. The `deploy.yml` workflow consumes whatever that provisions. |
 
-Bicep / `azd` templates aren't currently shipped in this repo — the table above is the contract. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code.
+Infrastructure-as-code lives in the separate Terraform repo, not here — the table above is the contract for what `deploy.yml` expects. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code.

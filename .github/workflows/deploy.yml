@@ -1,0 +1,78 @@
+name: Deploy
+
+# Builds the container image in Azure Container Registry and rolls the Azure Container App to
+# the new image. Authentication is via GitHub OIDC federation — no long-lived Azure credentials.
+#
+# SCAFFOLD: this is wired for manual runs only until the target infrastructure exists in the
+# Terraform repo. Once the registry / container app / federated identity are provisioned and the
+# repo variables + secrets below are set, uncomment the `push` trigger to deploy on merge to main.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (defaults to sha-<short-sha>)"
+        required: false
+        type: string
+  # push:
+  #   branches: [main]
+
+# OIDC federation requires id-token: write. contents: read to checkout.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build image + update Container App
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Repo configuration (Settings -> Secrets and variables -> Actions):
+    #   Variables: ACR_NAME, RESOURCE_GROUP, CONTAINER_APP, IMAGE_NAME
+    #   Secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+    env:
+      IMAGE_NAME: ${{ vars.IMAGE_NAME || 'vitally-mcp' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push image in ACR
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az acr build \
+              --registry "${{ vars.ACR_NAME }}" \
+              --image "${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
+              --file Dockerfile .
+
+      - name: Update Container App revision
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name "${{ vars.CONTAINER_APP }}" \
+              --resource-group "${{ vars.RESOURCE_GROUP }}" \
+              --image "${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"

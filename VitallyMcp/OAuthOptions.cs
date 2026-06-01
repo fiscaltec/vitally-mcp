@@ -35,6 +35,16 @@ public class OAuthOptions
     public bool NoAuth { get; set; }
 
     /// <summary>
+    /// Canonical public origin of this server (scheme + host, no trailing path), e.g.
+    /// <c>https://vitally.fiscaltec.com</c>. When set, the <c>/.well-known/*</c> metadata documents
+    /// and the OAuth proxy's own callback URL are built from this value instead of the request's
+    /// <c>Host</c> header. Set it in production so a spoofed/forwarded <c>Host</c> can never steer a
+    /// client's <c>authorization_endpoint</c>/<c>token_endpoint</c> at an attacker. Leave empty in
+    /// local development to fall back to the request scheme+host (so loopback URLs still work).
+    /// </summary>
+    public string PublicBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// OAuth client_id of a pre-registered Auth0 native application that all MCP clients share.
     /// When set, the server intercepts RFC 7591 Dynamic Client Registration calls and returns this
     /// client_id to every caller — eliminating per-session client proliferation in Auth0 and the
@@ -77,6 +87,13 @@ public class OAuthOptions
         Resource = Resource?.Trim() ?? string.Empty;
         SharedClientId = SharedClientId?.Trim() ?? string.Empty;
         SharedClientSecret = SharedClientSecret?.Trim() ?? string.Empty;
+        PublicBaseUrl = (PublicBaseUrl?.Trim() ?? string.Empty).TrimEnd('/');
+
+        if (!string.IsNullOrWhiteSpace(PublicBaseUrl)
+            && (!Uri.TryCreate(PublicBaseUrl, UriKind.Absolute, out var publicUri) || publicUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException($"OAuth:PublicBaseUrl must be an absolute https URI (got '{PublicBaseUrl}').");
+        }
 
         // The OAuth proxy endpoints (/oauth/authorize, /oauth/token, /.well-known/*)
         // use Authority to build upstream URLs even when JWT validation is skipped, so

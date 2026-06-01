@@ -10,6 +10,8 @@ public class VitallyService
     private readonly HttpClient _httpClient;
     private readonly VitallyServerOptions _options;
     private readonly VitallyApiKeyProvider _apiKeyProvider;
+    private readonly ToolAuthorizer _authorizer;
+    private readonly AuditLogger _audit;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -39,16 +41,31 @@ public class VitallyService
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _apiKeyProvider = apiKeyProvider;
+        _authorizer = authorizer;
+        _audit = audit;
         _baseUrl = _options.BaseUrl;
     }
 
     private async Task<string> SendAsync(HttpMethod method, string url, HttpContent? content = null, CancellationToken cancellationToken = default)
     {
+        // Server-side RBAC backstop: every Vitally call passes through here, so checking the
+        // caller's permission against the HTTP verb covers all tools in one place. A denied
+        // attempt is itself worth recording in the audit trail.
+        try
+        {
+            _authorizer.EnsureAuthorized(method);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _audit.LogDenied(method, url);
+            throw;
+        }
+
         using var request = new HttpRequestMessage(method, url);
         if (content is not null)
         {
@@ -64,6 +81,8 @@ public class VitallyService
         // leaking the response to callers (and several callers previously failed to dispose).
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        _audit.LogAction(method, url, (int)response.StatusCode);
 
         if (!response.IsSuccessStatusCode)
         {
