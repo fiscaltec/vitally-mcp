@@ -21,7 +21,17 @@ builder.Services.AddOptions<OAuthOptions>()
     .Bind(builder.Configuration.GetSection(OAuthOptions.SectionName))
     .PostConfigure(o => o.Validate());
 
+builder.Services.AddOptions<ToolAuthorizationOptions>()
+    .Bind(builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName))
+    .PostConfigure(o => o.Validate());
+
+builder.Services.AddOptions<AuditOptions>()
+    .Bind(builder.Configuration.GetSection(AuditOptions.SectionName));
+
 builder.Services.AddMemoryCache();
+
+// Needed so ToolAuthorizer can read the authenticated ClaimsPrincipal inside tool invocations.
+builder.Services.AddHttpContextAccessor();
 
 // SecretClient registration uses the *validated* options (via IOptions) rather than raw
 // config, so trimmed/URI-checked KeyVaultUri is what's constructed. Conditional on the
@@ -37,6 +47,8 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 }
 
 builder.Services.AddScoped<VitallyApiKeyProvider>();
+builder.Services.AddScoped<ToolAuthorizer>();
+builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddTransient<VitallyRateLimitHandler>();
 
 builder.Services.AddHttpClient<VitallyService>()
@@ -97,17 +109,26 @@ var app = builder.Build();
 // throws at startup rather than at first request.
 _ = app.Services.GetRequiredService<IOptions<VitallyServerOptions>>().Value;
 _ = app.Services.GetRequiredService<IOptions<OAuthOptions>>().Value;
+_ = app.Services.GetRequiredService<IOptions<ToolAuthorizationOptions>>().Value;
 
 app.UseForwardedHeaders();
+
+// Unauthenticated liveness/readiness probe for Container Apps. Deliberately mapped before the
+// auth middleware so platform health checks don't need a token.
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 if (noAuth)
 {
     app.Logger.LogWarning("Vitally MCP server running with NoAuth=true. This is for local development only — DO NOT use in production.");
 }
 
-static string GetServerBaseUrl(HttpContext ctx)
+// Prefer the configured canonical origin when set; otherwise derive from the request. The
+// configured value defends against Host-header injection into the OAuth metadata documents.
+static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 {
-    return $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+    return string.IsNullOrWhiteSpace(publicBaseUrl)
+        ? $"{ctx.Request.Scheme}://{ctx.Request.Host}"
+        : publicBaseUrl;
 }
 
 // RFC 9728 — Protected Resource Metadata. Points clients at the authorization server,
@@ -120,7 +141,7 @@ app.MapGet("/.well-known/oauth-protected-resource", (HttpContext ctx, IOptions<O
     var resource = string.IsNullOrWhiteSpace(o.Resource) ? o.Audience : o.Resource;
     var asUrl = string.IsNullOrWhiteSpace(o.SharedClientId)
         ? o.Authority?.TrimEnd('/')
-        : GetServerBaseUrl(ctx);
+        : GetServerBaseUrl(ctx, o.PublicBaseUrl);
     return Results.Json(new
     {
         resource,
@@ -142,7 +163,7 @@ app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions
         return Results.NotFound();
     }
     var authority = (o.Authority ?? string.Empty).TrimEnd('/');
-    var ourBase = GetServerBaseUrl(ctx);
+    var ourBase = GetServerBaseUrl(ctx, o.PublicBaseUrl);
     return Results.Json(new
     {
         issuer = authority + "/",
@@ -195,7 +216,7 @@ app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, I
 
     cache.Set($"oauth-proxy:state:{state}", clientRedirectUri, TimeSpan.FromMinutes(10));
 
-    var ourCallback = $"{GetServerBaseUrl(ctx)}/oauth/callback";
+    var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
     var authority = (o.Authority ?? string.Empty).TrimEnd('/');
     var sb = new System.Text.StringBuilder($"{authority}/authorize?");
     foreach (var kv in query)
@@ -244,7 +265,7 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
 {
     var o = oauth.Value;
     var authority = (o.Authority ?? string.Empty).TrimEnd('/');
-    var ourCallback = $"{GetServerBaseUrl(ctx)}/oauth/callback";
+    var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
 
     var form = await ctx.Request.ReadFormAsync();
     var pairs = new List<KeyValuePair<string, string>>();
@@ -264,9 +285,23 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
             }
         }
     }
+    // Restrict the grants this proxy will service. We inject a confidential client_secret
+    // below, so we must never forward a grant the shared app shouldn't service — otherwise a
+    // caller could request e.g. grant_type=client_credentials and receive a valid token for
+    // our audience with no user sign-in, bypassing authentication entirely. The metadata
+    // document advertises only these two grants (RFC 8414); enforce that here too.
+    var grantType = pairs.FirstOrDefault(p => p.Key == "grant_type").Value;
+    if (grantType is not ("authorization_code" or "refresh_token"))
+    {
+        return Results.BadRequest(new
+        {
+            error = "unsupported_grant_type",
+            error_description = "This server only supports the authorization_code and refresh_token grants."
+        });
+    }
+
     // The redirect_uri parameter must match exactly what was sent in /authorize for code
     // exchange (per OAuth 2.0). Refresh-grant requests don't include it; only inject for code.
-    var grantType = pairs.FirstOrDefault(p => p.Key == "grant_type").Value;
     if (grantType == "authorization_code" && !sawRedirect)
     {
         pairs.Add(new KeyValuePair<string, string>("redirect_uri", ourCallback));

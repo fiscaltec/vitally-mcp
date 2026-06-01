@@ -108,6 +108,29 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
             "the evil URL must not be echoed back");
     }
 
+    [Theory]
+    [InlineData("client_credentials")]
+    [InlineData("password")]
+    [InlineData("urn:ietf:params:oauth:grant-type:device_code")]
+    public async Task Token_RejectsUnsupportedGrantType(string grantType)
+    {
+        // The proxy injects a confidential client_secret on the way upstream. If it forwarded
+        // an arbitrary grant (e.g. client_credentials), a caller could obtain a token for our
+        // audience with no user sign-in. The guard must reject before any upstream call.
+        using var client = _factory.CreateClient();
+
+        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = grantType,
+            ["client_id"] = "test-client-id"
+        });
+        var response = await client.PostAsync("/oauth/token", form);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var json = await response.Content.ReadAsStringAsync();
+        json.Should().Contain("unsupported_grant_type");
+    }
+
     public class Factory : WebApplicationFactory<Program>
     {
         protected override IHost CreateHost(IHostBuilder builder)

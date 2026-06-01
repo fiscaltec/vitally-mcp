@@ -48,7 +48,9 @@ public static class TestHelpers
         HttpClient httpClient,
         string region = "US",
         string? subdomain = "test-subdomain",
-        string apiKey = "sk_live_test_key")
+        string apiKey = "sk_live_test_key",
+        ToolAuthorizer? authorizer = null,
+        AuditLogger? audit = null)
     {
         var options = Options.Create(new VitallyServerOptions
         {
@@ -60,7 +62,36 @@ public static class TestHelpers
             options,
             new MemoryCache(new MemoryCacheOptions()),
             NullLogger<VitallyApiKeyProvider>.Instance);
-        return new VitallyService(httpClient, options, provider);
+        // Default to a disabled authorizer so the bulk of the tests (which exercise URL/filter
+        // behaviour, not access control) don't need to set up claims. Enforcement is covered
+        // explicitly by ToolAuthorizerTests and the dedicated VitallyService authorisation tests.
+        authorizer ??= new ToolAuthorizer(
+            Options.Create(new ToolAuthorizationOptions { Enabled = false }),
+            Options.Create(new OAuthOptions { NoAuth = true }));
+        audit ??= new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = false }),
+            NullLogger<AuditLogger>.Instance);
+        return new VitallyService(httpClient, options, provider, authorizer, audit);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="ToolAuthorizer"/> with enforcement enabled, backed by an
+    /// <see cref="IHttpContextAccessor"/> whose principal carries the supplied permissions.
+    /// </summary>
+    public static ToolAuthorizer BuildEnabledAuthorizer(params string[] permissions)
+    {
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(
+                    permissions.Select(p => new System.Security.Claims.Claim("permissions", p)),
+                    authenticationType: "Test"))
+        };
+        var accessor = new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = httpContext };
+        return new ToolAuthorizer(
+            Options.Create(new ToolAuthorizationOptions { Enabled = true }),
+            Options.Create(new OAuthOptions { NoAuth = false }),
+            accessor);
     }
 
     /// <summary>
