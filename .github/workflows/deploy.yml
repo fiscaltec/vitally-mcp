@@ -58,7 +58,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push image in ACR
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           azcliversion: latest
           inlineScript: |
@@ -68,7 +68,7 @@ jobs:
               --file Dockerfile .
 
       - name: Update Container App revision
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           azcliversion: latest
           inlineScript: |
