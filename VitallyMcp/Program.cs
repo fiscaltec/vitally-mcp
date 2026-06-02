@@ -33,6 +33,18 @@ builder.Services.AddMemoryCache();
 // Needed so ToolAuthorizer can read the authenticated ClaimsPrincipal inside tool invocations.
 builder.Services.AddHttpContextAccessor();
 
+// Shared managed-identity credential (managed identity in prod, az login locally) used for both
+// Key Vault and the Microsoft Graph group-membership lookup.
+builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureCredential());
+
+// Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
+// Authorization:LiveGroupCheck is enabled. Short Graph timeout so a slow/unreachable Graph
+// degrades to the token-claim fallback rather than stalling tool calls.
+builder.Services.AddHttpClient<IGroupPermissionResolver, GraphGroupPermissionResolver>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+
 // SecretClient registration uses the *validated* options (via IOptions) rather than raw
 // config, so trimmed/URI-checked KeyVaultUri is what's constructed. Conditional on the
 // raw config being present so the registration only fires when KV is actually configured.
@@ -42,7 +54,7 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
     builder.Services.AddSingleton(sp =>
     {
         var opts = sp.GetRequiredService<IOptions<VitallyServerOptions>>().Value;
-        return new SecretClient(new Uri(opts.KeyVaultUri!), new DefaultAzureCredential());
+        return new SecretClient(new Uri(opts.KeyVaultUri!), sp.GetRequiredService<Azure.Core.TokenCredential>());
     });
 }
 
