@@ -39,16 +39,66 @@ public class ToolAuthorizationOptions
     /// </summary>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
 
+    /// <summary>
+    /// When true, permissions are resolved from the caller's <b>live</b> Entra group membership
+    /// (via Microsoft Graph, cached for <see cref="LiveGroupCacheSeconds"/>) rather than trusting
+    /// the frozen token claim — so group changes (grants and especially revocations) take effect
+    /// within the cache window regardless of token age. The token claim remains the automatic
+    /// fallback if the Graph lookup fails (fail-degraded, not fail-open: an empty claim still denies).
+    /// Requires the server's managed identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
+    /// </summary>
+    public bool LiveGroupCheck { get; set; }
+
+    /// <summary>TTL (seconds) for the per-user live group-membership cache. Default 60.</summary>
+    public int LiveGroupCacheSeconds { get; set; } = 60;
+
+    /// <summary>Entra security-group object id whose members get the read tier (<c>vitally:read</c>).</summary>
+    public string ReaderGroupId { get; set; } = string.Empty;
+
+    /// <summary>Entra security-group object id whose members get read + write.</summary>
+    public string EditorGroupId { get; set; } = string.Empty;
+
+    /// <summary>Entra security-group object id whose members get read + write + delete.</summary>
+    public string AdminGroupId { get; set; } = string.Empty;
+
+    /// <summary>All configured group ids (non-empty), used to scope the Graph membership check.</summary>
+    public IEnumerable<string> ConfiguredGroupIds =>
+        new[] { ReaderGroupId, EditorGroupId, AdminGroupId }.Where(g => !string.IsNullOrWhiteSpace(g));
+
     public void Validate()
     {
         ReadPermission = ReadPermission?.Trim() ?? string.Empty;
         WritePermission = WritePermission?.Trim() ?? string.Empty;
         DeletePermission = DeletePermission?.Trim() ?? string.Empty;
         CustomPermissionsClaim = CustomPermissionsClaim?.Trim() ?? string.Empty;
+        ReaderGroupId = ReaderGroupId?.Trim() ?? string.Empty;
+        EditorGroupId = EditorGroupId?.Trim() ?? string.Empty;
+        AdminGroupId = AdminGroupId?.Trim() ?? string.Empty;
 
         if (!Enabled)
         {
             return;
+        }
+
+        if (LiveGroupCheck)
+        {
+            var groupIds = ConfiguredGroupIds.ToArray();
+            if (groupIds.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "Authorization:LiveGroupCheck is true but no group ids are configured. Set at least one of "
+                    + "Authorization:ReaderGroupId / EditorGroupId / AdminGroupId to an Entra group object id.");
+            }
+            var badGuid = groupIds.FirstOrDefault(g => !Guid.TryParse(g, out _));
+            if (badGuid is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Authorization group ids must be GUIDs (Entra group object ids); got '{badGuid}'.");
+            }
+            if (LiveGroupCacheSeconds < 0)
+            {
+                throw new InvalidOperationException("Authorization:LiveGroupCacheSeconds cannot be negative.");
+            }
         }
 
         if (string.IsNullOrWhiteSpace(ReadPermission)
