@@ -93,7 +93,11 @@ public class ToolAuthorizer
             return oid;
         }
 
-        var sub = user.FindFirst("sub")?.Value;
+        // JwtBearer's default inbound claim mapping renames "sub" to ClaimTypes.NameIdentifier, so
+        // check both — otherwise the object id is never found in production and the live lookup is
+        // silently skipped (falling back to the frozen token claim).
+        var sub = user.FindFirst("sub")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!string.IsNullOrWhiteSpace(sub))
         {
             var last = sub.Split('|', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();

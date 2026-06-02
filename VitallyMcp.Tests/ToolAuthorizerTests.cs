@@ -158,6 +158,20 @@ public class ToolAuthorizerTests
     }
 
     [Fact]
+    public async Task LiveCheck_Engages_WhenSubIsMappedToNameIdentifier()
+    {
+        // Regression: JwtBearer maps "sub" -> ClaimTypes.NameIdentifier in production, so the live
+        // path must still find the object id from the mapped claim (no raw "sub" present here).
+        var resolver = new StubResolver(new HashSet<string> { "vitally:read", "vitally:write", "vitally:delete" });
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            new[] { new Claim(ClaimTypes.NameIdentifier, SubWithOid) }, "Test"));
+        var authorizer = Build(user: user, options: LiveOptions(), resolver: resolver);
+
+        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
+        resolver.LastObjectId.Should().Be("675ebdda-7590-4d79-8ec3-a2d17ab029ba");
+    }
+
+    [Fact]
     public async Task LiveCheck_Denies_WhenLiveGroupsLackPermission()
     {
         // Live membership says read-only — must override a stale token claim that still has delete.
