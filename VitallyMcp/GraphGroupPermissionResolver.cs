@@ -68,6 +68,13 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             _cache.Set(cacheKey, permissions, TimeSpan.FromSeconds(_options.LiveGroupCacheSeconds));
             return permissions;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Genuine caller cancellation (client disconnect / shutdown) — propagate rather than
+            // masking it as a fallback. A Graph *timeout* cancels its own token, not this one, so
+            // it still falls through to the fail-degraded path below.
+            throw;
+        }
         catch (Exception ex)
         {
             // Fail-degraded: log and signal the authorizer to fall back to the token claim, so a
@@ -99,13 +106,12 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         using var doc = JsonDocument.Parse(body);
         if (doc.RootElement.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in value.EnumerateArray())
+            var ids = value.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(id => !string.IsNullOrEmpty(id));
+            foreach (var id in ids)
             {
-                var id = item.GetString();
-                if (!string.IsNullOrEmpty(id))
-                {
-                    result.Add(id);
-                }
+                result.Add(id!);
             }
         }
         return result;
