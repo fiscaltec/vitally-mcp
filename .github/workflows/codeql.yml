@@ -48,6 +48,8 @@ jobs:
           # security-and-quality includes the security queries plus higher-signal
           # code-quality queries. security-extended only is fine if signal is noisy.
           queries: security-and-quality
+          # Excludes compiler-generated build output (obj/, bin/) from analysis.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Build (Release)
         run: |
