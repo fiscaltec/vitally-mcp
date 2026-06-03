@@ -58,7 +58,7 @@ public class VitallyService
         // attempt is itself worth recording in the audit trail.
         try
         {
-            _authorizer.EnsureAuthorized(method);
+            await _authorizer.EnsureAuthorizedAsync(method, cancellationToken);
         }
         catch (UnauthorizedAccessException)
         {
