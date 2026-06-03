@@ -26,6 +26,8 @@ https://vitally.fiscaltec.com/mcp
 
 The first time you connect, your client will redirect you through Auth0 to authenticate. Once authenticated, the server proxies your tool calls to Vitally using a service-account API key it fetches from Azure Key Vault.
 
+> **Access & groups:** authentication alone grants nothing — you must be in a `sg-vitally-*` Entra group for your access tier. See **[ACCESS.md](ACCESS.md)** for connecting, the group setup, and how access is granted or revoked.
+
 ### Claude Desktop
 
 Settings → Connectors → Add custom connector → paste the URL above. Approve the Microsoft sign-in popup.
