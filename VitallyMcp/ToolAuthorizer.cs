@@ -10,28 +10,37 @@ namespace VitallyMcp;
 /// through — so all ~92 tools are covered without per-tool annotation. Because every read
 /// (including search) is a GET and every mutation is a POST/PUT/DELETE, the HTTP verb is a
 /// faithful proxy for the tool's read/write/delete tier.
+///
+/// Permission resolution order:
+///   1. If <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> is on, the caller's <b>live</b>
+///      Entra group membership (via <see cref="IGroupPermissionResolver"/>) — so group changes
+///      take effect within the cache window regardless of token age.
+///   2. Otherwise (or if the live lookup is unavailable) the token's permission claim / scope.
 /// </summary>
 public class ToolAuthorizer
 {
     private readonly ToolAuthorizationOptions _options;
     private readonly bool _noAuth;
     private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly IGroupPermissionResolver? _groupResolver;
 
     public ToolAuthorizer(
         IOptions<ToolAuthorizationOptions> options,
         IOptions<OAuthOptions> oauth,
-        IHttpContextAccessor? httpContextAccessor = null)
+        IHttpContextAccessor? httpContextAccessor = null,
+        IGroupPermissionResolver? groupResolver = null)
     {
         _options = options.Value;
         _noAuth = oauth.Value.NoAuth;
         _httpContextAccessor = httpContextAccessor;
+        _groupResolver = groupResolver;
     }
 
     /// <summary>
     /// Throws <see cref="UnauthorizedAccessException"/> if the current caller lacks the permission
     /// required for the given HTTP verb. No-op when authorisation is disabled or in NoAuth dev mode.
     /// </summary>
-    public void EnsureAuthorized(HttpMethod method)
+    public async Task EnsureAuthorizedAsync(HttpMethod method, CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || _noAuth)
         {
@@ -41,12 +50,64 @@ public class ToolAuthorizer
         var required = RequiredPermission(method);
         var user = _httpContextAccessor?.HttpContext?.User;
 
-        if (user is null || !HasPermission(user, required, _options.CustomPermissionsClaim))
+        if (user?.Identity?.IsAuthenticated != true
+            || !await HasEffectivePermissionAsync(user, required, cancellationToken))
         {
             throw new UnauthorizedAccessException(
                 $"Access denied: this operation requires the '{required}' permission, which your token does not grant. "
                 + "Contact the Infrastructure team if you need this access.");
         }
+    }
+
+    private async Task<bool> HasEffectivePermissionAsync(ClaimsPrincipal user, string required, CancellationToken cancellationToken)
+    {
+        if (_options.LiveGroupCheck && _groupResolver is not null)
+        {
+            var objectId = ExtractObjectId(user);
+            if (objectId is not null)
+            {
+                var live = await _groupResolver.TryResolvePermissionsAsync(objectId, cancellationToken);
+                if (live is not null)
+                {
+                    // Authoritative when the live lookup succeeds (empty set => deny).
+                    return live.Contains(required);
+                }
+                // live == null => lookup unavailable; fall through to the token claim.
+            }
+        }
+
+        return HasPermission(user, required, _options.CustomPermissionsClaim);
+    }
+
+    /// <summary>
+    /// Extracts the user's Entra object id (GUID) for the Graph lookup: the <c>oid</c> claim if
+    /// present, else the trailing GUID of the <c>sub</c> (Auth0 federated subjects are shaped
+    /// <c>waad|connection|{objectId}</c>). Returns null if no GUID can be determined.
+    /// </summary>
+    private static string? ExtractObjectId(ClaimsPrincipal user)
+    {
+        var oid = user.FindFirst("oid")?.Value
+            ?? user.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
+        if (!string.IsNullOrWhiteSpace(oid) && Guid.TryParse(oid, out _))
+        {
+            return oid;
+        }
+
+        // JwtBearer's default inbound claim mapping renames "sub" to ClaimTypes.NameIdentifier, so
+        // check both — otherwise the object id is never found in production and the live lookup is
+        // silently skipped (falling back to the frozen token claim).
+        var sub = user.FindFirst("sub")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!string.IsNullOrWhiteSpace(sub))
+        {
+            var last = sub.Split('|', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            if (last is not null && Guid.TryParse(last, out _))
+            {
+                return last;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
