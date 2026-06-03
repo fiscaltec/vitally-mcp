@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using Azure.Core;
 using Microsoft.Extensions.Caching.Memory;
@@ -10,9 +9,12 @@ namespace VitallyMcp;
 
 /// <summary>
 /// Resolves live Vitally permissions from Microsoft Graph group membership. Uses the server's
-/// managed identity (<see cref="TokenCredential"/>) to call Graph's <c>checkMemberGroups</c>,
-/// which returns — transitively — the subset of the configured group ids the user belongs to.
-/// Results are cached per user for <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/>.
+/// managed identity (<see cref="TokenCredential"/>) to check, for each configured group, whether
+/// the user is a member — by listing the group's members filtered to that user id. Checking from
+/// the group side needs only <c>GroupMember.Read.All</c>; the alternative
+/// <c>POST /users/{id}/checkMemberGroups</c> additionally requires a user-read permission
+/// (User.ReadBasic.All), which we deliberately avoid. Results are cached per user for
+/// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/>.
 ///
 /// Requires the managed identity to hold the Graph application permission <c>GroupMember.Read.All</c>.
 /// On any failure the method returns <c>null</c> so the authorizer falls back to the token claim.
@@ -63,7 +65,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
 
         try
         {
-            var memberOf = await CheckMemberGroupsAsync(userObjectId, groupIds, cancellationToken);
+            var memberOf = await ResolveMemberGroupsAsync(userObjectId, groupIds, cancellationToken);
             var permissions = MapGroupsToPermissions(memberOf);
             _cache.Set(cacheKey, permissions, TimeSpan.FromSeconds(_options.LiveGroupCacheSeconds));
             return permissions;
@@ -84,37 +86,43 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         }
     }
 
-    private async Task<HashSet<string>> CheckMemberGroupsAsync(string userObjectId, string[] groupIds, CancellationToken cancellationToken)
+    // Determine which of the configured groups the user belongs to, checking from the group side
+    // (list a group's members filtered to this user id). Listing group members needs only
+    // GroupMember.Read.All — unlike POST /users/{id}/checkMemberGroups, which also requires reading
+    // the user object (User.ReadBasic.All). Direct membership is sufficient here because the
+    // sg-vitally-* groups are assigned to users directly.
+    private async Task<HashSet<string>> ResolveMemberGroupsAsync(string userObjectId, string[] groupIds, CancellationToken cancellationToken)
     {
         var token = await _credential.GetTokenAsync(new TokenRequestContext(GraphScopes), cancellationToken);
+        var member = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var payload = JsonSerializer.Serialize(new { groupIds });
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{GraphBase}/users/{Uri.EscapeDataString(userObjectId)}/checkMemberGroups")
+        foreach (var groupId in groupIds)
         {
-            Content = new StringContent(payload, Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            // $filter on id is an advanced query, so $count=true + ConsistencyLevel: eventual are
+            // required. Returns the user only if they are a member of this group.
+            var filter = Uri.EscapeDataString($"id eq '{userObjectId}'");
+            var url = $"{GraphBase}/groups/{Uri.EscapeDataString(groupId)}/members?$count=true&$select=id&$filter={filter}";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            request.Headers.Add("ConsistencyLevel", "eventual");
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"Graph checkMemberGroups returned {(int)response.StatusCode}: {body}");
-        }
-
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Array)
-        {
-            var ids = value.EnumerateArray()
-                .Select(e => e.GetString())
-                .Where(id => !string.IsNullOrEmpty(id));
-            foreach (var id in ids)
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
             {
-                result.Add(id!);
+                throw new HttpRequestException($"Graph group members query returned {(int)response.StatusCode}: {body}");
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("value", out var value)
+                && value.ValueKind == JsonValueKind.Array
+                && value.GetArrayLength() > 0)
+            {
+                member.Add(groupId);
             }
         }
-        return result;
+
+        return member;
     }
 
     // Cumulative tiers, mirroring the Auth0 post-login Action: admin ⊇ editor ⊇ reader.
