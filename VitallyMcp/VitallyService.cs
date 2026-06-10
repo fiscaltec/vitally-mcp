@@ -149,6 +149,11 @@ public class VitallyService
     /// </summary>
     public async Task<string> SearchCustomObjectInstancesAsync(string customObjectId, IReadOnlyDictionary<string, string> criteria, string? fields = null, string? traits = null)
     {
+        if (criteria.Count == 0)
+        {
+            throw new ArgumentException("At least one search criterion is required.", nameof(criteria));
+        }
+
         var query = string.Join("&", criteria.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
         var url = $"{_baseUrl}/resources/customObjects/{customObjectId}/instances/search?{query}";
 

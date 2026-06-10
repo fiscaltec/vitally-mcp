@@ -1038,6 +1038,22 @@ public class VitallyServiceTests
         result.Should().Contain("\"organizationId\"");
     }
 
+    [Fact]
+    public async Task SearchCustomObjectInstancesAsync_WithNoCriteria_ThrowsAndMakesNoCall()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        Func<Task> act = () => service.SearchCustomObjectInstancesAsync("cobj-123", new Dictionary<string, string>());
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
     #endregion
 
     #region Resource-Specific Defaults — newly-added resources
