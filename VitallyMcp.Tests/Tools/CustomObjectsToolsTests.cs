@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Moq;
+using Moq.Protected;
 using VitallyMcp.Tools;
 
 namespace VitallyMcp.Tests.Tools;
@@ -230,5 +232,177 @@ public class CustomObjectsToolsTests
         // Assert
         result.Should().NotBeNullOrEmpty();
         result.Should().Contain("success");
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithOrganizationId_RoutesToSearchWithoutLimit()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        var result = await CustomObjectsTools.ListCustomObjectInstances(service, "cobj-123", organizationId: "org-456");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Get
+                && req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("organizationId=org-456")
+                && !req.RequestUri.Query.Contains("limit")),
+            ItExpr.IsAny<CancellationToken>());
+        result.Should().Contain("\"results\"");
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithCustomFieldPair_RoutesToSearchWithBothParams()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        await CustomObjectsTools.ListCustomObjectInstances(
+            service, "cobj-123", customFieldId: "cf-1", customFieldValue: "Gold");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("customFieldId=cf-1")
+                && req.RequestUri.Query.Contains("customFieldValue=Gold")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithTwoScopeCriteria_ThrowsAndMakesNoCall()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        Func<Task> act = () => CustomObjectsTools.ListCustomObjectInstances(
+            service, "cobj-123", organizationId: "org-1", customerId: "cust-1");
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithCustomFieldIdOnly_Throws()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        Func<Task> act = () => CustomObjectsTools.ListCustomObjectInstances(
+            service, "cobj-123", customFieldId: "cf-1");
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithCustomerId_RoutesToSearch()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        await CustomObjectsTools.ListCustomObjectInstances(service, "cobj-123", customerId: "cust-1");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("customerId=cust-1")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithCustomFieldValueOnly_Throws()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        Func<Task> act = () => CustomObjectsTools.ListCustomObjectInstances(
+            service, "cobj-123", customFieldValue: "Gold");
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_Unscoped_SendsLimitToPlainListPath()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        await CustomObjectsTools.ListCustomObjectInstances(service, "cobj-123");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances"
+                && req.RequestUri.Query.Contains("limit=20")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_Unscoped_AppliesInstanceDefaultFields()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await CustomObjectsTools.ListCustomObjectInstances(service, "cobj-123");
+
+        // Assert — new defaults applied, large field excluded
+        result.Should().Contain("\"organizationId\"");
+        result.Should().Contain("\"name\"");
+        result.Should().NotContain("descriptionBody");
+    }
+
+    [Fact]
+    public async Task ListCustomObjectInstances_WithTraits_SubsetsTraits()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act — request only the 'target' trait
+        var result = await CustomObjectsTools.ListCustomObjectInstances(
+            service, "cobj-123", fields: "id,traits", traits: "target");
+
+        // Assert — only the requested trait survives
+        result.Should().Contain("target");
+        result.Should().NotContain("owner");
     }
 }
