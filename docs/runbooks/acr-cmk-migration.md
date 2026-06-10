@@ -12,10 +12,12 @@ app's secret vault fully private and the app online throughout.
   cannot reach. So the CMK key goes in a **dedicated key vault** that allows ACR via the
   **trusted-Azure-services bypass** — the secret vault stays fully private and untouched.
 
-## Open item to verify FIRST (step 0)
-Confirm ACR can read a CMK key from a **firewalled** key vault (trusted-services bypass). If ACR is
-not an accepted trusted service for Key Vault, the CMK vault must instead use a private endpoint into
-the VNet or a documented network exception. **Do not proceed past step 0 until confirmed.**
+## Step 0 — feasibility (verified ✓)
+**Confirmed via Microsoft docs:** ACR can read a CMK key from a **firewalled** key vault using the
+trusted-Azure-services bypass (`--default-action Deny --bypass AzureServices`) plus a user-assigned
+identity with crypto permissions — the same pattern Microsoft documents for AKS/ACI private-KV CMK.
+The one caveat (enabling a KV firewall *after* creating the registry can cause 403s) is avoided here by
+configuring the CMK vault **before** creating the registry.
 
 ## Target design
 | Resource | Name | Config |

@@ -29,6 +29,10 @@ and DR-able.
   export TF_VAR_oauth_shared_client_secret='…'
   export TF_VAR_teams_webhook_url='…'
   ```
+  > ⚠️ Terraform persists these values in **state** even though the variables are `sensitive`. Always use a
+  > **remote backend with encryption + tight RBAC** (the azurerm backend on a locked-down storage account)
+  > and never commit state. To keep secret *values* out of state entirely, switch the Container App/Job
+  > secrets to **Key Vault references** (`key_vault_secret_id`) instead of inline values.
 
 ## Adoption (import the existing estate)
 ```bash

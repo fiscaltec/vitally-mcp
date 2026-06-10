@@ -11,7 +11,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 - **Scope:** full private — both Key Vault **and** ACR (ACR Basic → Premium).
 - **Driver:** private-by-default standard for the business (reference pattern).
 - **VNet:** standalone `10.80.0.0/23`, not peered (peer to hub later if desired).
-- **Scanner:** re-platform the Consumption Logic App → VNet-integrated **timer Function**.
+- **Scanner:** re-platform the Consumption Logic App → a VNet-integrated scanner. *(As-built: implemented as a Container Apps **Job** on `python:3-slim`, not a Function — see the As-built section.)*
 - **Cutover:** anytime / low-traffic; parallel-run old + new for rollback.
 - **Ingress stays external** (public) — only the *back-end dependencies* go private. Public
   hostname `vitally.fiscaltec.com` is preserved, so **no Auth0/OAuth changes**.
@@ -109,6 +109,7 @@ public IP (~£3/mo), scanner Job (pennies, no storage), 2 private DNS zones (~£
 - **Validation (with public OFF):** scanner read KV via PE ✓; app pulled image via ACR PE + `/health` 200 over
   the internet ✓; user client-tested OAuth + list accounts end-to-end ✓.
 - **Admin access:** KV/ACR data-plane from outside the VNet is now blocked. For the 180-day secret rotation,
-  temporarily re-enable public + add an IP rule (current admin egress IP `51.148.41.71`) or use a VNet host.
+  temporarily re-enable public + add an IP rule for your **current admin egress IP** (find it with
+  `curl -s https://api.ipify.org`), then revert; or use a VNet-joined host / Bastion.
 - **CI/CD (feeds #10):** `deploy.yml` still unwired; with ACR public off, verify `az acr build`/push from CI
   and enable ACR "trusted Azure services" if needed.

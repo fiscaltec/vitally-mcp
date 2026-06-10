@@ -20,11 +20,17 @@ q = urllib.parse.urlencode({"resource": "https://vault.azure.net", "api-version"
 tok = getj(ie + "?" + q, {"X-IDENTITY-HEADER": ih})["access_token"]
 print("[scan] token acquired", flush=True)
 
-data = getj("https://%s.vault.azure.net/secrets?api-version=7.4" % vault, {"Authorization": "Bearer " + tok})
+# List secrets, following nextLink pagination so large vaults aren't truncated.
+secrets = []
+next_url = "https://%s.vault.azure.net/secrets?api-version=7.4" % vault
+while next_url:
+    page = getj(next_url, {"Authorization": "Bearer " + tok})
+    secrets.extend(page.get("value", []))
+    next_url = page.get("nextLink")
 now = datetime.datetime.now(datetime.timezone.utc)
 thr = now + datetime.timedelta(days=30)
 near = []
-for s in data.get("value", []):
+for s in secrets:
     a = s.get("attributes") or {}
     exp = a.get("exp")
     if a.get("enabled") and exp:

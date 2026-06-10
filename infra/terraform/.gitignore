@@ -8,4 +8,5 @@ crash.*.log
 # Variable files with secrets — never commit (only the .example is tracked)
 *.tfvars
 !*.tfvars.example
-.terraform.lock.hcl
+
+# NOTE: .terraform.lock.hcl IS committed (pins provider versions for reproducibility).

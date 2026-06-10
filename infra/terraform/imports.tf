@@ -8,7 +8,7 @@
 # Comment these out again once the import has completed successfully.
 
 locals {
-  rg_id = "/subscriptions/282207c6-4107-47fa-9d4e-b2fa9b3066cb/resourceGroups/vitally-prod-rg-uksouth"
+  rg_id = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
 }
 
 import {
