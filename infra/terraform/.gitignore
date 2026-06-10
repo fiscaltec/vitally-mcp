@@ -10,3 +10,7 @@ crash.*.log
 !*.tfvars.example
 
 # NOTE: .terraform.lock.hcl IS committed (pins provider versions for reproducibility).
+
+# Python bytecode cache (from local syntax checks of scan/run.py)
+__pycache__/
+*.pyc
