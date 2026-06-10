@@ -950,6 +950,64 @@ public class VitallyServiceTests
 
     #endregion
 
+    #region GetCustomObjectInstanceByIdAsync Tests
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_WithMatch_ReturnsSingleUnwrappedObject()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-123");
+
+        // Assert — searched by id, returned a single object (not a {results} envelope)
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("id=inst-123")),
+            ItExpr.IsAny<CancellationToken>());
+        result.Should().NotContain("\"results\"");
+        result.Should().Contain("inst-123");
+        result.Should().Contain("\"organizationId\"");
+    }
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_NoMatch_ReturnsNotFoundMessage()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetEmptyResultsJson());
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-999");
+
+        // Assert
+        result.Should().Contain("No custom object instance found with id inst-999");
+    }
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_WithExplicitFields_HonoursFieldSelection()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act — request only id,name
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-123", fields: "id,name");
+
+        // Assert — requested fields present, non-requested default field excluded
+        result.Should().Contain("\"id\"");
+        result.Should().Contain("\"name\"");
+        result.Should().NotContain("\"organizationId\"");
+    }
+
+    #endregion
+
     #region SearchCustomObjectInstancesAsync Tests
 
     [Fact]

@@ -156,6 +156,19 @@ public class VitallyService
         return FilterJsonFields(jsonResponse, fields, "customObjectInstances", isListResponse: true, traits);
     }
 
+    /// <summary>
+    /// Reads a single custom object instance by id. Vitally has no direct single-instance GET, so
+    /// this uses <c>/instances/search?id=…</c> and unwraps the single result. Returns a clear
+    /// not-found message (not an exception) when the search yields no match (HTTP 200, empty results).
+    /// </summary>
+    public async Task<string> GetCustomObjectInstanceByIdAsync(string customObjectId, string instanceId, string? fields = null, string? traits = null)
+    {
+        var url = $"{_baseUrl}/resources/customObjects/{customObjectId}/instances/search?id={Uri.EscapeDataString(instanceId)}";
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
+        return FilterSingleFromResults(jsonResponse, fields, "customObjectInstances", traits,
+            notFoundMessage: $"No custom object instance found with id {instanceId}");
+    }
+
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{resourceType}";
@@ -218,6 +231,16 @@ public class VitallyService
         return await SendAsync(HttpMethod.Delete, url);
     }
 
+    private static string[] ResolveFields(string? fields, string defaultsKey) =>
+        string.IsNullOrWhiteSpace(fields)
+            ? (ResourceDefaultFields.TryGetValue(defaultsKey, out var defaults) ? defaults : FallbackDefaultFields)
+            : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string[]? ResolveTraits(string? traits) =>
+        string.IsNullOrWhiteSpace(traits)
+            ? null
+            : traits.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     /// <summary>
     /// Filters JSON response to include only requested fields and traits.
     /// If no fields specified, returns resource-specific default field set.
@@ -226,13 +249,8 @@ public class VitallyService
     /// </summary>
     private static string FilterJsonFields(string jsonResponse, string? fields, string resourceType, bool isListResponse, string? traits = null)
     {
-        var requestedFields = string.IsNullOrWhiteSpace(fields)
-            ? (ResourceDefaultFields.TryGetValue(resourceType, out var defaults) ? defaults : FallbackDefaultFields)
-            : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var requestedTraits = string.IsNullOrWhiteSpace(traits)
-            ? null
-            : traits.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var requestedFields = ResolveFields(fields, resourceType);
+        var requestedTraits = ResolveTraits(traits);
 
         using var document = JsonDocument.Parse(jsonResponse);
         using var stream = new MemoryStream();
@@ -267,6 +285,31 @@ public class VitallyService
         }
 
         writer.WriteEndObject();
+        writer.Flush();
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Extracts the first element of a <c>{results: [...]}</c> response and returns it as a single
+    /// filtered object. Returns <c>{"message": notFoundMessage}</c> when results are absent or empty.
+    /// </summary>
+    private static string FilterSingleFromResults(string jsonResponse, string? fields, string defaultsKey, string? traits, string notFoundMessage)
+    {
+        using var document = JsonDocument.Parse(jsonResponse);
+        if (!document.RootElement.TryGetProperty("results", out var results)
+            || results.ValueKind != JsonValueKind.Array
+            || results.GetArrayLength() == 0)
+        {
+            return JsonSerializer.Serialize(new { message = notFoundMessage });
+        }
+
+        var requestedFields = ResolveFields(fields, defaultsKey);
+        var requestedTraits = ResolveTraits(traits);
+
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        WriteFilteredObject(writer, results[0], requestedFields, requestedTraits);
         writer.Flush();
 
         return Encoding.UTF8.GetString(stream.ToArray());
