@@ -950,6 +950,38 @@ public class VitallyServiceTests
 
     #endregion
 
+    #region SearchCustomObjectInstancesAsync Tests
+
+    [Fact]
+    public async Task SearchCustomObjectInstancesAsync_BuildsSearchUrlWithCriterionAndNoLimit()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+        var criteria = new Dictionary<string, string> { ["organizationId"] = "org-456" };
+
+        // Act
+        var result = await service.SearchCustomObjectInstancesAsync("cobj-123", criteria);
+
+        // Assert — routes to /search with the criterion and NO limit param
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Get
+                && req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("organizationId=org-456")
+                && !req.RequestUri.Query.Contains("limit")),
+            ItExpr.IsAny<CancellationToken>());
+
+        // Assert — list envelope is filtered and preserved
+        result.Should().Contain("\"results\"");
+        result.Should().Contain("\"organizationId\"");
+    }
+
+    #endregion
+
     #region Resource-Specific Defaults — newly-added resources
 
     [Fact]

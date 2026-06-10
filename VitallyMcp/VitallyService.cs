@@ -140,6 +140,22 @@ public class VitallyService
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
     }
 
+    /// <summary>
+    /// Searches custom object instances via Vitally's <c>/instances/search</c> endpoint, which
+    /// accepts exactly one criterion (where <c>customFieldId</c>+<c>customFieldValue</c> are a
+    /// single paired criterion). Only the criterion is sent — no <c>limit</c>/<c>from</c>/<c>sortBy</c>,
+    /// since the search endpoint's pagination support is not documented. The standard
+    /// <c>{results, next}</c> field/trait filtering is applied; <c>next</c> is passed through if present.
+    /// </summary>
+    public async Task<string> SearchCustomObjectInstancesAsync(string customObjectId, IReadOnlyDictionary<string, string> criteria, string? fields = null, string? traits = null)
+    {
+        var query = string.Join("&", criteria.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+        var url = $"{_baseUrl}/resources/customObjects/{customObjectId}/instances/search?{query}";
+
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
+        return FilterJsonFields(jsonResponse, fields, "customObjectInstances", isListResponse: true, traits);
+    }
+
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{resourceType}";
