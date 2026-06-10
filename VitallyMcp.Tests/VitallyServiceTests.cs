@@ -93,6 +93,28 @@ public class VitallyServiceTests
         firstUser.TryGetProperty("traits", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task GetResourcesAsync_WithDefaultsKey_UsesThatKeysDefaultFields()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act — instance URL path is not an exact-match defaults key, so we pass defaultsKey explicitly
+        var result = await service.GetResourcesAsync(
+            "customObjects/cobj-1/instances", defaultsKey: "customObjectInstances");
+        var jsonDoc = JsonDocument.Parse(result);
+        var firstInstance = jsonDoc.RootElement.GetProperty("results")[0];
+
+        // Assert — new instance default fields present
+        firstInstance.TryGetProperty("name", out _).Should().BeTrue();
+        firstInstance.TryGetProperty("organizationId", out _).Should().BeTrue();
+        firstInstance.TryGetProperty("customerId", out _).Should().BeTrue();
+
+        // Assert — large field excluded by default
+        firstInstance.TryGetProperty("descriptionBody", out _).Should().BeFalse();
+    }
+
     #endregion
 
     #region Field Filtering Tests

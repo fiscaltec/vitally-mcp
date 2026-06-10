@@ -36,7 +36,8 @@ public class VitallyService
         ["noteCategories"] = ["id", "name", "createdAt", "updatedAt"],
         ["taskCategories"] = ["id", "name", "createdAt", "updatedAt"],
         ["meetings"] = ["id", "title", "externalId", "startDateTime", "endDateTime", "location", "source", "accountIds", "organizationIds", "participants", "createdAt", "updatedAt"],
-        ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"]
+        ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"],
+        ["customObjectInstances"] = ["id", "name", "externalId", "createdAt", "updatedAt", "organizationId", "customerId", "archivedAt"]
     };
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
@@ -102,7 +103,7 @@ public class VitallyService
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…(truncated)";
 
-    public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
+    public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null, string? defaultsKey = null)
     {
         // Percent-encode keys and values (RFC 3986 query-string encoding via
         // Uri.EscapeDataString — spaces become %20, not +) so user-supplied filter values
@@ -128,7 +129,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}?{queryString}";
 
         var jsonResponse = await SendAsync(HttpMethod.Get, url);
-        return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: true, traits);
+        return FilterJsonFields(jsonResponse, fields, defaultsKey ?? resourceType, isListResponse: true, traits);
     }
 
     public async Task<string> GetResourceByIdAsync(string resourceType, string id, string? fields = null, string? traits = null)
