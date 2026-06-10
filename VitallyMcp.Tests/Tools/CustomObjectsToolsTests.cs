@@ -405,4 +405,41 @@ public class CustomObjectsToolsTests
         result.Should().Contain("target");
         result.Should().NotContain("owner");
     }
+
+    [Fact]
+    public async Task GetCustomObjectInstance_WithMatch_ReturnsSingleObject()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        var result = await CustomObjectsTools.GetCustomObjectInstance(service, "cobj-123", "inst-123");
+
+        // Assert
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("id=inst-123")),
+            ItExpr.IsAny<CancellationToken>());
+        result.Should().NotContain("\"results\"");
+        result.Should().Contain("inst-123");
+    }
+
+    [Fact]
+    public async Task GetCustomObjectInstance_NoMatch_ReturnsNotFoundMessage()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetEmptyResultsJson());
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await CustomObjectsTools.GetCustomObjectInstance(service, "cobj-123", "inst-999");
+
+        // Assert
+        result.Should().Contain("No custom object instance found with id inst-999");
+    }
 }

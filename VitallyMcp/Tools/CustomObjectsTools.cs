@@ -91,6 +91,17 @@ public static class CustomObjectsTools
         return criteria;
     }
 
+    [McpServerTool(Name = "Get_custom_object_instance", Title = "Get custom object instance", ReadOnly = true, Destructive = false), Description("Get a single custom object instance by its ID. Implemented via Vitally's instance search (Vitally has no direct single-instance GET). Returns a not-found message if the ID does not match.")]
+    public static async Task<string> GetCustomObjectInstance(
+        VitallyService vitallyService,
+        [Description("The custom object ID")] string customObjectId,
+        [Description("The instance ID")] string instanceId,
+        [Description("Comma-separated list of fields to include. Defaults to: id,name,externalId,createdAt,updatedAt,organizationId,customerId,archivedAt. Client-side filtering.")] string? fields = null,
+        [Description("Comma-separated trait names to include (requires 'traits' in fields). Client-side filtering.")] string? traits = null)
+    {
+        return await vitallyService.GetCustomObjectInstanceByIdAsync(customObjectId, instanceId, fields, traits);
+    }
+
     [McpServerTool(Name = "Search_custom_object_instances", Title = "Search custom object instances", ReadOnly = true, Destructive = false), Description("Search for custom object instances by various criteria")]
     public static async Task<string> SearchCustomObjectInstances(
         VitallyService vitallyService,
