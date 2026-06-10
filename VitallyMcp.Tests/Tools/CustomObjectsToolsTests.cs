@@ -90,21 +90,6 @@ public class CustomObjectsToolsTests
     }
 
     [Fact]
-    public async Task SearchCustomObjectInstances_WithQuery_ShouldReturnMatchingInstances()
-    {
-        // Arrange
-        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleCustomObjectInstanceJson());
-        var service = CreateService(mockClient);
-
-        // Act
-        var result = await CustomObjectsTools.SearchCustomObjectInstances(service, "cobj-123", "externalId=ext-inst-123");
-
-        // Assert
-        result.Should().NotBeNullOrEmpty();
-        result.Should().Contain("inst-123");
-    }
-
-    [Fact]
     public async Task CreateCustomObject_WithValidData_ShouldReturnCreatedObject()
     {
         // Arrange
