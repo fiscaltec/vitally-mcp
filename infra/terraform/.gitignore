@@ -1,0 +1,16 @@
+# Terraform state + working files
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Variable files with secrets — never commit (only the .example is tracked)
+*.tfvars
+!*.tfvars.example
+
+# NOTE: .terraform.lock.hcl IS committed (pins provider versions for reproducibility).
+
+# Python bytecode cache (from local syntax checks of scan/run.py)
+__pycache__/
+*.pyc

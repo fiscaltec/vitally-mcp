@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored) and fill in the secrets, OR supply via environment:
+#   export TF_VAR_oauth_shared_client_secret=...
+#   export TF_VAR_teams_webhook_url=...
+#
+# All non-secret values have sensible defaults in variables.tf.
+
+oauth_shared_client_secret = "<Auth0 shared app client secret>"
+teams_webhook_url          = "<Teams Power Automate Workflows webhook URL>"
