@@ -84,6 +84,77 @@ import {
   id = "${local.rg_id}/providers/Microsoft.Network/privateEndpoints/vitally-prod-pe-acr-uksouth"
 }
 
+# ---- 2026-06-10: AMPLS (App Insights/LAW privatisation) + VNet flow logs ----
+# Applied to the live estate via CLI; bring under management with these imports.
+import {
+  to = azurerm_subnet.pe_monitor
+  id = "${local.rg_id}/providers/Microsoft.Network/virtualNetworks/vitally-prod-vnet-uksouth/subnets/snet-pe-monitor"
+}
+import {
+  to = azurerm_private_dns_zone.monitor["privatelink.monitor.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.monitor.azure.com"
+}
+import {
+  to = azurerm_private_dns_zone.monitor["privatelink.oms.opinsights.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.oms.opinsights.azure.com"
+}
+import {
+  to = azurerm_private_dns_zone.monitor["privatelink.ods.opinsights.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.ods.opinsights.azure.com"
+}
+import {
+  to = azurerm_private_dns_zone.monitor["privatelink.agentsvc.azure-automation.net"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.agentsvc.azure-automation.net"
+}
+import {
+  to = azurerm_private_dns_zone.monitor["privatelink.blob.core.windows.net"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+}
+import {
+  to = azurerm_private_dns_zone_virtual_network_link.monitor["privatelink.monitor.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.monitor.azure.com/virtualNetworkLinks/link-monitor-azure-com"
+}
+import {
+  to = azurerm_private_dns_zone_virtual_network_link.monitor["privatelink.oms.opinsights.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.oms.opinsights.azure.com/virtualNetworkLinks/link-oms-opinsights-azure-com"
+}
+import {
+  to = azurerm_private_dns_zone_virtual_network_link.monitor["privatelink.ods.opinsights.azure.com"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.ods.opinsights.azure.com/virtualNetworkLinks/link-ods-opinsights-azure-com"
+}
+import {
+  to = azurerm_private_dns_zone_virtual_network_link.monitor["privatelink.agentsvc.azure-automation.net"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.agentsvc.azure-automation.net/virtualNetworkLinks/link-agentsvc-azure-automation-net"
+}
+import {
+  to = azurerm_private_dns_zone_virtual_network_link.monitor["privatelink.blob.core.windows.net"]
+  id = "${local.rg_id}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net/virtualNetworkLinks/link-blob-core-windows-net"
+}
+import {
+  to = azurerm_monitor_private_link_scope.ampls
+  id = "${local.rg_id}/providers/Microsoft.Insights/privateLinkScopes/vitally-prod-ampls-uksouth"
+}
+import {
+  to = azurerm_monitor_private_link_scoped_service.law
+  id = "${local.rg_id}/providers/Microsoft.Insights/privateLinkScopes/vitally-prod-ampls-uksouth/scopedResources/law-link"
+}
+import {
+  to = azurerm_monitor_private_link_scoped_service.appi
+  id = "${local.rg_id}/providers/Microsoft.Insights/privateLinkScopes/vitally-prod-ampls-uksouth/scopedResources/appi-link"
+}
+import {
+  to = azurerm_private_endpoint.ampls
+  id = "${local.rg_id}/providers/Microsoft.Network/privateEndpoints/vitally-prod-pe-ampls-uksouth"
+}
+import {
+  to = azurerm_storage_account.flowlogs
+  id = "${local.rg_id}/providers/Microsoft.Storage/storageAccounts/vitallyprodflowuksouth"
+}
+import {
+  to = azurerm_network_watcher_flow_log.vnet
+  id = "/subscriptions/${var.subscription_id}/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_uksouth/flowLogs/vitally-prod-vnetflow-uksouth"
+}
+
 # ---- Need a looked-up ID first (uncomment + fill in, then plan) ----
 # Diagnostic settings:  import id = "<target-resource-id>|to-law"
 # Role assignments:     az role assignment list --scope <scope> --query "[].id"  → import "<assignment-id>"
