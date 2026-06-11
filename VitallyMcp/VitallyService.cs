@@ -141,12 +141,22 @@ public class VitallyService
     }
 
     /// <summary>
-    /// Searches custom object instances via Vitally's <c>/instances/search</c> endpoint, which
-    /// accepts exactly one criterion (where <c>customFieldId</c>+<c>customFieldValue</c> are a
-    /// single paired criterion). Only the criterion is sent — no <c>limit</c>/<c>from</c>/<c>sortBy</c>,
-    /// since the search endpoint's pagination support is not documented. The standard
-    /// <c>{results, next}</c> field/trait filtering is applied; <c>next</c> is passed through if present.
+    /// Issues a custom object instance search against Vitally's <c>/instances/search</c> endpoint
+    /// with the supplied <paramref name="criteria"/>. Only the criteria are sent — no
+    /// <c>limit</c>/<c>from</c>/<c>sortBy</c>, since the endpoint's pagination support is undocumented.
+    /// The standard <c>{results, next}</c> field/trait filtering is applied; <c>next</c> is passed
+    /// through if present.
     /// </summary>
+    /// <remarks>
+    /// Vitally accepts exactly ONE criterion (with <c>customFieldId</c>+<c>customFieldValue</c> as a
+    /// single paired criterion). Enforcing that rule is the caller's responsibility:
+    /// <c>CustomObjectsTools.BuildInstanceSearchCriteria</c> validates it from the typed tool
+    /// parameters, where the pairing is unambiguous — a raw key/value dictionary cannot tell a valid
+    /// <c>customFieldId</c>+<c>customFieldValue</c> pair apart from two separate criteria, so this
+    /// transport-level method does not re-attempt that check. It only rejects an empty dictionary
+    /// (which cannot form a valid query) and forwards any other shape as-is, letting Vitally return
+    /// its own validation error.
+    /// </remarks>
     public async Task<string> SearchCustomObjectInstancesAsync(string customObjectId, IReadOnlyDictionary<string, string> criteria, string? fields = null, string? traits = null)
     {
         if (criteria.Count == 0)
