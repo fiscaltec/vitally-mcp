@@ -93,6 +93,28 @@ public class VitallyServiceTests
         firstUser.TryGetProperty("traits", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task GetResourcesAsync_WithDefaultsKey_UsesThatKeysDefaultFields()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act — instance URL path is not an exact-match defaults key, so we pass defaultsKey explicitly
+        var result = await service.GetResourcesAsync(
+            "customObjects/cobj-1/instances", defaultsKey: "customObjectInstances");
+        var jsonDoc = JsonDocument.Parse(result);
+        var firstInstance = jsonDoc.RootElement.GetProperty("results")[0];
+
+        // Assert — new instance default fields present
+        firstInstance.TryGetProperty("name", out _).Should().BeTrue();
+        firstInstance.TryGetProperty("organizationId", out _).Should().BeTrue();
+        firstInstance.TryGetProperty("customerId", out _).Should().BeTrue();
+
+        // Assert — large field excluded by default
+        firstInstance.TryGetProperty("descriptionBody", out _).Should().BeFalse();
+    }
+
     #endregion
 
     #region Field Filtering Tests
@@ -924,6 +946,112 @@ public class VitallyServiceTests
                 && req.RequestUri.Query.Contains("filter=name%3DJohn%26Co")
                 && req.RequestUri.Query.Contains("path=a%2Fb")),
             ItExpr.IsAny<CancellationToken>());
+    }
+
+    #endregion
+
+    #region GetCustomObjectInstanceByIdAsync Tests
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_WithMatch_ReturnsSingleUnwrappedObject()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-123");
+
+        // Assert — searched by id, returned a single object (not a {results} envelope)
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("id=inst-123")),
+            ItExpr.IsAny<CancellationToken>());
+        result.Should().NotContain("\"results\"");
+        result.Should().Contain("inst-123");
+        result.Should().Contain("\"organizationId\"");
+    }
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_NoMatch_ReturnsNotFoundMessage()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetEmptyResultsJson());
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-999");
+
+        // Assert
+        result.Should().Contain("No custom object instance found with id inst-999");
+    }
+
+    [Fact]
+    public async Task GetCustomObjectInstanceByIdAsync_WithExplicitFields_HonoursFieldSelection()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(mockClient);
+
+        // Act — request only id,name
+        var result = await service.GetCustomObjectInstanceByIdAsync("cobj-123", "inst-123", fields: "id,name");
+
+        // Assert — requested fields present, non-requested default field excluded
+        result.Should().Contain("\"id\"");
+        result.Should().Contain("\"name\"");
+        result.Should().NotContain("\"organizationId\"");
+    }
+
+    #endregion
+
+    #region SearchCustomObjectInstancesAsync Tests
+
+    [Fact]
+    public async Task SearchCustomObjectInstancesAsync_BuildsSearchUrlWithCriterionAndNoLimit()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
+            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var service = CreateService(client);
+        var criteria = new Dictionary<string, string> { ["organizationId"] = "org-456" };
+
+        // Act
+        var result = await service.SearchCustomObjectInstancesAsync("cobj-123", criteria);
+
+        // Assert — routes to /search with the criterion and NO limit param
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Get
+                && req.RequestUri!.AbsolutePath == "/resources/customObjects/cobj-123/instances/search"
+                && req.RequestUri.Query.Contains("organizationId=org-456")
+                && !req.RequestUri.Query.Contains("limit")),
+            ItExpr.IsAny<CancellationToken>());
+
+        // Assert — list envelope is filtered and preserved
+        result.Should().Contain("\"results\"");
+        result.Should().Contain("\"organizationId\"");
+    }
+
+    [Fact]
+    public async Task SearchCustomObjectInstancesAsync_WithNoCriteria_ThrowsAndMakesNoCall()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"results":[]}""");
+        var service = CreateService(client);
+
+        // Act
+        Func<Task> act = () => service.SearchCustomObjectInstancesAsync("cobj-123", new Dictionary<string, string>());
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
     }
 
     #endregion

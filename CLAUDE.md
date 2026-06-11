@@ -199,6 +199,7 @@ When no fields are specified, each resource type returns an optimised field set:
 | **Task Categories** | id, name, createdAt, updatedAt |
 | **Meetings** | id, title, externalId, startDateTime, endDateTime, location, source, accountIds, organizationIds, participants, createdAt, updatedAt |
 | **Meeting Transcripts** | id, meetingId, createdAt, updatedAt |
+| **Custom Object Instances** | id, name, externalId, createdAt, updatedAt, organizationId, customerId, archivedAt |
 | **Admins / Admins Search** | id, name, email |
 
 These defaults balance usefulness (business context, relationships, key metrics) with response size (excluding large fields like traits objects, rich text content, transcript bodies, and meeting summaries).
@@ -258,6 +259,13 @@ public static class AccountsTools
 **Note:** The `status` parameter is specific to `AccountsTools`, and `archived` is specific to `MeetingsTools`. The `traits` parameter is available for resources that support traits (Accounts, Organizations, Users, Tasks, Notes, Projects, Meetings, Project Templates). Other resource types have the standard parameters (limit, from, fields, sortBy).
 
 **Raw pass-through tools:** `CustomTraitsTools`, `SurveysTools`, and the participant/transcript methods on `MeetingsTools` call `GetRawAsync` / `PostRawAsync` / `DeleteRawAsync` directly. They do not accept a `fields` parameter because Vitally returns these endpoints with a non-standard JSON envelope (`{data}` for surveys, bare arrays for `customFields`).
+
+**Custom object instances:** `List_custom_object_instances` accepts an optional single scope
+criterion — `organizationId`, `customerId`, `externalId`, or `customFieldId`+`customFieldValue`
+— which routes to Vitally's `customObjects/:id/instances/search` endpoint (exactly one criterion;
+paging params are ignored when scoped). `Get_custom_object_instance` reads one instance by id via
+the same search endpoint (Vitally has no direct single-instance GET). The legacy free-text
+`Search_custom_object_instances` tool has been removed in favour of these typed paths.
 
 ## Adding New Resource Types
 

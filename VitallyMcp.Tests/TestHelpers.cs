@@ -493,6 +493,33 @@ public static class TestHelpers
     """;
 
     /// <summary>
+    /// Sample custom object instance JSON with the full field set (for default-field and
+    /// trait-subsetting tests). Includes a large field that should be excluded by default.
+    /// </summary>
+    public static string GetSampleRichCustomObjectInstanceJson() => """
+    {
+      "results": [
+        {
+          "id": "inst-123",
+          "name": "Annual Goal",
+          "externalId": "ext-inst-123",
+          "createdAt": "2024-01-01T00:00:00Z",
+          "updatedAt": "2024-01-15T00:00:00Z",
+          "organizationId": "org-456",
+          "customerId": "cust-789",
+          "archivedAt": null,
+          "descriptionBody": "A very long description body we do not want by default",
+          "traits": {
+            "target": "100",
+            "owner": "CSM"
+          }
+        }
+      ],
+      "next": "cursor-inst-next"
+    }
+    """;
+
+    /// <summary>
     /// Sample meeting JSON for testing.
     /// </summary>
     public static string GetSampleMeetingJson() => """
