@@ -36,7 +36,8 @@ public class VitallyService
         ["noteCategories"] = ["id", "name", "createdAt", "updatedAt"],
         ["taskCategories"] = ["id", "name", "createdAt", "updatedAt"],
         ["meetings"] = ["id", "title", "externalId", "startDateTime", "endDateTime", "location", "source", "accountIds", "organizationIds", "participants", "createdAt", "updatedAt"],
-        ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"]
+        ["meetingTranscripts"] = ["id", "meetingId", "createdAt", "updatedAt"],
+        ["customObjectInstances"] = ["id", "name", "externalId", "createdAt", "updatedAt", "organizationId", "customerId", "archivedAt"]
     };
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
@@ -102,7 +103,7 @@ public class VitallyService
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…(truncated)";
 
-    public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null)
+    public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null, string? defaultsKey = null)
     {
         // Percent-encode keys and values (RFC 3986 query-string encoding via
         // Uri.EscapeDataString — spaces become %20, not +) so user-supplied filter values
@@ -128,7 +129,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{resourceType}?{queryString}";
 
         var jsonResponse = await SendAsync(HttpMethod.Get, url);
-        return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: true, traits);
+        return FilterJsonFields(jsonResponse, fields, defaultsKey ?? resourceType, isListResponse: true, traits);
     }
 
     public async Task<string> GetResourceByIdAsync(string resourceType, string id, string? fields = null, string? traits = null)
@@ -137,6 +138,50 @@ public class VitallyService
 
         var jsonResponse = await SendAsync(HttpMethod.Get, url);
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
+    }
+
+    /// <summary>
+    /// Issues a custom object instance search against Vitally's <c>/instances/search</c> endpoint
+    /// with the supplied <paramref name="criteria"/>. Only the criteria are sent — no
+    /// <c>limit</c>/<c>from</c>/<c>sortBy</c>, since the endpoint's pagination support is undocumented.
+    /// The standard <c>{results, next}</c> field/trait filtering is applied; <c>next</c> is passed
+    /// through if present.
+    /// </summary>
+    /// <remarks>
+    /// Vitally accepts exactly ONE criterion (with <c>customFieldId</c>+<c>customFieldValue</c> as a
+    /// single paired criterion). Enforcing that rule is the caller's responsibility:
+    /// <c>CustomObjectsTools.BuildInstanceSearchCriteria</c> validates it from the typed tool
+    /// parameters, where the pairing is unambiguous — a raw key/value dictionary cannot tell a valid
+    /// <c>customFieldId</c>+<c>customFieldValue</c> pair apart from two separate criteria, so this
+    /// transport-level method does not re-attempt that check. It only rejects an empty dictionary
+    /// (which cannot form a valid query) and forwards any other shape as-is, letting Vitally return
+    /// its own validation error.
+    /// </remarks>
+    public async Task<string> SearchCustomObjectInstancesAsync(string customObjectId, IReadOnlyDictionary<string, string> criteria, string? fields = null, string? traits = null)
+    {
+        if (criteria.Count == 0)
+        {
+            throw new ArgumentException("At least one search criterion is required.", nameof(criteria));
+        }
+
+        var query = string.Join("&", criteria.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+        var url = $"{_baseUrl}/resources/customObjects/{customObjectId}/instances/search?{query}";
+
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
+        return FilterJsonFields(jsonResponse, fields, "customObjectInstances", isListResponse: true, traits);
+    }
+
+    /// <summary>
+    /// Reads a single custom object instance by id. Vitally has no direct single-instance GET, so
+    /// this uses <c>/instances/search?id=…</c> and unwraps the single result. Returns a clear
+    /// not-found message (not an exception) when the search yields no match (HTTP 200, empty results).
+    /// </summary>
+    public async Task<string> GetCustomObjectInstanceByIdAsync(string customObjectId, string instanceId, string? fields = null, string? traits = null)
+    {
+        var url = $"{_baseUrl}/resources/customObjects/{customObjectId}/instances/search?id={Uri.EscapeDataString(instanceId)}";
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
+        return FilterSingleFromResults(jsonResponse, fields, "customObjectInstances", traits,
+            notFoundMessage: $"No custom object instance found with id {instanceId}");
     }
 
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
@@ -201,6 +246,16 @@ public class VitallyService
         return await SendAsync(HttpMethod.Delete, url);
     }
 
+    private static string[] ResolveFields(string? fields, string defaultsKey) =>
+        string.IsNullOrWhiteSpace(fields)
+            ? (ResourceDefaultFields.TryGetValue(defaultsKey, out var defaults) ? defaults : FallbackDefaultFields)
+            : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string[]? ResolveTraits(string? traits) =>
+        string.IsNullOrWhiteSpace(traits)
+            ? null
+            : traits.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     /// <summary>
     /// Filters JSON response to include only requested fields and traits.
     /// If no fields specified, returns resource-specific default field set.
@@ -209,13 +264,8 @@ public class VitallyService
     /// </summary>
     private static string FilterJsonFields(string jsonResponse, string? fields, string resourceType, bool isListResponse, string? traits = null)
     {
-        var requestedFields = string.IsNullOrWhiteSpace(fields)
-            ? (ResourceDefaultFields.TryGetValue(resourceType, out var defaults) ? defaults : FallbackDefaultFields)
-            : fields.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var requestedTraits = string.IsNullOrWhiteSpace(traits)
-            ? null
-            : traits.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var requestedFields = ResolveFields(fields, resourceType);
+        var requestedTraits = ResolveTraits(traits);
 
         using var document = JsonDocument.Parse(jsonResponse);
         using var stream = new MemoryStream();
@@ -250,6 +300,31 @@ public class VitallyService
         }
 
         writer.WriteEndObject();
+        writer.Flush();
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Extracts the first element of a <c>{results: [...]}</c> response and returns it as a single
+    /// filtered object. Returns <c>{"message": notFoundMessage}</c> when results are absent or empty.
+    /// </summary>
+    private static string FilterSingleFromResults(string jsonResponse, string? fields, string defaultsKey, string? traits, string notFoundMessage)
+    {
+        using var document = JsonDocument.Parse(jsonResponse);
+        if (!document.RootElement.TryGetProperty("results", out var results)
+            || results.ValueKind != JsonValueKind.Array
+            || results.GetArrayLength() == 0)
+        {
+            return JsonSerializer.Serialize(new { message = notFoundMessage });
+        }
+
+        var requestedFields = ResolveFields(fields, defaultsKey);
+        var requestedTraits = ResolveTraits(traits);
+
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        WriteFilteredObject(writer, results[0], requestedFields, requestedTraits);
         writer.Flush();
 
         return Encoding.UTF8.GetString(stream.ToArray());
