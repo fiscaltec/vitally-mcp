@@ -9,17 +9,21 @@ public static class MeetingsTools
     [McpServerTool(Name = "List_meetings", Title = "List meetings", ReadOnly = true, Destructive = false), Description("List Vitally meetings with optional pagination, filtering and field selection")]
     public static async Task<string> ListMeetings(
         VitallyService vitallyService,
-        [Description("Maximum number of meetings to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Maximum number of meetings to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value). Ignored when a created date range is supplied.")] string? from = null,
         [Description("Comma-separated list of fields to include. Defaults to: id,title,externalId,startDateTime,endDateTime,location,source,accountIds,organizationIds,participants,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
-        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null,
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt). Ignored when a created date range is supplied.")] string? sortBy = null,
         [Description("Set to 'true' to include archived meetings")] string? archived = null,
-        [Description("Comma-separated list of trait names to include. If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null)
+        [Description("Comma-separated list of trait names to include. If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null,
+        [Description("ISO-8601 lower bound on createdAt. When set, the server pages and filters by date client-side (Vitally has no date filter) and returns {results, truncated, pagesFetched}; limit/from/sortBy are ignored.")] string? createdAfter = null,
+        [Description("ISO-8601 upper bound on createdAt. See createdAfter.")] string? createdBefore = null)
     {
         var additionalParams = new Dictionary<string, string>();
-        if (!string.IsNullOrEmpty(archived))
+        if (!string.IsNullOrEmpty(archived)) additionalParams["archived"] = archived;
+
+        if (!string.IsNullOrWhiteSpace(createdAfter) || !string.IsNullOrWhiteSpace(createdBefore))
         {
-            additionalParams["archived"] = archived;
+            return await vitallyService.GetByCreatedRangeAsync("meetings", createdAfter, createdBefore, fields, traits, defaultsKey: "meetings", additionalParams: additionalParams);
         }
 
         return await vitallyService.GetResourcesAsync("meetings", limit, from, fields, sortBy, additionalParams, traits);
