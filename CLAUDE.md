@@ -275,7 +275,9 @@ use it — `List_organizations` (`nameContains`) and the activity lists (`create
 on conversations incl. by-account/by-organization, notes, tasks, meetings) — return a
 `{results, truncated, pagesFetched}` envelope; `truncated: true` means the page cap was hit before
 exhaustion (narrow the query). `List_custom_traits` takes a `nameContains` that filters the single
-trait-catalogue array client-side (no paging). Unfiltered calls keep the plain `{results, next}` path.
+trait-catalogue array client-side (no paging) — it does **not** introduce field/trait projection
+(the `customFields` endpoint remains the raw pass-through described above); `nameContains` only drops
+array elements whose `label`/`path` don't match. Unfiltered calls keep the plain `{results, next}` path.
 
 ## Adding New Resource Types
 

@@ -231,7 +231,7 @@ public class VitallyService
         bool InRange(JsonElement item)
         {
             if (!item.TryGetProperty("createdAt", out var c) || c.ValueKind != JsonValueKind.String
-                || !DateTimeOffset.TryParse(c.GetString(), out var dt))
+                || !TryParseTimestamp(c.GetString(), out var dt))
             {
                 return false;
             }
@@ -243,7 +243,7 @@ public class VitallyService
         // createdAt descending => once an item is older than the lower bound, all later items are too.
         Func<JsonElement, bool>? stopBefore = after.HasValue
             ? item => item.TryGetProperty("createdAt", out var c) && c.ValueKind == JsonValueKind.String
-                      && DateTimeOffset.TryParse(c.GetString(), out var dt) && dt < after.Value
+                      && TryParseTimestamp(c.GetString(), out var dt) && dt < after.Value
             : null;
 
         return GetFilteredAsync(resourceType, InRange, fields, sortBy: "createdAt", additionalParams, traits, defaultsKey ?? resourceType, stopBefore);
@@ -252,13 +252,19 @@ public class VitallyService
     private static DateTimeOffset? ParseDateBound(string? value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
-        if (!DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
+        if (!TryParseTimestamp(value, out var dt))
         {
             throw new ArgumentException($"{paramName} must be an ISO-8601 date/time (got '{value}').", paramName);
         }
         return dt;
     }
+
+    // Culture-invariant timestamp parse shared by the date-bound validation and the per-item
+    // createdAt filtering, so item filtering can never become locale-dependent. ISO-8601 values
+    // carrying an explicit offset (e.g. "…Z") keep it; offset-less values are treated as UTC.
+    private static bool TryParseTimestamp(string? value, out DateTimeOffset result) =>
+        DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out result);
 
     /// <summary>
     /// Issues a custom object instance search against Vitally's <c>/instances/search</c> endpoint
