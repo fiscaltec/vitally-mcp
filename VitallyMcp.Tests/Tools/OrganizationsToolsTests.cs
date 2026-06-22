@@ -1,6 +1,4 @@
 using FluentAssertions;
-using Moq;
-using Moq.Protected;
 using VitallyMcp.Tools;
 
 namespace VitallyMcp.Tests.Tools;
