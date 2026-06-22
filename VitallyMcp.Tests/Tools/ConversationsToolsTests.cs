@@ -50,6 +50,22 @@ public class ConversationsToolsTests
     }
 
     [Fact]
+    public async Task ListConversations_WithDefaultParameters_ShouldIncludeSourceAndStatus()
+    {
+        // Arrange
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleConversationJson());
+        var service = CreateService(mockClient);
+
+        // Act
+        var result = await ConversationsTools.ListConversations(service);
+
+        // Assert — source/status are in the default set so support tickets are
+        // distinguishable from calendar/email (e.g. source=outlook) without a per-record fetch.
+        result.Should().Contain("\"source\"");
+        result.Should().Contain("\"status\"");
+    }
+
+    [Fact]
     public async Task ListConversationsByAccount_WithValidAccountId_ShouldReturnConversations()
     {
         // Arrange

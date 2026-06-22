@@ -185,7 +185,7 @@ When no fields are specified, each resource type returns an optimised field set:
 | **Accounts** | id, name, createdAt, updatedAt, externalId, organizationId, healthScore, mrr, accountOwnerId, lastSeenTimestamp |
 | **Organizations** | id, name, createdAt, updatedAt, externalId, healthScore, mrr, lastSeenTimestamp |
 | **Users** | id, name, createdAt, updatedAt, externalId, email, accountId, organizationId, lastSeenTimestamp |
-| **Conversations** | id, externalId, subject, authorId, accountId, organizationId |
+| **Conversations** | id, externalId, subject, status, source, authorId, accountId, organizationId |
 | **Notes** | id, createdAt, updatedAt, externalId, subject, noteDate, authorId, accountId, organizationId, categoryId, archivedAt |
 | **Tasks** | id, name, createdAt, updatedAt, externalId, dueDate, completedAt, assignedToId, accountId, organizationId, archivedAt |
 | **Projects** | id, name, createdAt, updatedAt, accountId, organizationId, archivedAt |
