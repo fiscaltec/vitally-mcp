@@ -217,6 +217,50 @@ public class VitallyService
     }
 
     /// <summary>
+    /// Lists a resource filtered to items whose <c>createdAt</c> falls within
+    /// [<paramref name="createdAfter"/>, <paramref name="createdBefore"/>] (either bound optional),
+    /// via the bounded auto-pager. Pages sorted by <c>createdAt</c> (descending) so paging stops
+    /// early once items fall below the lower bound. Bounds must be ISO-8601; throws
+    /// <see cref="ArgumentException"/> otherwise (before any HTTP call).
+    /// </summary>
+    public Task<string> GetByCreatedRangeAsync(string resourceType, string? createdAfter, string? createdBefore, string? fields = null, string? traits = null, string? defaultsKey = null, Dictionary<string, string>? additionalParams = null)
+    {
+        var after = ParseDateBound(createdAfter, nameof(createdAfter));
+        var before = ParseDateBound(createdBefore, nameof(createdBefore));
+
+        bool InRange(JsonElement item)
+        {
+            if (!item.TryGetProperty("createdAt", out var c) || c.ValueKind != JsonValueKind.String
+                || !DateTimeOffset.TryParse(c.GetString(), out var dt))
+            {
+                return false;
+            }
+            if (after.HasValue && dt < after.Value) return false;
+            if (before.HasValue && dt > before.Value) return false;
+            return true;
+        }
+
+        // createdAt descending => once an item is older than the lower bound, all later items are too.
+        Func<JsonElement, bool>? stopBefore = after.HasValue
+            ? item => item.TryGetProperty("createdAt", out var c) && c.ValueKind == JsonValueKind.String
+                      && DateTimeOffset.TryParse(c.GetString(), out var dt) && dt < after.Value
+            : null;
+
+        return GetFilteredAsync(resourceType, InRange, fields, sortBy: "createdAt", additionalParams, traits, defaultsKey ?? resourceType, stopBefore);
+    }
+
+    private static DateTimeOffset? ParseDateBound(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (!DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
+        {
+            throw new ArgumentException($"{paramName} must be an ISO-8601 date/time (got '{value}').", paramName);
+        }
+        return dt;
+    }
+
+    /// <summary>
     /// Issues a custom object instance search against Vitally's <c>/instances/search</c> endpoint
     /// with the supplied <paramref name="criteria"/>. Only the criteria are sent — no
     /// <c>limit</c>/<c>from</c>/<c>sortBy</c>. Unlike the list endpoints, <c>/search</c> returns a

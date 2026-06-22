@@ -1216,4 +1216,48 @@ public class VitallyServiceTests
     }
 
     #endregion
+
+    #region GetByCreatedRangeAsync Tests
+
+    private static string DatedPage(string id, string createdAt, string? next) =>
+        $$"""
+        { "results": [ { "id": "{{id}}", "createdAt": "{{createdAt}}" } ], "next": {{(next is null ? "null" : $"\"{next}\"")}} }
+        """;
+
+    [Fact]
+    public async Task GetByCreatedRangeAsync_KeepsOnlyInRange_AndEarlyStops()
+    {
+        // Sorted createdAt desc. Range lower bound 2026-02-01. Page 2 item is older -> early stop,
+        // page 3 must never be fetched.
+        var (client, handler) = TestHelpers.CreateMockHttpClientPaged(
+            DatedPage("in", "2026-03-01T00:00:00Z", "c1"),
+            DatedPage("old", "2026-01-01T00:00:00Z", "c2"),
+            DatedPage("never", "2026-03-15T00:00:00Z", null));
+        var service = CreateService(client);
+
+        var result = await service.GetByCreatedRangeAsync("notes", createdAfter: "2026-02-01", createdBefore: null);
+
+        var doc = System.Text.Json.JsonDocument.Parse(result);
+        doc.RootElement.GetProperty("results").GetArrayLength().Should().Be(1);
+        doc.RootElement.GetProperty("results")[0].GetProperty("id").GetString().Should().Be("in");
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        // Early-stop on page 2 => exactly 2 fetches, page 3 untouched.
+        handler.Protected().Verify("SendAsync", Times.Exactly(2),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetByCreatedRangeAsync_InvalidDate_ThrowsBeforeAnyCall()
+    {
+        var (client, handler) = TestHelpers.CreateMockHttpClientPaged("""{"results":[],"next":null}""");
+        var service = CreateService(client);
+
+        Func<Task> act = () => service.GetByCreatedRangeAsync("notes", createdAfter: "not-a-date", createdBefore: null);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+    }
+
+    #endregion
 }
