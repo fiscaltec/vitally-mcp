@@ -520,6 +520,31 @@ public static class TestHelpers
     """;
 
     /// <summary>
+    /// Sample custom object instance search response. Vitally's /instances/search endpoint returns
+    /// a BARE JSON array (no {results, next} envelope) — this mirrors that real shape so the
+    /// search / get-by-id paths are tested against what the API actually returns.
+    /// </summary>
+    public static string GetSampleInstanceSearchArrayJson() => """
+    [
+      {
+        "id": "inst-123",
+        "name": "Annual Goal",
+        "externalId": "ext-inst-123",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-15T00:00:00Z",
+        "organizationId": "org-456",
+        "customerId": "cust-789",
+        "archivedAt": null,
+        "descriptionBody": "A very long description body we do not want by default",
+        "traits": {
+          "target": "100",
+          "owner": "CSM"
+        }
+      }
+    ]
+    """;
+
+    /// <summary>
     /// Sample meeting JSON for testing.
     /// </summary>
     public static string GetSampleMeetingJson() => """

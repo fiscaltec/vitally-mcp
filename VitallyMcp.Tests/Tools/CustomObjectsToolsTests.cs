@@ -224,7 +224,7 @@ public class CustomObjectsToolsTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
 
         // Act
@@ -248,7 +248,7 @@ public class CustomObjectsToolsTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
 
         // Act
@@ -305,7 +305,7 @@ public class CustomObjectsToolsTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
 
         // Act
@@ -396,7 +396,7 @@ public class CustomObjectsToolsTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
 
         // Act
@@ -418,7 +418,7 @@ public class CustomObjectsToolsTests
     public async Task GetCustomObjectInstance_NoMatch_ReturnsNotFoundMessage()
     {
         // Arrange
-        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetEmptyResultsJson());
+        var mockClient = TestHelpers.CreateMockHttpClient("[]");
         var service = CreateService(mockClient);
 
         // Act
