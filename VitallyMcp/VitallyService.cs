@@ -105,18 +105,21 @@ public class VitallyService
 
     public async Task<string> GetResourcesAsync(string resourceType, int limit = 20, string? from = null, string? fields = null, string? sortBy = null, Dictionary<string, string>? additionalParams = null, string? traits = null, string? defaultsKey = null)
     {
-        // Percent-encode keys and values (RFC 3986 query-string encoding via
-        // Uri.EscapeDataString — spaces become %20, not +) so user-supplied filter values
-        // containing spaces, ampersands, equals signs etc. don't corrupt the URL
-        // (e.g. customFieldValue="Acme Corp" -> customFieldValue=Acme%20Corp).
-        var queryParams = new List<string> { $"limit={limit}" };
+        var url = BuildListUrl(resourceType, limit, from, sortBy, additionalParams);
+        var jsonResponse = await SendAsync(HttpMethod.Get, url);
+        return FilterJsonFields(jsonResponse, fields, defaultsKey ?? resourceType, isListResponse: true, traits);
+    }
 
+    // Builds a /resources/{type} list URL. RFC 3986 query encoding via Uri.EscapeDataString
+    // (spaces -> %20) so filter values with spaces/&/= don't corrupt the URL. Shared by
+    // GetResourcesAsync and the auto-pager.
+    private string BuildListUrl(string resourceType, int limit, string? from, string? sortBy, Dictionary<string, string>? additionalParams)
+    {
+        var queryParams = new List<string> { $"limit={limit}" };
         if (!string.IsNullOrEmpty(from))
             queryParams.Add($"from={Uri.EscapeDataString(from)}");
-
         if (!string.IsNullOrEmpty(sortBy))
             queryParams.Add($"sortBy={Uri.EscapeDataString(sortBy)}");
-
         if (additionalParams != null)
         {
             foreach (var param in additionalParams)
@@ -124,12 +127,7 @@ public class VitallyService
                 queryParams.Add($"{Uri.EscapeDataString(param.Key)}={Uri.EscapeDataString(param.Value)}");
             }
         }
-
-        var queryString = string.Join("&", queryParams);
-        var url = $"{_baseUrl}/resources/{resourceType}?{queryString}";
-
-        var jsonResponse = await SendAsync(HttpMethod.Get, url);
-        return FilterJsonFields(jsonResponse, fields, defaultsKey ?? resourceType, isListResponse: true, traits);
+        return $"{_baseUrl}/resources/{resourceType}?{string.Join("&", queryParams)}";
     }
 
     public async Task<string> GetResourceByIdAsync(string resourceType, string id, string? fields = null, string? traits = null)
@@ -138,6 +136,84 @@ public class VitallyService
 
         var jsonResponse = await SendAsync(HttpMethod.Get, url);
         return FilterJsonFields(jsonResponse, fields, resourceType, isListResponse: false, traits);
+    }
+
+    /// <summary>
+    /// Pages a list endpoint (via from/next) applying a client-side <paramref name="predicate"/> to
+    /// each raw item, accumulating matches up to <c>Vitally:MaxAutoPageFetches</c> pages (100/page).
+    /// Returns a <c>{results, truncated, pagesFetched}</c> envelope; <c>truncated</c> is true when
+    /// the page cap was hit before the endpoint was exhausted. <paramref name="stopBefore"/>
+    /// (optional) ends paging early once an item is reached that — given the sort order —
+    /// guarantees no further matches.
+    /// </summary>
+    private async Task<string> GetFilteredAsync(string resourceType, Func<JsonElement, bool> predicate, string? fields, string? sortBy, Dictionary<string, string>? additionalParams, string? traits, string defaultsKey, Func<JsonElement, bool>? stopBefore = null)
+    {
+        const int pageSize = 100;
+        var maxPages = _options.MaxAutoPageFetches;
+        var matched = new List<JsonElement>();
+        string? from = null;
+        var pagesFetched = 0;
+        var truncated = false;
+        var stopped = false;
+
+        while (true)
+        {
+            var url = BuildListUrl(resourceType, pageSize, from, sortBy, additionalParams);
+            var pageJson = await SendAsync(HttpMethod.Get, url);
+            pagesFetched++;
+
+            using (var doc = JsonDocument.Parse(pageJson))
+            {
+                var root = doc.RootElement;
+                if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in results.EnumerateArray())
+                    {
+                        if (stopBefore != null && stopBefore(item)) { stopped = true; break; }
+                        if (predicate(item)) matched.Add(item.Clone());
+                    }
+                }
+
+                from = !stopped && root.TryGetProperty("next", out var next) && next.ValueKind == JsonValueKind.String
+                    ? next.GetString()
+                    : null;
+            }
+
+            if (stopped || string.IsNullOrEmpty(from)) break;     // early-stop or exhausted
+            if (pagesFetched >= maxPages) { truncated = true; break; }   // cap hit
+        }
+
+        var requestedFields = ResolveFields(fields, defaultsKey);
+        var requestedTraits = ResolveTraits(traits);
+
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WritePropertyName("results");
+        writer.WriteStartArray();
+        foreach (var item in matched)
+        {
+            WriteFilteredObject(writer, item, requestedFields, requestedTraits);
+        }
+        writer.WriteEndArray();
+        writer.WriteBoolean("truncated", truncated);
+        writer.WriteNumber("pagesFetched", pagesFetched);
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Lists a resource filtered to items whose <c>name</c> contains <paramref name="nameContains"/>
+    /// (case-insensitive), via the bounded auto-pager. For endpoints Vitally can't filter by name.
+    /// </summary>
+    public Task<string> GetByNameContainsAsync(string resourceType, string nameContains, string? fields = null, string? traits = null, string? defaultsKey = null, Dictionary<string, string>? additionalParams = null)
+    {
+        return GetFilteredAsync(
+            resourceType,
+            item => item.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                    && (n.GetString() ?? string.Empty).Contains(nameContains, StringComparison.OrdinalIgnoreCase),
+            fields, sortBy: null, additionalParams, traits, defaultsKey ?? resourceType);
     }
 
     /// <summary>

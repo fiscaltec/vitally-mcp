@@ -95,6 +95,24 @@ public static class TestHelpers
     }
 
     /// <summary>
+    /// Mock HttpClient that returns the supplied page bodies in order, one per successive request —
+    /// for testing the auto-pager's multi-page paging.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "Test mock — see CreateMockHttpClient.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed", Justification = "Test mock — see CreateMockHttpClient.")]
+    public static (HttpClient client, Mock<HttpMessageHandler> handler) CreateMockHttpClientPaged(params string[] pages)
+    {
+        var mock = new Mock<HttpMessageHandler>();
+        var seq = mock.Protected().SetupSequence<Task<HttpResponseMessage>>(
+            "SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+        foreach (var page in pages)
+        {
+            seq = seq.ReturnsAsync(new HttpResponseMessage { StatusCode = HttpStatusCode.OK, Content = new StringContent(page) });
+        }
+        return (new HttpClient(mock.Object), mock);
+    }
+
+    /// <summary>
     /// Creates a mock HttpClient that allows verification of the request URL.
     /// The HttpResponseMessage and HttpClient are owned by the test method.
     /// </summary>

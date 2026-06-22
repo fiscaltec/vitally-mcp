@@ -1056,6 +1056,54 @@ public class VitallyServiceTests
 
     #endregion
 
+    #region Auto-pager (GetByNameContainsAsync) Tests
+
+    private static string Page(string idAndName, string? next) =>
+        $$"""
+        { "results": [ { "id": "{{idAndName}}", "name": "{{idAndName}}" } ], "next": {{(next is null ? "null" : $"\"{next}\"")}} }
+        """;
+
+    [Fact]
+    public async Task GetByNameContainsAsync_FiltersAcrossPages_AndReportsNotTruncatedWhenExhausted()
+    {
+        // Arrange — 2 pages, only one item matches "berdeen"
+        var (client, _) = TestHelpers.CreateMockHttpClientPaged(
+            Page("Aberdeen", "cursor1"),
+            Page("Brighton", null));
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.GetByNameContainsAsync("organizations", "berdeen");
+
+        // Assert
+        var doc = System.Text.Json.JsonDocument.Parse(result);
+        doc.RootElement.GetProperty("results").GetArrayLength().Should().Be(1);
+        doc.RootElement.GetProperty("results")[0].GetProperty("name").GetString().Should().Be("Aberdeen");
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        doc.RootElement.GetProperty("pagesFetched").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetByNameContainsAsync_HitsCap_ReportsTruncated()
+    {
+        // Arrange — every page has a next cursor, so paging is bounded only by the cap.
+        // CreateService uses default options (MaxAutoPageFetches = 10), so supply 11 pages.
+        var pages = Enumerable.Range(0, 11).Select(i => Page($"Org{i}", $"cursor{i}")).ToArray();
+        var (client, _) = TestHelpers.CreateMockHttpClientPaged(pages);
+        var service = CreateService(client);
+
+        // Act
+        var result = await service.GetByNameContainsAsync("organizations", "zzz-no-match");
+
+        // Assert
+        var doc = System.Text.Json.JsonDocument.Parse(result);
+        doc.RootElement.GetProperty("results").GetArrayLength().Should().Be(0);
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("pagesFetched").GetInt32().Should().Be(10);
+    }
+
+    #endregion
+
     #region Resource-Specific Defaults — newly-added resources
 
     [Fact]
