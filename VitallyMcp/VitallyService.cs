@@ -345,6 +345,38 @@ public class VitallyService
     }
 
     /// <summary>
+    /// GETs a bare-array endpoint (e.g. customFields) and returns only the elements whose
+    /// <c>label</c> or <c>path</c> contains <paramref name="nameContains"/> (case-insensitive).
+    /// No paging — the whole array is one response. Returns the filtered array unchanged in shape.
+    /// </summary>
+    public async Task<string> GetRawArrayFilteredAsync(string path, Dictionary<string, string> queryParams, string nameContains)
+    {
+        var json = await GetRawAsync(path, queryParams);
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return json; // unexpected shape — pass through unchanged
+        }
+
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartArray();
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            var label = item.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null;
+            var p = item.TryGetProperty("path", out var pp) && pp.ValueKind == JsonValueKind.String ? pp.GetString() : null;
+            if ((label ?? string.Empty).Contains(nameContains, StringComparison.OrdinalIgnoreCase)
+                || (p ?? string.Empty).Contains(nameContains, StringComparison.OrdinalIgnoreCase))
+            {
+                item.WriteTo(writer);
+            }
+        }
+        writer.WriteEndArray();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
     /// POST raw JSON to an arbitrary path under /resources (for sub-resources that don't
     /// fit the {resourceType, id} pattern, e.g. meeting participants).
     /// </summary>
