@@ -102,6 +102,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `SecretCacheDuration` — TTL for the in-memory API key cache (default 5 min).
 - `DevelopmentApiKey` — local-only fallback used when `KeyVaultUri` is unset.
 - `BaseUrl` — computed: EU → `https://rest.vitally-eu.io`; US → `https://{Subdomain}.rest.vitally.io`.
+- `MaxAutoPageFetches` — hard cap on page fetches per server-side filtered call (default 10; 100 items/page). Bounds fan-out against Vitally's 1000 req/min budget.
 
 `OAuthOptions` (singleton, bound from `OAuth:` section):
 - `Authority` — OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
@@ -266,6 +267,17 @@ criterion — `organizationId`, `customerId`, `externalId`, or `customFieldId`+`
 paging params are ignored when scoped). `Get_custom_object_instance` reads one instance by id via
 the same search endpoint (Vitally has no direct single-instance GET). The legacy free-text
 `Search_custom_object_instances` tool has been removed in favour of these typed paths.
+
+**Server-side page-and-filter (SP3):** Vitally's list endpoints can't filter by name or date, so a
+bounded auto-pager (`VitallyService.GetByNameContainsAsync` / `GetByCreatedRangeAsync`, capped by
+`Vitally:MaxAutoPageFetches`, default 10 pages × 100) pages and filters client-side. The tools that
+use it — `List_organizations` (`nameContains`) and the activity lists (`createdAfter`/`createdBefore`
+on conversations incl. by-account/by-organization, notes, tasks, meetings) — return a
+`{results, truncated, pagesFetched}` envelope; `truncated: true` means the page cap was hit before
+exhaustion (narrow the query). `List_custom_traits` takes a `nameContains` that filters the single
+trait-catalogue array client-side (no paging) — it does **not** introduce field/trait projection
+(the `customFields` endpoint remains the raw pass-through described above); `nameContains` only drops
+array elements whose `label`/`path` don't match. Unfiltered calls keep the plain `{results, next}` path.
 
 ## Adding New Resource Types
 

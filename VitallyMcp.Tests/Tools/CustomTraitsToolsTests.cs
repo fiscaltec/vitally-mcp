@@ -48,4 +48,22 @@ public class CustomTraitsToolsTests
         result.Should().NotBeNullOrEmpty();
         result.Should().Contain("Payment Method");
     }
+
+    [Fact]
+    public async Task ListCustomTraits_WithNameContains_FiltersCatalogue()
+    {
+        var raw = """
+        [
+          { "label": "Payment Method", "path": "paymentMethod", "type": "STRING" },
+          { "label": "Employees", "path": "employees", "type": "NUMBER" }
+        ]
+        """;
+        var mockClient = TestHelpers.CreateMockHttpClient(raw);
+        var service = CreateService(mockClient);
+
+        var result = await CustomTraitsTools.ListCustomTraits(service, "accounts", nameContains: "payment");
+
+        result.Should().Contain("Payment Method");
+        result.Should().NotContain("Employees");
+    }
 }

@@ -191,4 +191,22 @@ public class OrganizationsToolsTests
         result.Should().NotBeNullOrEmpty();
         result.Should().Contain("success");
     }
+
+    [Fact]
+    public async Task ListOrganizations_WithNameContains_FiltersViaPager()
+    {
+        // Arrange — two single-item pages; only "Aberdeen City Council" matches.
+        var page1 = """{ "results": [ { "id": "o1", "name": "Aberdeen City Council" } ], "next": "c1" }""";
+        var page2 = """{ "results": [ { "id": "o2", "name": "Brighton" } ], "next": null }""";
+        var (client, _) = TestHelpers.CreateMockHttpClientPaged(page1, page2);
+        var service = CreateService(client);
+
+        // Act
+        var result = await OrganizationsTools.ListOrganizations(service, nameContains: "aberdeen");
+
+        // Assert
+        result.Should().Contain("Aberdeen City Council");
+        result.Should().NotContain("Brighton");
+        result.Should().Contain("\"truncated\"");
+    }
 }

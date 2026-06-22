@@ -19,6 +19,8 @@ public class VitallyServerOptions
 
     public string? DevelopmentApiKey { get; set; }
 
+    public int MaxAutoPageFetches { get; set; } = 10;
+
     public string BaseUrl => Region.Equals(RegionUs, StringComparison.OrdinalIgnoreCase)
         ? $"https://{Subdomain}.rest.vitally.io"
         : "https://rest.vitally-eu.io";
@@ -65,6 +67,12 @@ public class VitallyServerOptions
         {
             throw new InvalidOperationException(
                 "Either Vitally:KeyVaultUri must be set (production) or Vitally:DevelopmentApiKey must be set (local dev).");
+        }
+
+        if (MaxAutoPageFetches < 1)
+        {
+            throw new InvalidOperationException(
+                $"Vitally:MaxAutoPageFetches must be >= 1 (got {MaxAutoPageFetches}).");
         }
     }
 }

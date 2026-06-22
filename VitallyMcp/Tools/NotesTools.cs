@@ -9,12 +9,19 @@ public static class NotesTools
     [McpServerTool(Name = "List_notes", Title = "List notes", ReadOnly = true, Destructive = false), Description("List Vitally notes with optional pagination and field selection")]
     public static async Task<string> ListNotes(
         VitallyService vitallyService,
-        [Description("Maximum number of notes to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Maximum number of notes to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value). Ignored when a created date range is supplied.")] string? from = null,
         [Description("Comma-separated list of fields to include (e.g., 'id,subject,note'). Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
-        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null,
-        [Description("Comma-separated list of trait names to include (e.g., 'customField1,customField2'). If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null)
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt). Ignored when a created date range is supplied.")] string? sortBy = null,
+        [Description("Comma-separated list of trait names to include (e.g., 'customField1,customField2'). If specified, must also include 'traits' in fields parameter. Client-side filtering.")] string? traits = null,
+        [Description("ISO-8601 lower bound on createdAt. When set, the server pages and filters by date client-side (Vitally has no date filter) and returns {results, truncated, pagesFetched}; limit/from/sortBy are ignored.")] string? createdAfter = null,
+        [Description("ISO-8601 upper bound on createdAt. See createdAfter.")] string? createdBefore = null)
     {
+        if (!string.IsNullOrWhiteSpace(createdAfter) || !string.IsNullOrWhiteSpace(createdBefore))
+        {
+            return await vitallyService.GetByCreatedRangeAsync("notes", createdAfter, createdBefore, fields, traits, defaultsKey: "notes");
+        }
+
         return await vitallyService.GetResourcesAsync("notes", limit, from, fields, sortBy, null, traits);
     }
 

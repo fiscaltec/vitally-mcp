@@ -9,11 +9,18 @@ public static class ConversationsTools
     [McpServerTool(Name = "List_conversations", Title = "List conversations", ReadOnly = true, Destructive = false), Description("List Vitally conversations with optional pagination and field selection")]
     public static async Task<string> ListConversations(
         VitallyService vitallyService,
-        [Description("Maximum number of conversations to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Maximum number of conversations to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value). Ignored when a created date range is supplied.")] string? from = null,
         [Description("Comma-separated list of fields to include (e.g., 'id,subject,status'). Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
-        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null)
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt). Ignored when a created date range is supplied.")] string? sortBy = null,
+        [Description("ISO-8601 lower bound on createdAt. When set, the server pages and filters by date client-side (Vitally has no date filter) and returns {results, truncated, pagesFetched}; limit/from/sortBy are ignored.")] string? createdAfter = null,
+        [Description("ISO-8601 upper bound on createdAt. See createdAfter.")] string? createdBefore = null)
     {
+        if (!string.IsNullOrWhiteSpace(createdAfter) || !string.IsNullOrWhiteSpace(createdBefore))
+        {
+            return await vitallyService.GetByCreatedRangeAsync("conversations", createdAfter, createdBefore, fields, defaultsKey: "conversations");
+        }
+
         return await vitallyService.GetResourcesAsync("conversations", limit, from, fields, sortBy);
     }
 
@@ -21,24 +28,40 @@ public static class ConversationsTools
     public static async Task<string> ListConversationsByAccount(
         VitallyService vitallyService,
         [Description("The account ID")] string accountId,
-        [Description("Maximum number of conversations to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Maximum number of conversations to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value). Ignored when a created date range is supplied.")] string? from = null,
         [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
-        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null)
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt). Ignored when a created date range is supplied.")] string? sortBy = null,
+        [Description("ISO-8601 lower bound on createdAt. When set, the server pages and filters by date client-side (Vitally has no date filter) and returns {results, truncated, pagesFetched}; limit/from/sortBy are ignored.")] string? createdAfter = null,
+        [Description("ISO-8601 upper bound on createdAt. See createdAfter.")] string? createdBefore = null)
     {
-        return await vitallyService.GetResourcesAsync($"accounts/{accountId}/conversations", limit, from, fields, sortBy);
+        var resourceType = $"accounts/{accountId}/conversations";
+        if (!string.IsNullOrWhiteSpace(createdAfter) || !string.IsNullOrWhiteSpace(createdBefore))
+        {
+            return await vitallyService.GetByCreatedRangeAsync(resourceType, createdAfter, createdBefore, fields, defaultsKey: "conversations");
+        }
+
+        return await vitallyService.GetResourcesAsync(resourceType, limit, from, fields, sortBy);
     }
 
     [McpServerTool(Name = "List_conversations_by_organization", Title = "List conversations by organization", ReadOnly = true, Destructive = false), Description("List Vitally conversations for a specific organisation")]
     public static async Task<string> ListConversationsByOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string organizationId,
-        [Description("Maximum number of conversations to return (default: 20, max: 100)")] int limit = 20,
-        [Description("Pagination cursor from previous response (use the 'next' value)")] string? from = null,
+        [Description("Maximum number of conversations to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
+        [Description("Pagination cursor from previous response (use the 'next' value). Ignored when a created date range is supplied.")] string? from = null,
         [Description("Comma-separated list of fields to include. Defaults to: id,name,createdAt,updatedAt. Client-side filtering.")] string? fields = null,
-        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt)")] string? sortBy = null)
+        [Description("Sort by field: 'createdAt' or 'updatedAt' (default: updatedAt). Ignored when a created date range is supplied.")] string? sortBy = null,
+        [Description("ISO-8601 lower bound on createdAt. When set, the server pages and filters by date client-side (Vitally has no date filter) and returns {results, truncated, pagesFetched}; limit/from/sortBy are ignored.")] string? createdAfter = null,
+        [Description("ISO-8601 upper bound on createdAt. See createdAfter.")] string? createdBefore = null)
     {
-        return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/conversations", limit, from, fields, sortBy);
+        var resourceType = $"organizations/{organizationId}/conversations";
+        if (!string.IsNullOrWhiteSpace(createdAfter) || !string.IsNullOrWhiteSpace(createdBefore))
+        {
+            return await vitallyService.GetByCreatedRangeAsync(resourceType, createdAfter, createdBefore, fields, defaultsKey: "conversations");
+        }
+
+        return await vitallyService.GetResourcesAsync(resourceType, limit, from, fields, sortBy);
     }
 
     [McpServerTool(Name = "Get_conversation", Title = "Get conversation", ReadOnly = true, Destructive = false), Description("Get a single Vitally conversation by ID")]
