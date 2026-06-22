@@ -143,9 +143,9 @@ public class VitallyService
     /// <summary>
     /// Issues a custom object instance search against Vitally's <c>/instances/search</c> endpoint
     /// with the supplied <paramref name="criteria"/>. Only the criteria are sent — no
-    /// <c>limit</c>/<c>from</c>/<c>sortBy</c>, since the endpoint's pagination support is undocumented.
-    /// The standard <c>{results, next}</c> field/trait filtering is applied; <c>next</c> is passed
-    /// through if present.
+    /// <c>limit</c>/<c>from</c>/<c>sortBy</c>. Unlike the list endpoints, <c>/search</c> returns a
+    /// bare <c>[...]</c> array with no pagination cursor; the results are field/trait-filtered and
+    /// wrapped in the standard <c>{results}</c> envelope so the tool output stays uniform.
     /// </summary>
     /// <remarks>
     /// Vitally accepts exactly ONE criterion (with <c>customFieldId</c>+<c>customFieldValue</c> as a
@@ -275,7 +275,23 @@ public class VitallyService
 
         if (isListResponse)
         {
-            if (document.RootElement.TryGetProperty("results", out var resultsElement))
+            // List endpoints return a {results, next} envelope, but the customObjects
+            // /instances/search endpoint returns a bare [...] array. Accept both, and always emit
+            // a {results, ...} envelope so callers get a uniform shape regardless of the source.
+            var root = document.RootElement;
+            JsonElement resultsElement;
+            bool hasResults;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                resultsElement = root;
+                hasResults = true;
+            }
+            else
+            {
+                hasResults = root.TryGetProperty("results", out resultsElement);
+            }
+
+            if (hasResults && resultsElement.ValueKind == JsonValueKind.Array)
             {
                 writer.WritePropertyName("results");
                 writer.WriteStartArray();
@@ -288,7 +304,10 @@ public class VitallyService
                 writer.WriteEndArray();
             }
 
-            if (document.RootElement.TryGetProperty("next", out var nextElement))
+            // A bare-array (search) response carries no pagination cursor; only the
+            // {results, next} envelope does.
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("next", out var nextElement))
             {
                 writer.WritePropertyName("next");
                 nextElement.WriteTo(writer);
@@ -306,15 +325,26 @@ public class VitallyService
     }
 
     /// <summary>
-    /// Extracts the first element of a <c>{results: [...]}</c> response and returns it as a single
-    /// filtered object. Returns <c>{"message": notFoundMessage}</c> when results are absent or empty.
+    /// Extracts the first instance from a search response and returns it as a single filtered
+    /// object. Vitally's <c>/instances/search</c> returns a bare <c>[...]</c> array; the list
+    /// endpoints return <c>{results: [...]}</c>. Both are accepted. Returns
+    /// <c>{"message": notFoundMessage}</c> when the response holds no instances.
     /// </summary>
     private static string FilterSingleFromResults(string jsonResponse, string? fields, string defaultsKey, string? traits, string notFoundMessage)
     {
         using var document = JsonDocument.Parse(jsonResponse);
-        if (!document.RootElement.TryGetProperty("results", out var results)
-            || results.ValueKind != JsonValueKind.Array
-            || results.GetArrayLength() == 0)
+        var root = document.RootElement;
+        JsonElement results;
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            results = root;
+        }
+        else
+        {
+            root.TryGetProperty("results", out results);
+        }
+
+        if (results.ValueKind != JsonValueKind.Array || results.GetArrayLength() == 0)
         {
             return JsonSerializer.Serialize(new { message = notFoundMessage });
         }

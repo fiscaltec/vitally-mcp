@@ -957,7 +957,7 @@ public class VitallyServiceTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
 
         // Act
@@ -980,7 +980,7 @@ public class VitallyServiceTests
     public async Task GetCustomObjectInstanceByIdAsync_NoMatch_ReturnsNotFoundMessage()
     {
         // Arrange
-        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetEmptyResultsJson());
+        var mockClient = TestHelpers.CreateMockHttpClient("[]");
         var service = CreateService(mockClient);
 
         // Act
@@ -994,7 +994,7 @@ public class VitallyServiceTests
     public async Task GetCustomObjectInstanceByIdAsync_WithExplicitFields_HonoursFieldSelection()
     {
         // Arrange
-        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleRichCustomObjectInstanceJson());
+        var mockClient = TestHelpers.CreateMockHttpClient(TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(mockClient);
 
         // Act — request only id,name
@@ -1015,7 +1015,7 @@ public class VitallyServiceTests
     {
         // Arrange
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler(
-            TestHelpers.GetSampleRichCustomObjectInstanceJson());
+            TestHelpers.GetSampleInstanceSearchArrayJson());
         var service = CreateService(client);
         var criteria = new Dictionary<string, string> { ["organizationId"] = "org-456" };
 
