@@ -327,6 +327,8 @@ public static class TestHelpers
           "id": "conv-123",
           "externalId": "ext-conv-123",
           "subject": "Test Conversation",
+          "status": "open",
+          "source": "intercom",
           "authorId": "user-456",
           "accountId": "account-789",
           "organizationId": "org-101",
