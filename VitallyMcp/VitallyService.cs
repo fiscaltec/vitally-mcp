@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 
 namespace VitallyMcp;
@@ -308,6 +309,95 @@ public class VitallyService
         var jsonResponse = await SendAsync(HttpMethod.Get, url);
         return FilterSingleFromResults(jsonResponse, fields, "customObjectInstances", traits,
             notFoundMessage: $"No custom object instance found with id {instanceId}");
+    }
+
+    /// <summary>
+    /// Composite read: returns one organisation with its curated rollup traits, plus its open goals and
+    /// product-feedback custom-object instances, in a single response. Generic and tenant-agnostic —
+    /// the curated trait set and the two custom-object names are supplied by the caller (the tool layer
+    /// owns those tenant-specific defaults). Makes 4 upstream calls: org get-by-id (with traits), one
+    /// customObjects list to resolve both object names to ids, and two organisation-scoped instance
+    /// searches. Goals/product-feedback are each captured independently: a failure of one (object name
+    /// not found, upstream error, malformed body) yields a { "error": ... } for that section only, so a
+    /// single sub-failure never sinks the whole summary. A failed org get-by-id propagates (no summary
+    /// without it).
+    /// </summary>
+    public async Task<string> GetOrganizationSummaryAsync(
+        string organizationId, string? traitsCsv, string goalsObjectName, string productFeedbackObjectName)
+    {
+        // Organisation: default org fields PLUS traits, filtered to the curated/overridden set.
+        var orgFields = string.Join(",", ResourceDefaultFields["organizations"]) + ",traits";
+        var orgJson = await GetResourceByIdAsync("organizations", organizationId, orgFields, traitsCsv);
+
+        // Resolve both object names to ids in one list call. A failure here is recorded and surfaces as a
+        // per-section error below (rather than throwing and losing the organisation we already fetched).
+        Dictionary<string, string> nameToId;
+        string? resolveError = null;
+        try
+        {
+            nameToId = await ResolveCustomObjectIdsAsync();
+        }
+        catch (Exception ex)
+        {
+            nameToId = new Dictionary<string, string>(StringComparer.Ordinal);
+            resolveError = ex.Message;
+        }
+
+        var goals = await BuildInstanceSectionAsync(nameToId, goalsObjectName, organizationId, resolveError);
+        var productFeedback = await BuildInstanceSectionAsync(nameToId, productFeedbackObjectName, organizationId, resolveError);
+
+        var root = new JsonObject
+        {
+            ["organization"] = JsonNode.Parse(orgJson),
+            ["goals"] = goals,
+            ["productFeedback"] = productFeedback,
+        };
+        return root.ToJsonString();
+    }
+
+    // Fetches the customObjects catalogue (single list call) and maps name -> id.
+    private async Task<Dictionary<string, string>> ResolveCustomObjectIdsAsync()
+    {
+        var json = await GetResourcesAsync("customObjects", limit: 100);
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in results.EnumerateArray())
+            {
+                if (element.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String &&
+                    element.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                {
+                    map[name.GetString()!] = id.GetString()!;
+                }
+            }
+        }
+        return map;
+    }
+
+    // Produces one summary section: the organisation-scoped instances of the named custom object, or a
+    // { "error": ... } node if the object name can't be resolved or the search fails.
+    private async Task<JsonNode> BuildInstanceSectionAsync(
+        IReadOnlyDictionary<string, string> nameToId, string objectName, string organizationId, string? resolveError)
+    {
+        try
+        {
+            if (resolveError is not null)
+            {
+                throw new InvalidOperationException($"could not resolve custom objects: {resolveError}");
+            }
+            if (!nameToId.TryGetValue(objectName, out var objectId))
+            {
+                throw new InvalidOperationException($"custom object '{objectName}' not found");
+            }
+            var json = await SearchCustomObjectInstancesAsync(
+                objectId, new Dictionary<string, string> { ["organizationId"] = organizationId });
+            return JsonNode.Parse(json)!;
+        }
+        catch (Exception ex)
+        {
+            return new JsonObject { ["error"] = ex.Message };
+        }
     }
 
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)

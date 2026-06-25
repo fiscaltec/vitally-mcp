@@ -1260,4 +1260,132 @@ public class VitallyServiceTests
     }
 
     #endregion
+
+    // ---- SP5b: Get_organization_summary composite ----
+
+    // Routes mocked responses by request-URL substring; later setups win in Moq so the most
+    // specific (instances/search) is registered last. Bodies mirror the REAL Vitally shapes:
+    // org get = single object; customObjects list = {results:[...]}; instance search = BARE ARRAY.
+    private static (HttpClient client, Mock<HttpMessageHandler> handler) RoutedClient(
+        IReadOnlyList<(string urlContains, HttpStatusCode status, string body)> routes)
+    {
+        var mock = new Mock<HttpMessageHandler>();
+        foreach (var route in routes)
+        {
+            var captured = route;
+            mock.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsoluteUri.Contains(captured.urlContains)),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(() => new HttpResponseMessage { StatusCode = captured.status, Content = new StringContent(captured.body) });
+        }
+        return (new HttpClient(mock.Object), mock);
+    }
+
+    private const string SummaryOrgJson = """
+{ "id": "org-1", "name": "Acme", "healthScore": 156, "mrr": 1000,
+  "traits": { "vitally.custom.countAllSupportTickets": 10, "vitally.custom.countOfOpenCustomerGoals": 5 } }
+""";
+
+    private const string SummaryCustomObjectsJson = """
+{ "results": [
+  { "id": "co-goals", "name": "customerGoals" },
+  { "id": "co-feedback", "name": "productFeedback" }
+] }
+""";
+
+    private const string SummaryGoalsArrayJson = """
+[ { "id": "g-1", "name": "Goal One", "organizationId": "org-1" } ]
+""";
+
+    private const string SummaryFeedbackArrayJson = "[]";
+
+    [Fact]
+    public async Task GetOrganizationSummary_HappyPath_AssemblesOrgGoalsAndFeedback()
+    {
+        var (client, _) = RoutedClient(new[]
+        {
+            ("/resources/organizations/org-1", HttpStatusCode.OK, SummaryOrgJson),
+            ("/resources/customObjects?", HttpStatusCode.OK, SummaryCustomObjectsJson),
+            ("/resources/customObjects/co-goals/instances/search", HttpStatusCode.OK, SummaryGoalsArrayJson),
+            ("/resources/customObjects/co-feedback/instances/search", HttpStatusCode.OK, SummaryFeedbackArrayJson),
+        });
+        var service = TestHelpers.BuildVitallyService(client);
+
+        var json = await service.GetOrganizationSummaryAsync(
+            "org-1", "vitally.custom.countAllSupportTickets,vitally.custom.countOfOpenCustomerGoals",
+            "customerGoals", "productFeedback");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        root.GetProperty("organization").GetProperty("name").GetString().Should().Be("Acme");
+        root.GetProperty("organization").GetProperty("traits")
+            .GetProperty("vitally.custom.countAllSupportTickets").GetInt32().Should().Be(10);
+        root.GetProperty("goals").GetProperty("results").GetArrayLength().Should().Be(1);
+        root.GetProperty("goals").GetProperty("results")[0].GetProperty("id").GetString().Should().Be("g-1");
+        root.GetProperty("productFeedback").GetProperty("results").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOrganizationSummary_WhenAGoalsSearchFails_OnlyThatSectionIsAnError()
+    {
+        var (client, _) = RoutedClient(new[]
+        {
+            ("/resources/organizations/org-1", HttpStatusCode.OK, SummaryOrgJson),
+            ("/resources/customObjects?", HttpStatusCode.OK, SummaryCustomObjectsJson),
+            ("/resources/customObjects/co-goals/instances/search", HttpStatusCode.InternalServerError, "{\"message\":\"boom\"}"),
+            ("/resources/customObjects/co-feedback/instances/search", HttpStatusCode.OK, SummaryFeedbackArrayJson),
+        });
+        var service = TestHelpers.BuildVitallyService(client);
+
+        var json = await service.GetOrganizationSummaryAsync("org-1", "vitally.custom.countAllSupportTickets", "customerGoals", "productFeedback");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        root.GetProperty("organization").GetProperty("name").GetString().Should().Be("Acme");
+        root.GetProperty("goals").TryGetProperty("error", out _).Should().BeTrue();
+        root.GetProperty("productFeedback").GetProperty("results").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOrganizationSummary_WhenObjectNameNotFound_SectionIsAnError()
+    {
+        var (client, _) = RoutedClient(new[]
+        {
+            ("/resources/organizations/org-1", HttpStatusCode.OK, SummaryOrgJson),
+            ("/resources/customObjects?", HttpStatusCode.OK, SummaryCustomObjectsJson),
+            ("/resources/customObjects/co-feedback/instances/search", HttpStatusCode.OK, SummaryFeedbackArrayJson),
+        });
+        var service = TestHelpers.BuildVitallyService(client);
+
+        // Ask for a goals object name that is not in the customObjects list.
+        var json = await service.GetOrganizationSummaryAsync("org-1", "vitally.custom.npsScore", "noSuchGoals", "productFeedback");
+
+        using var doc = JsonDocument.Parse(json);
+        var goalsError = doc.RootElement.GetProperty("goals").GetProperty("error").GetString();
+        goalsError.Should().Contain("noSuchGoals");
+        doc.RootElement.GetProperty("productFeedback").GetProperty("results").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOrganizationSummary_ScopesInstanceSearchToOrganizationId()
+    {
+        var (client, handler) = RoutedClient(new[]
+        {
+            ("/resources/organizations/org-1", HttpStatusCode.OK, SummaryOrgJson),
+            ("/resources/customObjects?", HttpStatusCode.OK, SummaryCustomObjectsJson),
+            ("/resources/customObjects/co-goals/instances/search", HttpStatusCode.OK, SummaryGoalsArrayJson),
+            ("/resources/customObjects/co-feedback/instances/search", HttpStatusCode.OK, SummaryFeedbackArrayJson),
+        });
+        var service = TestHelpers.BuildVitallyService(client);
+
+        await service.GetOrganizationSummaryAsync("org-1", "vitally.custom.npsScore", "customerGoals", "productFeedback");
+
+        handler.Protected().Verify("SendAsync", Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(r =>
+                r.RequestUri!.AbsoluteUri.Contains("/customObjects/co-goals/instances/search") &&
+                r.RequestUri!.AbsoluteUri.Contains("organizationId=org-1")),
+            ItExpr.IsAny<CancellationToken>());
+    }
 }
