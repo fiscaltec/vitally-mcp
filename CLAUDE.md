@@ -83,6 +83,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
 - `ForwardedHeadersOptions` configured to honour `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-For` from the Container Apps ingress (trust model: network isolation, not header authentication — see comments in `Program.cs`).
 - MCP server registered via `AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithToolsFromAssembly()`.
+- Publishes server-level usage guidance in the MCP `initialize` response via `McpServerOptions.ServerInstructions` (text in `VitallyServerInstructions.Text`): steers clients toward organisation-level data, the traits-vs-custom-objects distinction, the name/date-range filters, and the read-only/permission model.
 - OAuth proxy endpoints (only active when `OAuth:SharedClientId` is set):
   - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata.
   - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata pointing `registration_endpoint` at our DCR shim.
