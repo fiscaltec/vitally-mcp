@@ -325,8 +325,14 @@ public class VitallyService
     public async Task<string> GetOrganizationSummaryAsync(
         string organizationId, string? traitsCsv, string goalsObjectName, string productFeedbackObjectName)
     {
-        // Organisation: default org fields PLUS traits, filtered to the curated/overridden set.
-        var orgFields = string.Join(",", ResourceDefaultFields["organizations"]) + ",traits";
+        // Organisation: default org fields, PLUS the traits field only when a trait set was
+        // requested. Requesting "traits" with no trait CSV would emit the entire (large) traits
+        // object — so a null/blank traitsCsv yields no traits rather than all of them.
+        var orgFields = string.Join(",", ResourceDefaultFields["organizations"]);
+        if (!string.IsNullOrWhiteSpace(traitsCsv))
+        {
+            orgFields += ",traits";
+        }
         var orgJson = await GetResourceByIdAsync("organizations", organizationId, orgFields, traitsCsv);
 
         // Resolve both object names to ids in one list call. A failure here is recorded and surfaces as a
@@ -343,8 +349,13 @@ public class VitallyService
             resolveError = ex.Message;
         }
 
-        var goals = await BuildInstanceSectionAsync(nameToId, goalsObjectName, organizationId, resolveError);
-        var productFeedback = await BuildInstanceSectionAsync(nameToId, productFeedbackObjectName, organizationId, resolveError);
+        // The two section fetches are independent; run them concurrently to save one round-trip.
+        // Each is self-contained (catches its own failures and returns a node), so awaiting both
+        // never throws and per-section error isolation is preserved.
+        var goalsTask = BuildInstanceSectionAsync(nameToId, goalsObjectName, organizationId, resolveError);
+        var productFeedbackTask = BuildInstanceSectionAsync(nameToId, productFeedbackObjectName, organizationId, resolveError);
+        var goals = await goalsTask;
+        var productFeedback = await productFeedbackTask;
 
         var root = new JsonObject
         {
@@ -356,6 +367,8 @@ public class VitallyService
     }
 
     // Fetches the customObjects catalogue (single list call) and maps name -> id.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
+        Justification = "JsonElement.TryGetProperty out parameters (name and id) don't translate to a LINQ Where without redundant second calls. The explicit foreach is clearer.")]
     private async Task<Dictionary<string, string>> ResolveCustomObjectIdsAsync()
     {
         var json = await GetResourcesAsync("customObjects", limit: 100);

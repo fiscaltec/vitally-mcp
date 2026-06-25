@@ -27,14 +27,14 @@ public class SummaryToolsTests
     }
 
     [Fact]
-    public async Task Get_organization_summary_ReturnsComposite_UsingDefaults()
+    public async Task GetOrganizationSummary_ReturnsComposite_UsingDefaults()
     {
         // Routes by URL substring; bodies mirror real shapes (org single object; customObjects
         // {results}; instance search BARE ARRAY).
         var client = BuildRoutedClient();
         var service = TestHelpers.BuildVitallyService(client);
 
-        var json = await SummaryTools.Get_organization_summary(service, "org-1");
+        var json = await SummaryTools.GetOrganizationSummary(service, "org-1");
 
         using var doc = JsonDocument.Parse(json);
         doc.RootElement.GetProperty("organization").GetProperty("name").GetString().Should().Be("Acme");

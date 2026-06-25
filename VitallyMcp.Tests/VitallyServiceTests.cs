@@ -1329,6 +1329,28 @@ public class VitallyServiceTests
     }
 
     [Fact]
+    public async Task GetOrganizationSummary_WhenTraitsCsvIsBlank_OmitsTraitsRatherThanReturningAll()
+    {
+        // A blank trait set must NOT request the traits field — otherwise the entire (large) traits
+        // object would be emitted. Expect the organisation to carry no traits property at all.
+        var (client, _) = RoutedClient(new[]
+        {
+            ("/resources/organizations/org-1", HttpStatusCode.OK, SummaryOrgJson),
+            ("/resources/customObjects?", HttpStatusCode.OK, SummaryCustomObjectsJson),
+            ("/resources/customObjects/co-goals/instances/search", HttpStatusCode.OK, SummaryGoalsArrayJson),
+            ("/resources/customObjects/co-feedback/instances/search", HttpStatusCode.OK, SummaryFeedbackArrayJson),
+        });
+        var service = TestHelpers.BuildVitallyService(client);
+
+        var json = await service.GetOrganizationSummaryAsync("org-1", null, "customerGoals", "productFeedback");
+
+        using var doc = JsonDocument.Parse(json);
+        var org = doc.RootElement.GetProperty("organization");
+        org.GetProperty("name").GetString().Should().Be("Acme");
+        org.TryGetProperty("traits", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetOrganizationSummary_WhenAGoalsSearchFails_OnlyThatSectionIsAnError()
     {
         var (client, _) = RoutedClient(new[]
