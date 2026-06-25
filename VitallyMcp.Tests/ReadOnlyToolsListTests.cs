@@ -99,12 +99,12 @@ public class ReadOnlyToolsListTests : IClassFixture<ReadOnlyToolsListTests.Facto
 
     private static async Task<string> PostMcpAsync(HttpClient client, string jsonBody)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
         {
             Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
-        var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request);
         return await response.Content.ReadAsStringAsync();
     }
 
@@ -123,18 +123,13 @@ public class ReadOnlyToolsListTests : IClassFixture<ReadOnlyToolsListTests.Facto
     /// </summary>
     private static string ExtractJsonFromSseOrRaw(string body)
     {
-        foreach (var line in body.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-            {
-                var candidate = trimmed["data:".Length..].Trim();
-                if (!string.IsNullOrWhiteSpace(candidate) && candidate.StartsWith('{'))
-                    return candidate;
-            }
-        }
+        var dataPayload = body.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimStart())
+            .Where(line => line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            .Select(line => line["data:".Length..].Trim())
+            .FirstOrDefault(candidate => candidate.StartsWith('{'));
 
-        return body.Trim();
+        return dataPayload ?? body.Trim();
     }
 
     /// <summary>
