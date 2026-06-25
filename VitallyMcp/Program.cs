@@ -95,10 +95,25 @@ var mcpBuilder = builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
 
-if (readOnlyMode)
+mcpBuilder.WithRequestFilters(filters =>
 {
-    // Hide destructive tools from tools/list (enforcement is still done in ToolAuthorizer).
-    mcpBuilder.WithRequestFilters(filters =>
+    // Surface the real failure reason (Vitally body / read-only / RBAC denial / validation) to the
+    // client instead of the SDK's generic "An error occurred invoking 'X'." Unexpected exceptions
+    // propagate so the SDK keeps its protocol-error / cancellation handling and generic message.
+    filters.AddCallToolFilter(next => async (context, cancellationToken) =>
+    {
+        try
+        {
+            return await next(context, cancellationToken);
+        }
+        catch (Exception ex) when (ToolErrorResult.IsSurfaceable(ex))
+        {
+            return ToolErrorResult.Build(ex);
+        }
+    });
+
+    // Read-only deployments: hide destructive tools from tools/list (enforcement is in ToolAuthorizer).
+    if (readOnlyMode)
     {
         filters.AddListToolsFilter(next => async (context, cancellationToken) =>
         {
@@ -106,8 +121,8 @@ if (readOnlyMode)
             result.Tools = ReadOnlyToolFilter.FilterTools(result.Tools, readOnly: true);
             return result;
         });
-    });
-}
+    }
+});
 
 // Honour X-Forwarded-Proto / X-Forwarded-Host from Container Apps ingress so absolute URLs
 // (issuer, registration_endpoint, etc.) emit the public https scheme rather than the
