@@ -132,6 +132,24 @@ public class ReadOnlyToolsListTests : IClassFixture<ReadOnlyToolsListTests.Facto
         return dataPayload ?? body.Trim();
     }
 
+    [Fact]
+    public async Task CallTool_InReadOnlyMode_SurfacesReadOnlyMessageNotGenericError()
+    {
+        using var client = _factory.CreateClient();
+
+        var body = BuildJsonRpc("tools/call", id: 2, new
+        {
+            name = "Create_organization",
+            arguments = new { jsonBody = "{}" }
+        });
+        var responseText = await PostMcpAsync(client, body);
+
+        // The CallTool filter surfaces the UnauthorizedAccessException message from ToolAuthorizer,
+        // instead of the SDK's generic "An error occurred invoking 'Create_organization'."
+        responseText.Should().Contain("read-only mode");
+        responseText.Should().NotContain("An error occurred invoking");
+    }
+
     /// <summary>
     /// <see cref="WebApplicationFactory{TEntryPoint}"/> configured for read-only / no-auth mode.
     /// <para>
