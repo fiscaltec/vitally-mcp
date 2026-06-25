@@ -91,7 +91,7 @@ if (!noAuth)
 // destructive tools can be filtered out of tools/list for read-only deployments.
 var readOnlyMode = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName).GetValue<bool>("ReadOnly");
 
-var mcpBuilder = builder.Services.AddMcpServer()
+var mcpBuilder = builder.Services.AddMcpServer(options => options.ServerInstructions = VitallyServerInstructions.Text)
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
 
