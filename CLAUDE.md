@@ -270,6 +270,17 @@ paging params are ignored when scoped). `Get_custom_object_instance` reads one i
 the same search endpoint (Vitally has no direct single-instance GET). The legacy free-text
 `Search_custom_object_instances` tool has been removed in favour of these typed paths.
 
+**Organisation summary (SP5b):** `Get_organization_summary(organizationId)` is a read-only composite
+that collapses the common "everything about this customer" shape into one call. It makes 4 upstream
+calls — org get-by-id (with a curated set of rollup traits), one `customObjects` list to resolve the
+goals/product-feedback object names to ids, and two organisation-scoped instance searches — and
+returns `{ organization, goals, productFeedback }`. `goals`/`productFeedback` are each
+`{results:[...]}` or `{error:...}` (a single sub-failure never sinks the summary; a bad org id
+surfaces an error). The tenant-specific policy (the curated trait CSV and the default object names
+`customerGoals` / `productFeedback`) lives as constants in `Tools/SummaryTools.cs`;
+`VitallyService.GetOrganizationSummaryAsync` is generic and takes them as parameters. Object ids are
+resolved by name at runtime (never hardcoded); the trait set and object names are overridable per call.
+
 **Server-side page-and-filter (SP3):** Vitally's list endpoints can't filter by name or date, so a
 bounded auto-pager (`VitallyService.GetByNameContainsAsync` / `GetByCreatedRangeAsync`, capped by
 `Vitally:MaxAutoPageFetches`, default 10 pages × 100) pages and filters client-side. The tools that
