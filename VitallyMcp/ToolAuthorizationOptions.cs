@@ -21,6 +21,14 @@ public class ToolAuthorizationOptions
     /// </summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// Deployment-level read-only kill switch. When true, every mutating tool call
+    /// (create/update/delete) is denied regardless of RBAC state or token permissions, and the
+    /// destructive tools are hidden from tools/list. A blunt safety net for read-only deployments
+    /// that does not depend on the per-user Entra-group RBAC being configured. Default false.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
     /// <summary>Permission required for read operations (HTTP GET).</summary>
     public string ReadPermission { get; set; } = "vitally:read";
 

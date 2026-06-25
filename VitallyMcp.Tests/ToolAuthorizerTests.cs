@@ -201,4 +201,50 @@ public class ToolAuthorizerTests
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>();
     }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    [InlineData("DELETE")]
+    public async Task ReadOnly_DeniesMutatingVerbs_EvenWhenAuthDisabled(string method)
+    {
+        // ReadOnly is independent of Enabled — denies writes even with RBAC off.
+        var authorizer = Build(options: new ToolAuthorizationOptions { Enabled = false, ReadOnly = true });
+
+        Func<Task> act = () => authorizer.EnsureAuthorizedAsync(new HttpMethod(method));
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*read-only*");
+    }
+
+    [Fact]
+    public async Task ReadOnly_AllowsGet()
+    {
+        var authorizer = Build(options: new ToolAuthorizationOptions { Enabled = false, ReadOnly = true });
+
+        Func<Task> act = () => authorizer.EnsureAuthorizedAsync(HttpMethod.Get);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task ReadOnly_DeniesWrite_EvenInNoAuthDev()
+    {
+        var authorizer = Build(noAuth: true, options: new ToolAuthorizationOptions { Enabled = false, ReadOnly = true });
+
+        Func<Task> act = () => authorizer.EnsureAuthorizedAsync(HttpMethod.Delete);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*read-only*");
+    }
+
+    [Fact]
+    public async Task ReadOnlyFalse_DoesNotBlockWrites()
+    {
+        // Default ReadOnly=false: with Enabled=false the write passes (unchanged behaviour).
+        var authorizer = Build(options: new ToolAuthorizationOptions { Enabled = false, ReadOnly = false });
+
+        Func<Task> act = () => authorizer.EnsureAuthorizedAsync(HttpMethod.Post);
+
+        await act.Should().NotThrowAsync();
+    }
 }

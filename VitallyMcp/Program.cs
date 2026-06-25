@@ -87,9 +87,27 @@ if (!noAuth)
     builder.Services.AddAuthorization();
 }
 
-builder.Services.AddMcpServer()
+// Read the read-only flag from raw config at startup (same pattern as `noAuth` above) so the
+// destructive tools can be filtered out of tools/list for read-only deployments.
+var readOnlyMode = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName).GetValue<bool>("ReadOnly");
+
+var mcpBuilder = builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
+
+if (readOnlyMode)
+{
+    // Hide destructive tools from tools/list (enforcement is still done in ToolAuthorizer).
+    mcpBuilder.WithRequestFilters(filters =>
+    {
+        filters.AddListToolsFilter(next => async (context, cancellationToken) =>
+        {
+            var result = await next(context, cancellationToken);
+            result.Tools = ReadOnlyToolFilter.FilterTools(result.Tools, readOnly: true);
+            return result;
+        });
+    });
+}
 
 // Honour X-Forwarded-Proto / X-Forwarded-Host from Container Apps ingress so absolute URLs
 // (issuer, registration_endpoint, etc.) emit the public https scheme rather than the

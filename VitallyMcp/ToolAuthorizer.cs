@@ -42,6 +42,15 @@ public class ToolAuthorizer
     /// </summary>
     public async Task EnsureAuthorizedAsync(HttpMethod method, CancellationToken cancellationToken = default)
     {
+        // Deployment-level read-only kill switch: deny every mutating verb regardless of RBAC
+        // state, NoAuth, or token permissions. Checked before the Enabled/NoAuth gate so a
+        // read-only deployment is locked even when per-user RBAC isn't configured.
+        if (_options.ReadOnly && method != HttpMethod.Get)
+        {
+            throw new UnauthorizedAccessException(
+                "This server is deployed in read-only mode; create, update and delete operations are disabled.");
+        }
+
         if (!_options.Enabled || _noAuth)
         {
             return;
