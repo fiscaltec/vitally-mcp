@@ -1272,13 +1272,14 @@ public class VitallyServiceTests
         var mock = new Mock<HttpMessageHandler>();
         foreach (var route in routes)
         {
-            var captured = route;
+            // The C# foreach variable is per-iteration since C# 5, so capturing `route` directly in
+            // these closures is safe — no separate copy needed.
             mock.Protected()
                 .Setup<Task<HttpResponseMessage>>(
                     "SendAsync",
-                    ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsoluteUri.Contains(captured.urlContains)),
+                    ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsoluteUri.Contains(route.urlContains)),
                     ItExpr.IsAny<CancellationToken>())
-                .ReturnsAsync(() => new HttpResponseMessage { StatusCode = captured.status, Content = new StringContent(captured.body) });
+                .ReturnsAsync(() => new HttpResponseMessage { StatusCode = route.status, Content = new StringContent(route.body) });
         }
         return (new HttpClient(mock.Object), mock);
     }
