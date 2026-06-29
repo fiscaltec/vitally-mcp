@@ -10,10 +10,6 @@ on:
   pull_request_review:
     types: [submitted]
 
-permissions:
-  contents: write
-  pull-requests: write
-
 concurrency:
   group: dependabot-auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -23,6 +19,9 @@ jobs:
     # Only Dependabot-authored PRs. Use the PR author, not github.actor: on the
     # pull_request_review event the actor is the review author (e.g. Copilot), not Dependabot.
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Resolve bot-authored review threads
@@ -35,6 +34,7 @@ jobs:
           set -euo pipefail
           # Resolve only unresolved threads whose first comment is authored by a known review bot.
           # Human-authored threads are never touched. Idempotent: already-resolved threads are skipped.
+          # shellcheck disable=SC2016 # $ in single quotes is intentional GraphQL query syntax, not shell expansion
           gh api graphql -f query='
             query($owner:String!,$repo:String!,$pr:Int!){
               repository(owner:$owner,name:$repo){
