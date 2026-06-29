@@ -1439,10 +1439,13 @@ public class VitallyServiceTests
         var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("[]");
         var service = TestHelpers.BuildVitallyService(client);
 
-        await service.GetRawAsync("customFields", new Dictionary<string, string> { ["a b"] = "c d" });
+        // Use '+' rather than a space: System.Uri leaves '+' untouched in a query, so this only
+        // passes when GetRawAsync explicitly Uri.EscapeDataString-encodes the key+value (-> %2B).
+        // (A space would be auto-escaped by Uri and wouldn't prove the explicit escaping.)
+        await service.GetRawAsync("customFields", new Dictionary<string, string> { ["a+b"] = "c+d" });
 
         handler.Protected().Verify("SendAsync", Times.Once(),
-            ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.Query.Contains("a%20b=c%20d")),
+            ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.Query.Contains("a%2Bb=c%2Bd")),
             ItExpr.IsAny<CancellationToken>());
     }
 
