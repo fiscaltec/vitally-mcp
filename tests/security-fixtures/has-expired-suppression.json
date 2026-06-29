@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "parameters": "--vulnerable --include-transitive",
+  "projects": [
+    { "path": "VitallyMcp/VitallyMcp.csproj",
+      "frameworks": [ { "framework": "net10.0",
+        "topLevelPackages": [
+          { "id": "Vulnerable.Pkg", "requestedVersion": "1.0.0", "resolvedVersion": "1.0.0",
+            "vulnerabilities": [ { "severity": "High", "advisoryurl": "https://github.com/advisories/GHSA-expd-2222-2222" } ] }
+        ],
+        "transitivePackages": [] } ] }
+  ]
+}

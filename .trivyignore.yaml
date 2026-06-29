@@ -1,0 +1,9 @@
+# Trivy ignore file for the Vitally MCP container image scan.
+# Each waiver MUST carry a reason (statement) and an expiry (expired_at). After expired_at passes,
+# the finding re-blocks the build, forcing review. See docs/runbooks/vulnerability-scanning.md.
+#
+# Example:
+# vulnerabilities:
+#   - id: CVE-2025-12345
+#     statement: "No fix in the chiselled base image yet; revisit at the next .NET base bump."
+#     expired_at: 2026-09-30

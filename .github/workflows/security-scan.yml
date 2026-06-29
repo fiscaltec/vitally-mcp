@@ -1,0 +1,94 @@
+name: Security scan
+
+# Gates merges on known-vulnerable NuGet packages and container-image CVEs (High/Critical).
+# The weekly schedule re-scans unchanged main, so a CVE disclosed against existing dependencies is
+# still caught. Waivers: security/nuget-vuln-allowlist.json (NuGet) and .trivyignore.yaml (image).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 1" # Monday 09:00 UTC, alongside the CodeQL sweep
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload to the Security tab
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nuget-vuln:
+    name: nuget-vuln
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Self-test the gate script (fixtures)
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/Run-SecurityGateFixtures.ps1
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore VitallyMcp.sln
+
+      - name: List vulnerable packages
+        run: >
+          dotnet list VitallyMcp.sln package --vulnerable --include-transitive --format json
+          > nuget-vuln.json
+
+      - name: Evaluate vulnerability gate
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/Test-NuGetVulnerabilities.ps1 -JsonPath nuget-vuln.json
+
+  image-cve:
+    name: image-cve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build image
+        run: docker build -t vitally-mcp:scan -f Dockerfile .
+
+      - name: Trivy scan (gate on High/Critical)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: vitally-mcp:scan
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "false"
+          exit-code: "1"
+          trivyignores: .trivyignore.yaml
+
+      - name: Trivy scan (SARIF, all severities, non-blocking)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: vitally-mcp:scan
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "0"
+          trivyignores: .trivyignore.yaml
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
