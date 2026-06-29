@@ -16,7 +16,7 @@
 - Versioning from conventional commits since the last tag; **dependency commits must release** — `feat`→minor, `fix`/`build`/`ci`/`chore`/`refactor`/`perf`→patch, breaking→major, no-bump otherwise.
 - Changelog lives in the **GitHub Release** (`--generate-notes`); do NOT commit `CHANGELOG.md` to `main` (the ruleset has no bypass actor — a workflow can't push to `main`).
 - Tag prefix `v` (matches existing `v4.0.12`).
-- Action pins follow the repo convention (`actions/checkout@v6`, `azure/login@v3`, `docker/login-action@v3`, `docker/build-push-action@v6`); verify any NEW action's latest release tag before pinning (learned from a wrong-version pin earlier).
+- Action pins follow the repo convention (`actions/checkout@v7`, `azure/login@v3`, `docker/login-action@v3`, `docker/build-push-action@v6`); verify any NEW action's latest release tag before pinning (learned from a wrong-version pin earlier).
 - UK English; LF line endings. Build/run from repo root; do NOT prefix commands with `cd`. Docker is available for `actionlint` (use `MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo" -w /repo rhysd/actionlint:latest -color <file>`).
 
 ---
@@ -87,7 +87,7 @@ jobs:
       MCP_URL: https://vitally.fiscaltec.com/mcp
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -268,7 +268,7 @@ jobs:
       new_tag: ${{ steps.tag.outputs.new_tag }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

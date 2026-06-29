@@ -103,6 +103,10 @@ jobs:
           prev=$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" \
             --query "properties.template.containers[0].image" -o tsv)
           echo "Previous image: $prev"
+          if [ -z "$prev" ]; then
+            echo "::error::Could not determine the current image; aborting before deploy so rollback stays possible."
+            exit 1
+          fi
           echo "PREV_IMAGE=$prev" >> "$GITHUB_ENV"
 
       - name: Import image into the private ACR (server-side)
@@ -143,8 +147,8 @@ jobs:
             fi
             sleep 15
           done
-          if [ "$prov" != "Provisioned" ]; then
-            echo "::error::Revision $latest did not reach Provisioned (last state: $prov)"
+          if [ "$prov" != "Provisioned" ] || { [ "$health" != "Healthy" ] && [ "$health" != "None" ]; }; then
+            echo "::error::Revision $latest did not become healthy (provisioning=$prov health=$health)"
             exit 1
           fi
           # Smoke: /health must be 200; unauthenticated /mcp must be 401 (app live + Auth0 gate enforced).

@@ -8,9 +8,8 @@ on:
     - cron: "0 2 * * *" # 02:00 UTC nightly
   workflow_dispatch:
 
-permissions:
-  contents: write # create tag + GitHub Release
-
+# Permissions are set per-job: a reusable workflow's token is CAPPED by the caller, so the deploy
+# job must itself grant id-token/packages or the called deploy.yml would be denied them at runtime.
 concurrency:
   group: release-train
   cancel-in-progress: false
@@ -19,6 +18,8 @@ jobs:
   release:
     name: Cut version + GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create tag + GitHub Release
     outputs:
       new_tag: ${{ steps.tag.outputs.new_tag }}
     steps:
@@ -47,6 +48,10 @@ jobs:
   deploy:
     needs: release
     if: ${{ needs.release.outputs.new_tag != '' }}
+    permissions:
+      id-token: write # OIDC for azure/login in the called deploy
+      contents: read
+      packages: write # GHCR push in the called deploy
     uses: ./.github/workflows/deploy.yml
     with:
       ref: ${{ needs.release.outputs.new_tag }}
