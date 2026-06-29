@@ -23,25 +23,27 @@ updates:
       prefix: "build"
       include: "scope"
     groups:
-      microsoft-extensions:
-        patterns:
-          - "Microsoft.Extensions.*"
       # Azure SDK packages share a transitive Azure.Core dependency. Bumping them in
       # separate PRs caused a CS0433 'DefaultAzureCredential' collision (KeyVault.Secrets
-      # pulled a newer Azure.Core than the pinned Azure.Identity). Grouping them means the
-      # set builds or fails as a unit.
+      # pulled a newer Azure.Core than the pinned Azure.Identity). Kept as its own group
+      # across ALL update types so even a major bump moves the set as a unit. Listed first
+      # so Azure.* lands here rather than in the broad group below.
       azure:
         patterns:
           - "Azure.*"
-      test-framework:
+      # Collapse every other minor + patch bump into a single PR, to cut the number of
+      # open PRs (and the auto-merge rebase cascade that strict status checks create).
+      # Major bumps fall outside this group and arrive as individual PRs, so a potentially
+      # breaking change is isolated and easy to spot.
+      nuget-minor-patch:
         patterns:
-          - "xunit*"
-          - "Microsoft.NET.Test.Sdk"
-          - "coverlet.*"
-          - "FluentAssertions"
-          - "Moq*"
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
-  # Keep GitHub Actions versions current (actions/checkout, setup-dotnet, etc.)
+  # Keep GitHub Actions versions current (actions/checkout, setup-dotnet, etc.).
+  # Grouped into a single PR so a week's action bumps land together rather than one PR each.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -56,10 +58,15 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Track the Dockerfile base images (dotnet/sdk + dotnet/aspnet). The floating "10.0"
   # tags already pick up patch/minor on rebuild; this surfaces major bumps (e.g. .NET 11
   # base images) as a PR so the runtime doesn't silently drift behind a new release.
+  # Grouped so both base images move in one PR.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -74,3 +81,7 @@ updates:
     commit-message:
       prefix: "build"
       include: "scope"
+    groups:
+      docker:
+        patterns:
+          - "*"
