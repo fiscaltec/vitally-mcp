@@ -69,6 +69,9 @@ builder.Services.AddHttpClient<VitallyService>()
 var oauthSection = builder.Configuration.GetSection(OAuthOptions.SectionName);
 var noAuth = oauthSection.GetValue<bool>("NoAuth");
 
+// Fail fast on an unauthenticated production-looking config (NoAuth + Key Vault).
+StartupGuards.EnsureSafeAuthConfig(noAuth, vitallySection["KeyVaultUri"]);
+
 if (!noAuth)
 {
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -361,6 +364,9 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
     {
         pairs.RemoveAll(p => p.Key == "client_secret");
         pairs.Add(new KeyValuePair<string, string>("client_secret", o.SharedClientSecret));
+        // Never pair the injected secret with a caller-supplied client_id — clamp to our shared app.
+        pairs.RemoveAll(p => p.Key == "client_id");
+        pairs.Add(new KeyValuePair<string, string>("client_id", o.SharedClientId));
     }
 
     var client = factory.CreateClient();

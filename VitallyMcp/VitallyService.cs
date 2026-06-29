@@ -94,7 +94,7 @@ public class VitallyService
             // status code does not indicate success".
             var bodySnippet = string.IsNullOrWhiteSpace(body) ? "(empty body)" : Truncate(body, 1024);
             throw new HttpRequestException(
-                $"Vitally API returned {(int)response.StatusCode} {response.ReasonPhrase} for {method} {url}. Body: {bodySnippet}",
+                $"Upstream API returned {(int)response.StatusCode} {response.ReasonPhrase}. Body: {bodySnippet}",
                 inner: null,
                 statusCode: response.StatusCode);
         }
@@ -446,7 +446,7 @@ public class VitallyService
         var url = $"{_baseUrl}/resources/{path}";
         if (queryParams != null && queryParams.Count > 0)
         {
-            var query = string.Join("&", queryParams.Select(kv => $"{kv.Key}={Uri.EscapeDataString(kv.Value)}"));
+            var query = string.Join("&", queryParams.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
             url = $"{url}?{query}";
         }
 
