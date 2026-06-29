@@ -151,14 +151,26 @@ jobs:
             echo "::error::Revision $latest did not become healthy (provisioning=$prov health=$health)"
             exit 1
           fi
-          # Smoke: /health must be 200; unauthenticated /mcp must be 401 (app live + Auth0 gate enforced).
-          health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || echo "000")
-          echo "/health -> $health_code"
-          [ "$health_code" = "200" ] || { echo "::error::/health returned $health_code"; exit 1; }
-          mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "$MCP_URL" \
-            -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' || echo "000")
-          echo "/mcp (unauthenticated) -> $mcp_code"
-          [ "$mcp_code" = "401" ] || { echo "::error::/mcp unauthenticated returned $mcp_code (expected 401)"; exit 1; }
+          # Smoke (with retries): a freshly-swapped single-revision app may take a short while to
+          # start serving on the public FQDN, so retry before failing (and triggering a rollback).
+          # /health must be 200; unauthenticated /mcp must be 401 (app live + Auth0 gate enforced).
+          health_code=""
+          for i in $(seq 1 6); do
+            health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || echo "000")
+            echo "/health -> $health_code (attempt $i)"
+            [ "$health_code" = "200" ] && break
+            sleep 10
+          done
+          [ "$health_code" = "200" ] || { echo "::error::/health not 200 after retries (last: $health_code)"; exit 1; }
+          mcp_code=""
+          for i in $(seq 1 6); do
+            mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "$MCP_URL" \
+              -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' || echo "000")
+            echo "/mcp (unauthenticated) -> $mcp_code (attempt $i)"
+            [ "$mcp_code" = "401" ] && break
+            sleep 10
+          done
+          [ "$mcp_code" = "401" ] || { echo "::error::/mcp unauthenticated not 401 after retries (last: $mcp_code, expected 401)"; exit 1; }
 
       - name: Roll back on failure
         if: ${{ failure() && env.PREV_IMAGE != '' }}
