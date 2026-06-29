@@ -155,6 +155,21 @@ import {
   id = "/subscriptions/${var.subscription_id}/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_uksouth/flowLogs/vitally-prod-vnetflow-uksouth"
 }
 
+# ---- 2026-06-29: CI/CD deploy via GitHub OIDC (SP3a) ----
+# Applied to the live estate via az CLI / az rest; bring under management with these imports.
+import {
+  to = azurerm_federated_identity_credential.github_actions_prod
+  id = "${local.rg_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/vitally-prod-id-uksouth/federatedIdentityCredentials/github-actions-prod-env"
+}
+import {
+  to = azurerm_role_assignment.mi_acr_contributor
+  id = "${local.rg_id}/providers/Microsoft.ContainerRegistry/registries/vitallyproducruksouth/providers/Microsoft.Authorization/roleAssignments/bef82daa-b884-45bc-b943-d70efb4854f2"
+}
+import {
+  to = azurerm_role_assignment.mi_ca_contributor
+  id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-prod-ca-uksouth/providers/Microsoft.Authorization/roleAssignments/ca439f5e-c348-48de-b515-8b5ced858f00"
+}
+
 # ---- Need a looked-up ID first (uncomment + fill in, then plan) ----
 # Diagnostic settings:  import id = "<target-resource-id>|to-law"
 # Role assignments:     az role assignment list --scope <scope> --query "[].id"  → import "<assignment-id>"
