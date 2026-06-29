@@ -131,6 +131,7 @@ jobs:
             --query "properties.latestRevisionName" -o tsv)
           echo "Latest revision: $latest"
           prov=""
+          health=""
           for i in $(seq 1 12); do
             prov=$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" --revision "$latest" \
               --query "properties.provisioningState" -o tsv 2>/dev/null || echo "")
