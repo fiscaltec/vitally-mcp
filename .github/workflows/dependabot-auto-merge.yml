@@ -1,0 +1,72 @@
+name: Dependabot auto-merge
+
+# Enables GitHub-native auto-merge on Dependabot PRs (all update types) and resolves bot-authored
+# review threads, so the main ruleset's thread-resolution requirement does not block an unattended
+# merge. Nothing merges unless every required check passes — GitHub performs the merge itself once
+# the ruleset is satisfied. See docs/superpowers/specs/2026-06-29-dependabot-auto-merge-design.md.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    # Only Dependabot-authored PRs. Use the PR author, not github.actor: on the
+    # pull_request_review event the actor is the review author (e.g. Copilot), not Dependabot.
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve bot-authored review threads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.event.repository.owner.login }}
+          REPO: ${{ github.event.repository.name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Resolve only unresolved threads whose first comment is authored by a known review bot.
+          # Human-authored threads are never touched. Idempotent: already-resolved threads are skipped.
+          gh api graphql -f query='
+            query($owner:String!,$repo:String!,$pr:Int!){
+              repository(owner:$owner,name:$repo){
+                pullRequest(number:$pr){
+                  reviewThreads(first:100){
+                    nodes{ id isResolved comments(first:1){ nodes{ author{ login } } } }
+                  }
+                }
+              }
+            }' -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" \
+            --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(.isResolved == false)
+                  | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer"
+                        or .comments.nodes[0].author.login == "github-advanced-security")
+                  | .id' \
+          | while read -r thread_id; do
+              echo "Resolving bot review thread $thread_id"
+              gh api graphql -f query='
+                mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread{ isResolved } } }' \
+                -f id="$thread_id"
+            done
+
+      - name: Fetch Dependabot metadata
+        if: ${{ github.event_name == 'pull_request' }}
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Enable auto-merge (squash)
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Update type: ${{ steps.metadata.outputs.update-type }} (all types auto-merge)."
+          gh pr merge --auto --squash "${{ github.event.pull_request.html_url }}"
