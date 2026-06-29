@@ -45,12 +45,21 @@ jobs:
 
       - name: Resolve image tag and GHCR repo
         id: vars
+        # The input is passed via env (not inlined as ${{ }}) to avoid shell injection, and the
+        # resolved tag is validated against the container-tag charset so it is safe to interpolate
+        # into the later az/docker steps.
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            tag="${{ inputs.image_tag }}"
+          if [ -n "$INPUT_IMAGE_TAG" ]; then
+            tag="$INPUT_IMAGE_TAG"
           else
             tag="sha-$(git rev-parse --short HEAD)"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::Invalid image tag '$tag' (allowed characters: A-Za-z0-9._-)"
+            exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
