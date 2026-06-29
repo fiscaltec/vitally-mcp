@@ -1266,6 +1266,10 @@ public class VitallyServiceTests
     // Routes mocked responses by request-URL substring; later setups win in Moq so the most
     // specific (instances/search) is registered last. Bodies mirror the REAL Vitally shapes:
     // org get = single object; customObjects list = {results:[...]}; instance search = BARE ARRAY.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "Test mock — HttpResponseMessage lifetime is bounded by the test run.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+        Justification = "Test mock — owned by the Moq setup, bounded by the test method.")]
     private static (HttpClient client, Mock<HttpMessageHandler> handler) RoutedClient(
         IReadOnlyList<(string urlContains, HttpStatusCode status, string body)> routes)
     {
@@ -1411,4 +1415,37 @@ public class VitallyServiceTests
                 r.RequestUri!.AbsoluteUri.Contains("organizationId=org-1")),
             ItExpr.IsAny<CancellationToken>());
     }
+
+    #region Security Tests
+
+    [Fact]
+    public async Task SendAsync_OnError_MessageHasStatusAndBodyButNotUrl()
+    {
+        using var client = TestHelpers.CreateMockHttpClient("{\"message\":\"externalId is required\"}", HttpStatusCode.BadRequest);
+        var service = TestHelpers.BuildVitallyService(client);
+
+        var act = async () => await service.GetResourceByIdAsync("accounts", "acc-123");
+
+        var ex = await act.Should().ThrowAsync<HttpRequestException>();
+        ex.Which.Message.Should().Contain("400");
+        ex.Which.Message.Should().Contain("externalId is required");
+        ex.Which.Message.Should().NotContain("acc-123");           // resource path/id not leaked
+        ex.Which.Message.Should().NotContainEquivalentOf("vitally"); // base host not leaked
+    }
+
+    [Fact]
+    public async Task GetRawAsync_EscapesQueryKeysAndValues()
+    {
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("[]");
+        var service = TestHelpers.BuildVitallyService(client);
+
+        await service.GetRawAsync("customFields", new Dictionary<string, string> { ["a b"] = "c d" });
+
+        handler.Protected().Verify("SendAsync", Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.Query.Contains("a%20b=c%20d")),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    #endregion
+
 }

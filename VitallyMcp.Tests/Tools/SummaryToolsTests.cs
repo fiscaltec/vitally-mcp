@@ -42,6 +42,10 @@ public class SummaryToolsTests
         doc.RootElement.TryGetProperty("productFeedback", out _).Should().BeTrue();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "Test mock — HttpResponseMessage lifetime is bounded by the test run.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+        Justification = "Test mock — owned by the Moq setup, bounded by the test method.")]
     private static HttpClient BuildRoutedClient()
     {
         var mock = new Mock<HttpMessageHandler>();
