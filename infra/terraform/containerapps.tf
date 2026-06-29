@@ -61,7 +61,14 @@ resource "azurerm_container_app" "app" {
   }
 
   template {
-    min_replicas = 0
+    # Keep one replica always warm. With scale-to-zero (min 0), a request arriving after an
+    # idle gap paid a server-side cold start (scheduling + ACR image pull over the private
+    # endpoint + .NET boot + first-time Key Vault/Graph managed-identity token acquisitions) —
+    # ~5s worst case in the logs, of which the first Graph token alone was ~3s. A warm replica
+    # also keeps the token/JWKS/Key Vault caches hot. NOTE: this only affects the server-side
+    # slice; client-perceived MCP latency is dominated by model inference, not this change.
+    # Trade-off: one 0.5 vCPU / 1Gi replica is billed continuously at the idle rate.
+    min_replicas = 1
     max_replicas = 3
 
     container {
