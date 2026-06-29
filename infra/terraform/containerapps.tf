@@ -61,7 +61,12 @@ resource "azurerm_container_app" "app" {
   }
 
   template {
-    min_replicas = 0
+    # Keep one replica always warm: scale-to-zero (min 0) made every request after an idle
+    # gap pay a cold start (scheduling + ACR image pull over the private endpoint + .NET boot
+    # + first-time Key Vault/Graph token acquisitions), pushing interactive requests to 1-2 min.
+    # A warm replica also keeps the token/JWKS/Key Vault caches hot. Trade-off: one 0.5 vCPU /
+    # 1Gi replica is billed continuously at the idle rate instead of scaling to zero.
+    min_replicas = 1
     max_replicas = 3
 
     container {
