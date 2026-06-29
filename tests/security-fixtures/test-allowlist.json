@@ -1,0 +1,4 @@
+[
+  { "id": "GHSA-supp-1111-1111", "package": "Vulnerable.Pkg", "reason": "Test fixture: active waiver", "expires": "2099-01-01" },
+  { "id": "GHSA-expd-2222-2222", "package": "Vulnerable.Pkg", "reason": "Test fixture: expired waiver", "expires": "2000-01-01" }
+]

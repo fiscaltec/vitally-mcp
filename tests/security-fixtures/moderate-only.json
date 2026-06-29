@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "parameters": "--vulnerable --include-transitive",
+  "projects": [
+    { "path": "VitallyMcp/VitallyMcp.csproj",
+      "frameworks": [ { "framework": "net10.0",
+        "topLevelPackages": [],
+        "transitivePackages": [
+          { "id": "Moderate.Pkg", "resolvedVersion": "2.0.0",
+            "vulnerabilities": [ { "severity": "Moderate", "advisoryurl": "https://github.com/advisories/GHSA-mod-3333-3333" } ] }
+        ] } ] }
+  ]
+}
