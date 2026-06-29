@@ -1,12 +1,24 @@
 name: Deploy
 
-# Manual production deploy. The ACR has public network access disabled, so the image cannot be
-# built/pushed to it from a GitHub-hosted runner. Instead we build + push to a private GHCR package,
-# then `az acr import` (a server-side control-plane op that works with public access disabled) pulls
-# it into the private ACR, and `az containerapp update` rolls the app. OIDC auth as the user-assigned
-# managed identity (federated credential subject repo:fiscaltec/vitally-mcp:environment:production).
+# Production deploy. The ACR has public network access disabled, so the image cannot be built/pushed
+# to it from a GitHub-hosted runner. Instead we build + push to a private GHCR package, then
+# `az acr import` (server-side, works with public access disabled) pulls it into the private ACR, and
+# `az containerapp update` rolls the app. OIDC auth as the user-assigned managed identity (federated
+# credential subject repo:fiscaltec/vitally-mcp:environment:production). Callable manually
+# (workflow_dispatch) or by the release train (workflow_call). On a failed health/smoke check it rolls
+# the Container App back to the previous image.
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch/tag/SHA) to deploy"
+        required: false
+        type: string
+      image_tag:
+        description: "Image tag to publish (default sha-<short-sha> of the chosen ref)"
+        required: false
+        type: string
+  workflow_call:
     inputs:
       ref:
         description: "Git ref (branch/tag/SHA) to deploy"
@@ -37,17 +49,15 @@ jobs:
       CONTAINER_APP: ${{ vars.CONTAINER_APP }}
       IMAGE_NAME: ${{ vars.IMAGE_NAME }}
       HEALTH_URL: https://vitally.fiscaltec.com/health
+      MCP_URL: https://vitally.fiscaltec.com/mcp
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Resolve image tag and GHCR repo
         id: vars
-        # The input is passed via env (not inlined as ${{ }}) to avoid shell injection, and the
-        # resolved tag is validated against the container-tag charset so it is safe to interpolate
-        # into the later az/docker steps.
         env:
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
@@ -86,10 +96,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Import image into the private ACR (server-side)
+      - name: Capture current image (for rollback)
         run: |
           set -euo pipefail
           az config set extension.use_dynamic_install=yes_without_prompt
+          prev=$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" \
+            --query "properties.template.containers[0].image" -o tsv)
+          echo "Previous image: $prev"
+          if [ -z "$prev" ]; then
+            echo "::error::Could not determine the current image; aborting before deploy so rollback stays possible."
+            exit 1
+          fi
+          echo "PREV_IMAGE=$prev" >> "$GITHUB_ENV"
+
+      - name: Import image into the private ACR (server-side)
+        run: |
+          set -euo pipefail
           az acr import \
             --name "$ACR_NAME" \
             --source "${{ steps.vars.outputs.ghcr }}:${{ steps.vars.outputs.tag }}" \
@@ -106,13 +128,14 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ steps.vars.outputs.tag }}"
 
-      - name: Verify new revision is healthy
+      - name: Verify deployment (revision health + smoke)
         run: |
           set -euo pipefail
           latest=$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" \
             --query "properties.latestRevisionName" -o tsv)
           echo "Latest revision: $latest"
-          prov=""; health=""
+          prov=""
+          health=""
           for i in $(seq 1 12); do
             prov=$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" --revision "$latest" \
               --query "properties.provisioningState" -o tsv 2>/dev/null || echo "")
@@ -124,14 +147,27 @@ jobs:
             fi
             sleep 15
           done
-          if [ "$prov" != "Provisioned" ]; then
-            echo "::error::Revision $latest did not reach Provisioned (last: $prov / $health)"
+          if [ "$prov" != "Provisioned" ] || { [ "$health" != "Healthy" ] && [ "$health" != "None" ]; }; then
+            echo "::error::Revision $latest did not become healthy (provisioning=$prov health=$health)"
             exit 1
           fi
+          # Smoke: /health must be 200; unauthenticated /mcp must be 401 (app live + Auth0 gate enforced).
+          health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || echo "000")
+          echo "/health -> $health_code"
+          [ "$health_code" = "200" ] || { echo "::error::/health returned $health_code"; exit 1; }
+          mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "$MCP_URL" \
+            -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' || echo "000")
+          echo "/mcp (unauthenticated) -> $mcp_code"
+          [ "$mcp_code" = "401" ] || { echo "::error::/mcp unauthenticated returned $mcp_code (expected 401)"; exit 1; }
 
-      - name: Smoke-check /health
+      - name: Roll back on failure
+        if: ${{ failure() && env.PREV_IMAGE != '' }}
         run: |
           set -euo pipefail
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || echo "000")
-          echo "/health returned $code"
-          [ "$code" = "200" ] || { echo "::error::/health returned $code"; exit 1; }
+          echo "::warning::Deploy verification failed — rolling back to $PREV_IMAGE"
+          az containerapp update \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$PREV_IMAGE"
+          echo "::error::Deploy failed and was rolled back to $PREV_IMAGE"
+          exit 1
