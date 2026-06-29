@@ -1,54 +1,83 @@
 name: Deploy
 
-# Builds the container image in Azure Container Registry and rolls the Azure Container App to
-# the new image. Authentication is via GitHub OIDC federation — no long-lived Azure credentials.
-#
-# SCAFFOLD: this is wired for manual runs only until the target infrastructure exists in the
-# Terraform repo. Once the registry / container app / federated identity are provisioned and the
-# repo variables + secrets below are set, uncomment the `push` trigger to deploy on merge to main.
+# Manual production deploy. The ACR has public network access disabled, so the image cannot be
+# built/pushed to it from a GitHub-hosted runner. Instead we build + push to a private GHCR package,
+# then `az acr import` (a server-side control-plane op that works with public access disabled) pulls
+# it into the private ACR, and `az containerapp update` rolls the app. OIDC auth as the user-assigned
+# managed identity (federated credential subject repo:fiscaltec/vitally-mcp:environment:production).
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Image tag to build and deploy (defaults to sha-<short-sha>)"
+      ref:
+        description: "Git ref (branch/tag/SHA) to deploy"
         required: false
         type: string
-  # push:
-  #   branches: [main]
+      image_tag:
+        description: "Image tag to publish (default sha-<short-sha> of the chosen ref)"
+        required: false
+        type: string
 
-# OIDC federation requires id-token: write. contents: read to checkout.
 permissions:
-  id-token: write
+  id-token: write # OIDC token for azure/login
   contents: read
+  packages: write # push to GHCR
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build image + update Container App
+    name: Build, import to ACR, roll Container App
     runs-on: ubuntu-latest
     environment: production
-
-    # Repo configuration (Settings -> Secrets and variables -> Actions):
-    #   Variables: ACR_NAME, RESOURCE_GROUP, CONTAINER_APP, IMAGE_NAME
-    #   Secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
     env:
-      IMAGE_NAME: ${{ vars.IMAGE_NAME || 'vitally-mcp' }}
-
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      CONTAINER_APP: ${{ vars.CONTAINER_APP }}
+      IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+      HEALTH_URL: https://vitally.fiscaltec.com/health
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
-      - name: Resolve image tag
-        id: tag
+      - name: Resolve image tag and GHCR repo
+        id: vars
+        # The input is passed via env (not inlined as ${{ }}) to avoid shell injection, and the
+        # resolved tag is validated against the container-tag charset so it is safe to interpolate
+        # into the later az/docker steps.
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ -n "$INPUT_IMAGE_TAG" ]; then
+            tag="$INPUT_IMAGE_TAG"
           else
-            echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            tag="sha-$(git rev-parse --short HEAD)"
           fi
+          if ! printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::Invalid image tag '$tag' (allowed characters: A-Za-z0-9._-)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.vars.outputs.ghcr }}:${{ steps.vars.outputs.tag }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -57,22 +86,52 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push image in ACR
-        uses: azure/cli@v3
-        with:
-          azcliversion: latest
-          inlineScript: |
-            az acr build \
-              --registry "${{ vars.ACR_NAME }}" \
-              --image "${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
-              --file Dockerfile .
+      - name: Import image into the private ACR (server-side)
+        run: |
+          set -euo pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt
+          az acr import \
+            --name "$ACR_NAME" \
+            --source "${{ steps.vars.outputs.ghcr }}:${{ steps.vars.outputs.tag }}" \
+            --image "$IMAGE_NAME:${{ steps.vars.outputs.tag }}" \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}" \
+            --force
 
       - name: Update Container App revision
-        uses: azure/cli@v3
-        with:
-          azcliversion: latest
-          inlineScript: |
-            az containerapp update \
-              --name "${{ vars.CONTAINER_APP }}" \
-              --resource-group "${{ vars.RESOURCE_GROUP }}" \
-              --image "${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ steps.vars.outputs.tag }}"
+
+      - name: Verify new revision is healthy
+        run: |
+          set -euo pipefail
+          latest=$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "Latest revision: $latest"
+          prov=""; health=""
+          for i in $(seq 1 12); do
+            prov=$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" --revision "$latest" \
+              --query "properties.provisioningState" -o tsv 2>/dev/null || echo "")
+            health=$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" --revision "$latest" \
+              --query "properties.healthState" -o tsv 2>/dev/null || echo "")
+            echo "attempt $i: provisioning=$prov health=$health"
+            if [ "$prov" = "Provisioned" ] && { [ "$health" = "Healthy" ] || [ "$health" = "None" ]; }; then
+              break
+            fi
+            sleep 15
+          done
+          if [ "$prov" != "Provisioned" ]; then
+            echo "::error::Revision $latest did not reach Provisioned (last: $prov / $health)"
+            exit 1
+          fi
+
+      - name: Smoke-check /health
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || echo "000")
+          echo "/health returned $code"
+          [ "$code" = "200" ] || { echo "::error::/health returned $code"; exit 1; }
