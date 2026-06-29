@@ -52,7 +52,7 @@ jobs:
       MCP_URL: https://vitally.fiscaltec.com/mcp
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
