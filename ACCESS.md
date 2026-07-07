@@ -57,15 +57,17 @@ application): only users whose **department group** is assigned to that app can 
 your department isn't assigned, the Microsoft sign-in fails and you never reach the server —
 regardless of any `sg-vitally-*` membership.
 
-So access requires **both**: your department assigned to *FISCAL IT Auth0* (sign-in), **and**
-membership of an `sg-vitally-*` group (permission tier). Departments assigned today: Product,
-IT & Security, Project Management, Customer Operations, Customer Account Management.
+So access requires **both**: your department assigned to **"FISCAL IT Auth0"** (sign-in),
+**and** membership of an `sg-vitally-*` group (permission tier). The current list of assigned
+departments is maintained in the IT helpdesk article
+*Vitally MCP – access & administration (IT)* and can be verified live in
+Entra → Enterprise applications → **FISCAL IT Auth0** → Users and groups.
 
 ## Getting access
 
 **As a user:** request membership of the group for the tier you need (most people need `sg-vitally-readers`) from the **IT & Security team**. Once added, you have access within about a minute — no need to reconnect or sign in again.
 
-**As an admin (granting/changing access):** first confirm the person's **department group is assigned to the "FISCAL IT Auth0" enterprise application** (Entra → Enterprise applications → FISCAL IT Auth0 → Users and groups) so they can sign in — assign it if their department is new. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
+**As an admin (granting/changing access):** first confirm the person's **department group is assigned to the "FISCAL IT Auth0" enterprise application** (Entra → Enterprise applications → FISCAL IT Auth0 → Users and groups) so they can sign in — assign that department group to the app if it isn't already listed. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
 
 - **Granting** a tier takes effect within ~60s of adding the user to the group.
 - **Changing** tier = move the user to a different group (e.g. readers → editors).
