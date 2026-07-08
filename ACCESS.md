@@ -58,13 +58,14 @@ Group object IDs (for IT reference):
 - **Granting** a tier takes effect within ~60s of adding the user to the group.
 - **Changing** tier = move the user to a different group (e.g. readers → editors).
 - **Revoking** access takes effect within ~60s of removing the user from the group — no reconnect required.
+- **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
 
 > **Urgent revocation:** for an immediate cut-off (e.g. a compromised account), remove the user from the group **and** revoke their Auth0 session — that takes effect on their next request rather than waiting for the ~60s window.
 
 ## How it's set up (in brief)
 
 - **Sign-in:** Auth0 federates to Microsoft Entra; FISCAL staff sign in with their normal Microsoft account.
-- **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph) on each call — so access reflects your *current* groups, not a stale token.
+- **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
 - **Auditing:** every action is logged with the acting user, operation and outcome (queryable in Application Insights / Log Analytics).
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.
 
