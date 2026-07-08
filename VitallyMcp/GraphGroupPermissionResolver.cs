@@ -10,8 +10,9 @@ namespace VitallyMcp;
 /// <summary>
 /// Resolves live Vitally permissions from Microsoft Graph group membership. Uses the server's
 /// managed identity (<see cref="TokenCredential"/>) to check, for each configured group, whether
-/// the user is a member — by listing the group's members filtered to that user id. Checking from
-/// the group side needs only <c>GroupMember.Read.All</c>; the alternative
+/// the user is a member — by listing the group's <b>transitive</b> members filtered to that user
+/// id, so membership via a nested (department) group counts, not just direct membership. Checking
+/// from the group side needs only <c>GroupMember.Read.All</c>; the alternative
 /// <c>POST /users/{id}/checkMemberGroups</c> additionally requires a user-read permission
 /// (User.ReadBasic.All), which we deliberately avoid. Results are cached per user for
 /// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/>.
@@ -87,10 +88,12 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
     }
 
     // Determine which of the configured groups the user belongs to, checking from the group side
-    // (list a group's members filtered to this user id). Listing group members needs only
-    // GroupMember.Read.All — unlike POST /users/{id}/checkMemberGroups, which also requires reading
-    // the user object (User.ReadBasic.All). Direct membership is sufficient here because the
-    // sg-vitally-* groups are assigned to users directly.
+    // (list a group's transitive members filtered to this user id). transitiveMembers expands
+    // nested groups, so a user who is in a department group that is itself a member of an
+    // sg-vitally-* group is resolved correctly — not only users assigned to the sg-vitally-* group
+    // directly. Listing group members needs only GroupMember.Read.All — unlike
+    // POST /users/{id}/checkMemberGroups, which also requires reading the user object
+    // (User.ReadBasic.All).
     private async Task<HashSet<string>> ResolveMemberGroupsAsync(string userObjectId, string[] groupIds, CancellationToken cancellationToken)
     {
         var token = await _credential.GetTokenAsync(new TokenRequestContext(GraphScopes), cancellationToken);
@@ -99,9 +102,9 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         foreach (var groupId in groupIds)
         {
             // $filter on id is an advanced query, so $count=true + ConsistencyLevel: eventual are
-            // required. Returns the user only if they are a member of this group.
+            // required. Returns the user only if they are a transitive member of this group.
             var filter = Uri.EscapeDataString($"id eq '{userObjectId}'");
-            var url = $"{GraphBase}/groups/{Uri.EscapeDataString(groupId)}/members?$count=true&$select=id&$filter={filter}";
+            var url = $"{GraphBase}/groups/{Uri.EscapeDataString(groupId)}/transitiveMembers?$count=true&$select=id&$filter={filter}";
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             request.Headers.Add("ConsistencyLevel", "eventual");

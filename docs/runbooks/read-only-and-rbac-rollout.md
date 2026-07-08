@@ -19,9 +19,19 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
 2. **App config:** set `Authorization__ReaderGroupId` / `EditorGroupId` / `AdminGroupId` to those ids;
    set `Authorization__LiveGroupCheck=true` (resolves live membership via Microsoft Graph, so
    revocations take effect within the cache window). Requires the managed identity to hold Graph
-   `GroupMember.Read.All`.
-3. **Auth0 (alternative/auxiliary):** a post-login Action mapping Entra group membership to the
-   `vitally:*` permissions, written to the namespaced `Authorization:CustomPermissionsClaim`.
+   `GroupMember.Read.All`. Membership is evaluated **transitively** (Graph `transitiveMembers`), so a
+   user who inherits a tier via a **nested/department group** inside an `sg-vitally-*` group is
+   authorised — you can assign tiers by nesting groups, not only by adding users directly.
+3. **Auth0 (alternative/auxiliary — the token-claim fallback):** a post-login Action
+   (`Vitally MCP claims`) maps Entra group membership to the `vitally:*` permissions, written to the
+   namespaced `Authorization:CustomPermissionsClaim`. This path runs only when the live Graph lookup
+   is unavailable. **Nested-group caveat:** the Action maps `event.user.group_ids` /
+   `event.user.groups` supplied by the Auth0 Entra (waad) connection; those are **direct** memberships
+   unless Entra is configured to emit transitive security-group memberships in the token. So for the
+   fallback path to honour nested groups too, either enable the transitive/"all (security) groups"
+   groups claim on the Entra app registration feeding the waad connection, or have the Action resolve
+   transitive membership via Graph. The **live check (step 2) already handles nesting** and is the
+   production path; the fallback only applies during a Graph outage.
 4. **Verify on the live revision:** with a reader token, a write returns the RBAC denial; with an
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
    denials appear in the audit log (`LogDenied`, by `sub`).

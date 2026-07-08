@@ -44,6 +44,16 @@ All notable changes to this project are documented here. Format based on
   `JsonException` rather than every exception, so genuine failures
   (cancellation, OOM) propagate instead of being silently swallowed.
 
+### Fixed
+
+- **Nested Entra groups are now honoured by the live group check.** The
+  RBAC live check listed each `sg-vitally-*` group's *direct* members
+  (Microsoft Graph `/members`), so a user who inherited a tier via a
+  department group *nested inside* an `sg-vitally-*` group was denied.
+  It now queries `/transitiveMembers`, which expands nested groups. Same
+  `GroupMember.Read.All` permission and query shape; fully
+  backward-compatible with direct members.
+
 ## [4.0.0] - 2026-05-21
 
 ### Added
