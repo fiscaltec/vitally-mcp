@@ -367,8 +367,6 @@ public class VitallyService
     }
 
     // Fetches the customObjects catalogue (single list call) and maps name -> id.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
-        Justification = "JsonElement.TryGetProperty out parameters (name and id) don't translate to a LINQ Where without redundant second calls. The explicit foreach is clearer.")]
     private async Task<Dictionary<string, string>> ResolveCustomObjectIdsAsync()
     {
         var json = await GetResourcesAsync("customObjects", limit: 100);
@@ -378,11 +376,14 @@ public class VitallyService
         {
             foreach (var element in results.EnumerateArray())
             {
-                if (element.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String &&
-                    element.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                // Guard-and-continue (rather than a wrapping if) because the two TryGetProperty
+                // out params can't be expressed as a LINQ Where without redundant lookups.
+                if (!element.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String ||
+                    !element.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String)
                 {
-                    map[name.GetString()!] = id.GetString()!;
+                    continue;
                 }
+                map[name.GetString()!] = id.GetString()!;
             }
         }
         return map;
