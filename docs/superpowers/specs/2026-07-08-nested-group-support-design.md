@@ -1,7 +1,7 @@
 # Nested (transitive) Entra group support for Vitally RBAC — design
 
 **Date:** 2026-07-08
-**Status:** Approved (awaiting spec review)
+**Status:** Approved
 
 ## Problem
 

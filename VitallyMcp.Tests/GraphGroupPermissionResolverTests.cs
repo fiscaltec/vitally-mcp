@@ -14,12 +14,24 @@ namespace VitallyMcp.Tests;
 /// assert both the Graph relationship used (<c>/transitiveMembers</c>, which expands nested groups)
 /// and the tier mapping / fail-degraded behaviour.
 /// </summary>
-public class GraphGroupPermissionResolverTests
+public class GraphGroupPermissionResolverTests : IDisposable
 {
     private const string ReaderGroup = "71451cc9-f5df-44ee-8ed1-3acc41a911eb";
     private const string EditorGroup = "19b9d659-284c-4f93-b1c3-a6354db1027c";
     private const string AdminGroup = "70b48a20-d4b1-47dc-a132-21bc99272a86";
     private const string UserOid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
+
+    // Disposed at the end of each test so the HttpClient (and its inner RecordingHandler, and every
+    // HttpResponseMessage that handler created) is cleaned up deterministically rather than by the GC.
+    private readonly List<HttpClient> _clients = [];
+
+    public void Dispose()
+    {
+        foreach (var client in _clients)
+        {
+            client.Dispose();
+        }
+    }
 
     private sealed class StubTokenCredential : TokenCredential
     {
@@ -34,34 +46,48 @@ public class GraphGroupPermissionResolverTests
     /// Answers each group-membership query: a group whose id is in <paramref name="memberGroupIds"/>
     /// returns a one-element member array (the user matched), all others return an empty array. When
     /// <c>status</c> is non-success, every call fails (drives the fail-degraded path). Records every
-    /// requested URI so tests can assert the relationship and the call count.
+    /// requested URI so tests can assert the relationship and the call count. Every response it
+    /// creates is retained and disposed on <see cref="Dispose(bool)"/> (invoked when the owning
+    /// HttpClient is disposed), mirroring the QueueingHandler in VitallyRateLimitHandlerTests.
     /// </summary>
     private sealed class RecordingHandler(ISet<string> memberGroupIds, HttpStatusCode status = HttpStatusCode.OK)
         : HttpMessageHandler
     {
+        private readonly List<HttpResponseMessage> _responses = [];
         public List<string> RequestedUris { get; } = [];
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
-            Justification = "Test mock — the HttpResponseMessage is handed to the consuming HttpClient and disposed by the resolver's `using var response` in GraphGroupPermissionResolver; lifetime is bounded by the test method.")]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
-            Justification = "Test mock — ownership transfers to the caller (HttpClient/resolver), which disposes the response.")]
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var uri = request.RequestUri!.ToString();
             RequestedUris.Add(uri);
 
-            if (status != HttpStatusCode.OK)
-            {
-                return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{\"error\":\"boom\"}") });
-            }
+            var response = status != HttpStatusCode.OK
+                ? new HttpResponseMessage(status) { Content = new StringContent("{\"error\":\"boom\"}") }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(MembershipBody(uri)) };
+            _responses.Add(response);
+            return Task.FromResult(response);
+        }
 
+        private string MembershipBody(string uri)
+        {
             var isMember = memberGroupIds.Any(id => uri.Contains(id, StringComparison.OrdinalIgnoreCase));
-            var body = isMember ? "{\"value\":[{\"id\":\"" + UserOid + "\"}]}" : "{\"value\":[]}";
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+            return isMember ? "{\"value\":[{\"id\":\"" + UserOid + "\"}]}" : "{\"value\":[]}";
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (var response in _responses)
+                {
+                    response.Dispose();
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 
-    private static GraphGroupPermissionResolver Build(RecordingHandler handler, IMemoryCache? cache = null)
+    private GraphGroupPermissionResolver Build(RecordingHandler handler, IMemoryCache? cache = null)
     {
         var options = new ToolAuthorizationOptions
         {
@@ -71,8 +97,10 @@ public class GraphGroupPermissionResolverTests
             EditorGroupId = EditorGroup,
             AdminGroupId = AdminGroup,
         };
+        var client = new HttpClient(handler);
+        _clients.Add(client);
         return new GraphGroupPermissionResolver(
-            new HttpClient(handler),
+            client,
             new StubTokenCredential(),
             cache ?? new MemoryCache(new MemoryCacheOptions()),
             Options.Create(options),
