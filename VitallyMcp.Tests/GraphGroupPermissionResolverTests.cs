@@ -41,6 +41,10 @@ public class GraphGroupPermissionResolverTests
     {
         public List<string> RequestedUris { get; } = [];
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+            Justification = "Test mock — the HttpResponseMessage is handed to the consuming HttpClient and disposed by the resolver's `using var response` in GraphGroupPermissionResolver; lifetime is bounded by the test method.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
+            Justification = "Test mock — ownership transfers to the caller (HttpClient/resolver), which disposes the response.")]
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var uri = request.RequestUri!.ToString();
