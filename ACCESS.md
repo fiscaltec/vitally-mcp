@@ -49,6 +49,18 @@ Group object IDs (for IT reference):
 | `sg-vitally-editors` | `19b9d659-284c-4f93-b1c3-a6354db1027c` |
 | `sg-vitally-admins`  | `70b48a20-d4b1-47dc-a132-21bc99272a86` |
 
+### Departments currently granted a tier
+
+Tiers are granted to whole teams by **nesting a department group** inside the relevant
+`sg-vitally-*` group, rather than adding people one by one. As of 2026-07-09 (Entra is the
+live source of truth — verify there if in doubt):
+
+| Tier | Departments |
+|---|---|
+| Read (`sg-vitally-readers`) | Product |
+| Write (`sg-vitally-editors`) | Customer Account Management, Customer Operations, Executive Leadership Team, Project Management |
+| Delete (`sg-vitally-admins`) | *(granted to individuals, not by department)* |
+
 ### Signing in is gated too (department group)
 
 Before a permission tier even applies, you must be able to **authenticate**. Sign-in is
@@ -62,6 +74,15 @@ So access requires **both**: your department assigned to **"FISCAL IT Auth0"** (
 departments is maintained in the IT helpdesk article
 *Vitally MCP – access & administration (IT)* and can be verified live in
 Entra → Enterprise applications → **FISCAL IT Auth0** → Users and groups.
+
+> **Direct assignment only (important).** The app requires assignment
+> (`appRoleAssignmentRequired = true`), and Entra honours only **direct** members of an
+> assigned group for sign-in — **nested groups do not count here**. This is the opposite of the
+> permission tier below, which *is* evaluated transitively. Assign the **department group
+> itself** to the app (the dynamic `*-Department` groups qualify, since their members are direct
+> members). Nesting a department inside an `sg-vitally-*` group grants the *tier* but **not**
+> sign-in, so a team needs both: the department nested in `sg-vitally-editors`/etc. **and** that
+> same department directly assigned to *FISCAL IT Auth0*.
 
 ## Getting access
 
