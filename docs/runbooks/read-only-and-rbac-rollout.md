@@ -22,6 +22,12 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    `GroupMember.Read.All`. Membership is evaluated **transitively** (Graph `transitiveMembers`), so a
    user who inherits a tier via a **nested/department group** inside an `sg-vitally-*` group is
    authorised — you can assign tiers by nesting groups, not only by adding users directly.
+   > **Sign-in gate is separate and direct-only.** Authorising a tier (above) is transitive, but
+   > *authenticating* is gated by the **FISCAL IT Auth0** enterprise app, which has
+   > `appRoleAssignmentRequired = true` and honours only **direct** members of assigned groups —
+   > nested groups do **not** grant sign-in. So each department that should have access must be
+   > **directly assigned** to *FISCAL IT Auth0* as well as nested into its `sg-vitally-*` tier.
+   > See `ACCESS.md` (canonical) for the full model.
 3. **Auth0 (alternative/auxiliary — the token-claim fallback):** a post-login Action
    (`Vitally MCP claims`) maps Entra group membership to the `vitally:*` permissions, written to the
    namespaced `Authorization:CustomPermissionsClaim`. This path runs only when the live Graph lookup
