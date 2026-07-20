@@ -33,7 +33,7 @@ jobs:
         run: pwsh -NoProfile -File tests/Run-SecurityGateFixtures.ps1
 
       - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
