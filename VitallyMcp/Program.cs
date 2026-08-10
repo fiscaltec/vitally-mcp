@@ -28,6 +28,10 @@ builder.Services.AddOptions<ToolAuthorizationOptions>()
 builder.Services.AddOptions<AuditOptions>()
     .Bind(builder.Configuration.GetSection(AuditOptions.SectionName));
 
+builder.Services.AddOptions<ToolsListCacheOptions>()
+    .Bind(builder.Configuration.GetSection(ToolsListCacheOptions.SectionName))
+    .PostConfigure(o => o.Validate());
+
 builder.Services.AddMemoryCache();
 
 // Needed so ToolAuthorizer can read the authenticated ClaimsPrincipal inside tool invocations.
@@ -94,6 +98,11 @@ if (!noAuth)
 // destructive tools can be filtered out of tools/list for read-only deployments.
 var readOnlyMode = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName).GetValue<bool>("ReadOnly");
 
+// Bound separately for the list-tools filter below, which is constructed at composition time.
+var toolsListCache = builder.Configuration.GetSection(ToolsListCacheOptions.SectionName)
+    .Get<ToolsListCacheOptions>() ?? new ToolsListCacheOptions();
+toolsListCache.Validate();
+
 var mcpBuilder = builder.Services.AddMcpServer(options => options.ServerInstructions = VitallyServerInstructions.Text)
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
@@ -114,6 +123,19 @@ mcpBuilder.WithRequestFilters(filters =>
             return ToolErrorResult.Build(ex);
         }
     });
+
+    // Advertise how long clients may cache tools/list (2026-07-28 spec). Private scope because
+    // the list is per-caller once authorisation filtering is on.
+    if (toolsListCache.Enabled)
+    {
+        filters.AddListToolsFilter(next => async (context, cancellationToken) =>
+        {
+            var result = await next(context, cancellationToken);
+            result.TimeToLive = toolsListCache.TimeToLive;
+            result.CacheScope = toolsListCache.Scope;
+            return result;
+        });
+    }
 
     // Read-only deployments: hide destructive tools from tools/list (enforcement is in ToolAuthorizer).
     if (readOnlyMode)
