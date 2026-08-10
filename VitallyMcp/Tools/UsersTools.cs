@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class UsersTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_users", Title = "List users", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally users with optional pagination and field selection")]
     public static async Task<string> ListUsers(
         VitallyService vitallyService,
@@ -18,6 +20,7 @@ public static class UsersTools
         return await vitallyService.GetResourcesAsync("users", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_users_by_account", Title = "List users by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally users for a specific account")]
     public static async Task<string> ListUsersByAccount(
         VitallyService vitallyService,
@@ -31,6 +34,7 @@ public static class UsersTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/users", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_users_by_organization", Title = "List users by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally users for a specific organisation")]
     public static async Task<string> ListUsersByOrganization(
         VitallyService vitallyService,
@@ -44,6 +48,7 @@ public static class UsersTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/users", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Search_users", Title = "Search users", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Search Vitally users by email or externalId")]
     public static async Task<string> SearchUsers(
         VitallyService vitallyService,
@@ -55,6 +60,7 @@ public static class UsersTools
         return await vitallyService.GetResourcesAsync("users/search", 100, null, fields, null, additionalParams, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_user", Title = "Get user", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally user by ID")]
     public static async Task<string> GetUser(
         VitallyService vitallyService,
@@ -65,6 +71,7 @@ public static class UsersTools
         return await vitallyService.GetResourceByIdAsync("users", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_user", Title = "Create user", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally user")]
     public static async Task<string> CreateUser(
         VitallyService vitallyService,
@@ -73,6 +80,7 @@ public static class UsersTools
         return await vitallyService.CreateResourceAsync("users", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_user", Title = "Update user", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally user")]
     public static async Task<string> UpdateUser(
         VitallyService vitallyService,
@@ -82,6 +90,7 @@ public static class UsersTools
         return await vitallyService.UpdateResourceAsync("users", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_user", Title = "Delete user", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally user")]
     public static async Task<string> DeleteUser(
         VitallyService vitallyService,

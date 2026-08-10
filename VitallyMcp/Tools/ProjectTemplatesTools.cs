@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ProjectTemplatesTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_project_templates", Title = "List project templates", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally project templates with optional pagination and filtering")]
     public static async Task<string> ListProjectTemplates(
         VitallyService vitallyService,
@@ -25,6 +27,7 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourcesAsync("projectTemplates", limit, from, fields, sortBy, additionalParams, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_project_template", Title = "Get project template", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally project template by ID")]
     public static async Task<string> GetProjectTemplate(
         VitallyService vitallyService,
@@ -35,6 +38,7 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourceByIdAsync("projectTemplates", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_project_categories", Title = "List project categories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally project categories with optional pagination")]
     public static async Task<string> ListProjectCategories(
         VitallyService vitallyService,
@@ -46,6 +50,7 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourcesAsync("projectCategories", limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_project_category", Title = "Get project category", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally project category by ID")]
     public static async Task<string> GetProjectCategory(
         VitallyService vitallyService,

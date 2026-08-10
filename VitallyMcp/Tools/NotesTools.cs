@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class NotesTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_notes", Title = "List notes", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes with optional pagination and field selection")]
     public static async Task<string> ListNotes(
         VitallyService vitallyService,
@@ -25,6 +27,7 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync("notes", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_notes_by_account", Title = "List notes by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes for a specific account")]
     public static async Task<string> ListNotesByAccount(
         VitallyService vitallyService,
@@ -38,6 +41,7 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/notes", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_notes_by_organization", Title = "List notes by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes for a specific organisation")]
     public static async Task<string> ListNotesByOrganization(
         VitallyService vitallyService,
@@ -51,6 +55,7 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/notes", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_note_categories", Title = "List note categories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally note categories with optional pagination")]
     public static async Task<string> ListNoteCategories(
         VitallyService vitallyService,
@@ -62,6 +67,7 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync("noteCategories", limit, from, fields, sortBy, null, null);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_note", Title = "Get note", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally note by ID")]
     public static async Task<string> GetNote(
         VitallyService vitallyService,
@@ -72,6 +78,7 @@ public static class NotesTools
         return await vitallyService.GetResourceByIdAsync("notes", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_note", Title = "Create note", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally note")]
     public static async Task<string> CreateNote(
         VitallyService vitallyService,
@@ -80,6 +87,7 @@ public static class NotesTools
         return await vitallyService.CreateResourceAsync("notes", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_note", Title = "Update note", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally note")]
     public static async Task<string> UpdateNote(
         VitallyService vitallyService,
@@ -89,6 +97,7 @@ public static class NotesTools
         return await vitallyService.UpdateResourceAsync("notes", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_note", Title = "Delete note", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally note")]
     public static async Task<string> DeleteNote(
         VitallyService vitallyService,

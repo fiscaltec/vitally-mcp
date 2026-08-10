@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class TasksTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_tasks", Title = "List tasks", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally tasks with optional pagination and field selection")]
     public static async Task<string> ListTasks(
         VitallyService vitallyService,
@@ -25,6 +27,7 @@ public static class TasksTools
         return await vitallyService.GetResourcesAsync("tasks", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_tasks_by_account", Title = "List tasks by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally tasks for a specific account")]
     public static async Task<string> ListTasksByAccount(
         VitallyService vitallyService,
@@ -38,6 +41,7 @@ public static class TasksTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/tasks", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_tasks_by_organization", Title = "List tasks by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally tasks for a specific organisation")]
     public static async Task<string> ListTasksByOrganization(
         VitallyService vitallyService,
@@ -51,6 +55,7 @@ public static class TasksTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/tasks", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_task_categories", Title = "List task categories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally task categories with optional pagination")]
     public static async Task<string> ListTaskCategories(
         VitallyService vitallyService,
@@ -62,6 +67,7 @@ public static class TasksTools
         return await vitallyService.GetResourcesAsync("taskCategories", limit, from, fields, sortBy, null, null);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_task", Title = "Get task", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally task by ID")]
     public static async Task<string> GetTask(
         VitallyService vitallyService,
@@ -72,6 +78,7 @@ public static class TasksTools
         return await vitallyService.GetResourceByIdAsync("tasks", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_task", Title = "Create task", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally task")]
     public static async Task<string> CreateTask(
         VitallyService vitallyService,
@@ -80,6 +87,7 @@ public static class TasksTools
         return await vitallyService.CreateResourceAsync("tasks", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_task", Title = "Update task", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally task")]
     public static async Task<string> UpdateTask(
         VitallyService vitallyService,
@@ -89,6 +97,7 @@ public static class TasksTools
         return await vitallyService.UpdateResourceAsync("tasks", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_task", Title = "Delete task", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally task")]
     public static async Task<string> DeleteTask(
         VitallyService vitallyService,

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class OrganizationsTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_organizations", Title = "List organizations", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally organisations with optional pagination and field selection")]
     public static async Task<string> ListOrganizations(
         VitallyService vitallyService,
@@ -24,6 +26,7 @@ public static class OrganizationsTools
         return await vitallyService.GetResourcesAsync("organizations", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_organization", Title = "Get organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally organisation by ID")]
     public static async Task<string> GetOrganization(
         VitallyService vitallyService,
@@ -34,6 +37,7 @@ public static class OrganizationsTools
         return await vitallyService.GetResourceByIdAsync("organizations", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_organization", Title = "Create organization", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally organisation")]
     public static async Task<string> CreateOrganization(
         VitallyService vitallyService,
@@ -42,6 +46,7 @@ public static class OrganizationsTools
         return await vitallyService.CreateResourceAsync("organizations", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_organization", Title = "Update organization", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally organisation")]
     public static async Task<string> UpdateOrganization(
         VitallyService vitallyService,
@@ -51,6 +56,7 @@ public static class OrganizationsTools
         return await vitallyService.UpdateResourceAsync("organizations", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_organization", Title = "Delete organization", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally organisation")]
     public static async Task<string> DeleteOrganization(
         VitallyService vitallyService,

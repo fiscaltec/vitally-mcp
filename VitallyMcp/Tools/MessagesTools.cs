@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class MessagesTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_messages_by_conversation", Title = "List messages by conversation", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally messages for a specific conversation")]
     public static async Task<string> ListMessagesByConversation(
         VitallyService vitallyService,
@@ -18,6 +20,7 @@ public static class MessagesTools
         return await vitallyService.GetResourcesAsync($"conversations/{conversationId}/messages", limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_message", Title = "Get message", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally message by ID")]
     public static async Task<string> GetMessage(
         VitallyService vitallyService,
@@ -27,6 +30,7 @@ public static class MessagesTools
         return await vitallyService.GetResourceByIdAsync("messages", id, fields);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_message", Title = "Create message", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new message in a Vitally conversation")]
     public static async Task<string> CreateMessage(
         VitallyService vitallyService,
@@ -36,6 +40,7 @@ public static class MessagesTools
         return await vitallyService.CreateResourceAsync($"conversations/{conversationId}/messages", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_message", Title = "Delete message", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally message")]
     public static async Task<string> DeleteMessage(
         VitallyService vitallyService,

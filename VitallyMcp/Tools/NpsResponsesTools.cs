@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class NpsResponsesTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_nps_responses", Title = "List nps responses", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally NPS responses with optional pagination and field selection")]
     public static async Task<string> ListNpsResponses(
         VitallyService vitallyService,
@@ -24,6 +26,7 @@ public static class NpsResponsesTools
         return await vitallyService.GetResourcesAsync("npsResponses", limit, from, fields, sortBy, additionalParams);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_nps_responses_by_account", Title = "List nps responses by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally NPS responses for a specific account")]
     public static async Task<string> ListNpsResponsesByAccount(
         VitallyService vitallyService,
@@ -36,6 +39,7 @@ public static class NpsResponsesTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/npsResponses", limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_nps_responses_by_organization", Title = "List nps responses by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally NPS responses for a specific organisation")]
     public static async Task<string> ListNpsResponsesByOrganization(
         VitallyService vitallyService,
@@ -48,6 +52,7 @@ public static class NpsResponsesTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/npsResponses", limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_nps_response", Title = "Get nps response", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally NPS response by ID")]
     public static async Task<string> GetNpsResponse(
         VitallyService vitallyService,
@@ -57,6 +62,7 @@ public static class NpsResponsesTools
         return await vitallyService.GetResourceByIdAsync("npsResponses", id, fields);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_nps_response", Title = "Create nps response", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally NPS response (or update if externalId exists)")]
     public static async Task<string> CreateNpsResponse(
         VitallyService vitallyService,
@@ -65,6 +71,7 @@ public static class NpsResponsesTools
         return await vitallyService.CreateResourceAsync("npsResponses", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_nps_response", Title = "Update nps response", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally NPS response")]
     public static async Task<string> UpdateNpsResponse(
         VitallyService vitallyService,
@@ -74,6 +81,7 @@ public static class NpsResponsesTools
         return await vitallyService.UpdateResourceAsync("npsResponses", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_nps_response", Title = "Delete nps response", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally NPS response")]
     public static async Task<string> DeleteNpsResponse(
         VitallyService vitallyService,

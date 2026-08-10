@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ConversationsTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_conversations", Title = "List conversations", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally conversations with optional pagination and field selection")]
     public static async Task<string> ListConversations(
         VitallyService vitallyService,
@@ -24,6 +26,7 @@ public static class ConversationsTools
         return await vitallyService.GetResourcesAsync("conversations", limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_conversations_by_account", Title = "List conversations by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally conversations for a specific account")]
     public static async Task<string> ListConversationsByAccount(
         VitallyService vitallyService,
@@ -44,6 +47,7 @@ public static class ConversationsTools
         return await vitallyService.GetResourcesAsync(resourceType, limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_conversations_by_organization", Title = "List conversations by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally conversations for a specific organisation")]
     public static async Task<string> ListConversationsByOrganization(
         VitallyService vitallyService,
@@ -64,6 +68,7 @@ public static class ConversationsTools
         return await vitallyService.GetResourcesAsync(resourceType, limit, from, fields, sortBy);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_conversation", Title = "Get conversation", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally conversation by ID")]
     public static async Task<string> GetConversation(
         VitallyService vitallyService,
@@ -73,6 +78,7 @@ public static class ConversationsTools
         return await vitallyService.GetResourceByIdAsync("conversations", id, fields);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_conversation", Title = "Create conversation", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally conversation with messages")]
     public static async Task<string> CreateConversation(
         VitallyService vitallyService,
@@ -81,6 +87,7 @@ public static class ConversationsTools
         return await vitallyService.CreateResourceAsync("conversations", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_conversation", Title = "Update conversation", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally conversation and its messages")]
     public static async Task<string> UpdateConversation(
         VitallyService vitallyService,
@@ -90,6 +97,7 @@ public static class ConversationsTools
         return await vitallyService.UpdateResourceAsync("conversations", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_conversation", Title = "Delete conversation", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally conversation including all messages")]
     public static async Task<string> DeleteConversation(
         VitallyService vitallyService,

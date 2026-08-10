@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class SurveysTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_survey_responses", Title = "List survey responses", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List responses for a Vitally custom survey. Responses are returned in full (no field filtering) because the survey API uses a 'data' envelope rather than the standard 'results' envelope.")]
     public static async Task<string> ListSurveyResponses(
         VitallyService vitallyService,
@@ -14,6 +16,7 @@ public static class SurveysTools
         return await vitallyService.GetRawAsync($"surveys/{surveyId}/responses");
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_survey_response", Title = "Get survey response", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally survey response by its response ID. Returns the response with its full questionResponses array.")]
     public static async Task<string> GetSurveyResponse(
         VitallyService vitallyService,
@@ -22,6 +25,7 @@ public static class SurveysTools
         return await vitallyService.GetRawAsync($"surveyResponses/{responseId}");
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_survey_question", Title = "Get survey question", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get metadata for a single Vitally survey question by its question ID")]
     public static async Task<string> GetSurveyQuestion(
         VitallyService vitallyService,

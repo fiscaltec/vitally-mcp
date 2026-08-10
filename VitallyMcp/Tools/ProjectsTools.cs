@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ProjectsTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_projects", Title = "List projects", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally projects with optional pagination and field selection")]
     public static async Task<string> ListProjects(
         VitallyService vitallyService,
@@ -18,6 +20,7 @@ public static class ProjectsTools
         return await vitallyService.GetResourcesAsync("projects", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_projects_by_account", Title = "List projects by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally projects for a specific account")]
     public static async Task<string> ListProjectsByAccount(
         VitallyService vitallyService,
@@ -31,6 +34,7 @@ public static class ProjectsTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/projects", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_projects_by_organization", Title = "List projects by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally projects for a specific organisation")]
     public static async Task<string> ListProjectsByOrganization(
         VitallyService vitallyService,
@@ -44,6 +48,7 @@ public static class ProjectsTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/projects", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_project", Title = "Get project", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally project by ID")]
     public static async Task<string> GetProject(
         VitallyService vitallyService,
@@ -54,6 +59,7 @@ public static class ProjectsTools
         return await vitallyService.GetResourceByIdAsync("projects", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_project_from_template", Title = "Create project from template", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally project from a template")]
     public static async Task<string> CreateProjectFromTemplate(
         VitallyService vitallyService,
@@ -62,6 +68,7 @@ public static class ProjectsTools
         return await vitallyService.CreateResourceAsync("projects", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_project", Title = "Update project", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally project")]
     public static async Task<string> UpdateProject(
         VitallyService vitallyService,
@@ -71,6 +78,7 @@ public static class ProjectsTools
         return await vitallyService.UpdateResourceAsync("projects", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_project", Title = "Delete project", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally project")]
     public static async Task<string> DeleteProject(
         VitallyService vitallyService,

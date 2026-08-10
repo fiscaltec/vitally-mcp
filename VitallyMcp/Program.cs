@@ -2,6 +2,7 @@ using System.Text.Json;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -90,9 +91,31 @@ if (!noAuth)
             jwt.Authority = oauth.Value.Authority;
             jwt.Audience = oauth.Value.Audience;
         });
-
-    builder.Services.AddAuthorization();
 }
+
+// Registered unconditionally, including in NoAuth dev mode. The MCP SDK fails *closed*: if a tool
+// carries an authorisation attribute but the policy services or the SDK's authorisation filters are
+// missing, tools/list and tools/call throw ("You must call AddAuthorization() because an
+// authorization related attribute was found on ..." / "Authorization filter was not invoked for
+// tools/list operation ..."). Since every tool carries [Authorize], skipping this under NoAuth would
+// leave local development with a server that cannot list or call anything. Discovery is still
+// unfiltered in dev mode — VitallyPermissionHandler short-circuits to success while
+// ToolAuthorizer.IsAuthorizationBypassedAsync() is true (RBAC off or NoAuth).
+//
+// Scoped, not singleton: VitallyPermissionHandler depends on the scoped ToolAuthorizer, and a
+// singleton capturing it would be a captive-dependency bug.
+builder.Services.AddScoped<IAuthorizationHandler, VitallyPermissionHandler>();
+
+// Policy *names* must be compile-time constants for [Authorize(Policy = "...")], so they are
+// literals here. The permission *values* carried by each requirement come from
+// ToolAuthorizationOptions, so a deployment that renames a permission stays consistent.
+var permissions = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName)
+    .Get<ToolAuthorizationOptions>() ?? new ToolAuthorizationOptions();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("vitally:read", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.ReadPermission)))
+    .AddPolicy("vitally:write", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.WritePermission)))
+    .AddPolicy("vitally:delete", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.DeletePermission)));
 
 // Read the read-only flag from raw config at startup (same pattern as `noAuth` above) so the
 // destructive tools can be filtered out of tools/list for read-only deployments.
@@ -106,6 +129,12 @@ toolsListCache.Validate();
 var mcpBuilder = builder.Services.AddMcpServer(options => options.ServerInstructions = VitallyServerInstructions.Text)
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
+
+// Applies [Authorize] on tools: filters tools/list per caller and rejects unauthorised calls
+// before they reach the handler. Not guarded on !noAuth — see the AddAuthorizationBuilder comment
+// above: the SDK throws on any tool carrying authorisation metadata when this was never called, so
+// omitting it in dev mode breaks tools/list outright. NoAuth is handled inside the policy handler.
+mcpBuilder.AddAuthorizationFilters();
 
 mcpBuilder.WithRequestFilters(filters =>
 {

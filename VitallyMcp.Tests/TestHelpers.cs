@@ -95,6 +95,19 @@ public static class TestHelpers
     }
 
     /// <summary>
+    /// Builds a bare <see cref="ToolAuthorizer"/> with RBAC either on or off and no
+    /// <see cref="Microsoft.AspNetCore.Http.IHttpContextAccessor"/>. For callers that pass the
+    /// principal in explicitly (the authorisation policy handler resolves it from the policy
+    /// context, not from the ambient HTTP context).
+    /// </summary>
+    public static ToolAuthorizer BuildToolAuthorizer(bool enabled)
+    {
+        return new ToolAuthorizer(
+            Options.Create(new ToolAuthorizationOptions { Enabled = enabled }),
+            Options.Create(new OAuthOptions { NoAuth = false }));
+    }
+
+    /// <summary>
     /// Mock HttpClient that returns the supplied page bodies in order, one per successive request —
     /// for testing the auto-pager's multi-page paging.
     /// </summary>

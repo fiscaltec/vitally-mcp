@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class CustomObjectsTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_custom_objects", Title = "List custom objects", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally custom objects with optional pagination")]
     public static async Task<string> ListCustomObjects(
         VitallyService vitallyService,
@@ -17,6 +19,7 @@ public static class CustomObjectsTools
         return await vitallyService.GetResourcesAsync("customObjects", limit, from, fields, sortBy, null, null);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_custom_object", Title = "Get custom object", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally custom object by ID")]
     public static async Task<string> GetCustomObject(
         VitallyService vitallyService,
@@ -26,6 +29,7 @@ public static class CustomObjectsTools
         return await vitallyService.GetResourceByIdAsync("customObjects", id, fields);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_custom_object_instances", Title = "List custom object instances", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List instances of a Vitally custom object. Optionally scope to a single organisation, customer, external id, or custom-field value — Vitally allows exactly ONE scope criterion. When a scope is supplied the limit/from/sortBy paging params are ignored (the matching set is returned as Vitally provides it).")]
     public static async Task<string> ListCustomObjectInstances(
         VitallyService vitallyService,
@@ -91,6 +95,7 @@ public static class CustomObjectsTools
         return criteria;
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_custom_object_instance", Title = "Get custom object instance", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single custom object instance by its ID. Implemented via Vitally's instance search (Vitally has no direct single-instance GET). Returns a not-found message if the ID does not match.")]
     public static async Task<string> GetCustomObjectInstance(
         VitallyService vitallyService,
@@ -102,6 +107,7 @@ public static class CustomObjectsTools
         return await vitallyService.GetCustomObjectInstanceByIdAsync(customObjectId, instanceId, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_custom_object", Title = "Create custom object", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally custom object")]
     public static async Task<string> CreateCustomObject(
         VitallyService vitallyService,
@@ -110,6 +116,7 @@ public static class CustomObjectsTools
         return await vitallyService.CreateResourceAsync("customObjects", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_custom_object", Title = "Update custom object", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally custom object")]
     public static async Task<string> UpdateCustomObject(
         VitallyService vitallyService,
@@ -119,6 +126,7 @@ public static class CustomObjectsTools
         return await vitallyService.UpdateResourceAsync("customObjects", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_custom_object_instance", Title = "Create custom object instance", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new instance of a Vitally custom object")]
     public static async Task<string> CreateCustomObjectInstance(
         VitallyService vitallyService,
@@ -128,6 +136,7 @@ public static class CustomObjectsTools
         return await vitallyService.CreateResourceAsync($"customObjects/{customObjectId}/instances", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_custom_object_instance", Title = "Update custom object instance", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing custom object instance")]
     public static async Task<string> UpdateCustomObjectInstance(
         VitallyService vitallyService,
@@ -138,6 +147,7 @@ public static class CustomObjectsTools
         return await vitallyService.UpdateResourceAsync($"customObjects/{customObjectId}/instances", instanceId, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_custom_object_instance", Title = "Delete custom object instance", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a custom object instance")]
     public static async Task<string> DeleteCustomObjectInstance(
         VitallyService vitallyService,

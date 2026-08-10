@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,6 +7,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AccountsTools
 {
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_account", Title = "List account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally accounts with optional pagination, filtering and field selection")]
     public static async Task<string> ListAccounts(
         VitallyService vitallyService,
@@ -25,6 +27,7 @@ public static class AccountsTools
         return await vitallyService.GetResourcesAsync("accounts", limit, from, fields, sortBy, additionalParams, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "List_accounts_by_organization", Title = "List accounts by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally accounts for a specific organisation")]
     public static async Task<string> ListAccountsByOrganization(
         VitallyService vitallyService,
@@ -38,6 +41,7 @@ public static class AccountsTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/accounts", limit, from, fields, sortBy, null, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_account", Title = "Get account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally account by ID")]
     public static async Task<string> GetAccount(
         VitallyService vitallyService,
@@ -48,6 +52,7 @@ public static class AccountsTools
         return await vitallyService.GetResourceByIdAsync("accounts", id, fields, traits);
     }
 
+    [Authorize(Policy = "vitally:read")]
     [McpServerTool(Name = "Get_account_health_scores", Title = "Get account health scores", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get health score breakdown for a Vitally account")]
     public static async Task<string> GetAccountHealthScores(
         VitallyService vitallyService,
@@ -57,6 +62,7 @@ public static class AccountsTools
         return await vitallyService.GetResourcesAsync($"accounts/{id}/healthScores", 1, null, fields, null, null, null);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Create_account", Title = "Create account", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally account")]
     public static async Task<string> CreateAccount(
         VitallyService vitallyService,
@@ -65,6 +71,7 @@ public static class AccountsTools
         return await vitallyService.CreateResourceAsync("accounts", jsonBody);
     }
 
+    [Authorize(Policy = "vitally:write")]
     [McpServerTool(Name = "Update_account", Title = "Update account", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally account")]
     public static async Task<string> UpdateAccount(
         VitallyService vitallyService,
@@ -74,6 +81,7 @@ public static class AccountsTools
         return await vitallyService.UpdateResourceAsync("accounts", id, jsonBody);
     }
 
+    [Authorize(Policy = "vitally:delete")]
     [McpServerTool(Name = "Delete_account", Title = "Delete account", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally account")]
     public static async Task<string> DeleteAccount(
         VitallyService vitallyService,
