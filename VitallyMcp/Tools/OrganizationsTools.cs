@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class OrganizationsTools
 {
-    [McpServerTool(Name = "List_organizations", Title = "List organizations", ReadOnly = true, Destructive = false), Description("List Vitally organisations with optional pagination and field selection")]
+    [McpServerTool(Name = "List_organizations", Title = "List organizations", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally organisations with optional pagination and field selection")]
     public static async Task<string> ListOrganizations(
         VitallyService vitallyService,
         [Description("Maximum number of organisations to return (default: 20, max: 100). Ignored when nameContains is supplied.")] int limit = 20,
@@ -24,7 +24,7 @@ public static class OrganizationsTools
         return await vitallyService.GetResourcesAsync("organizations", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "Get_organization", Title = "Get organization", ReadOnly = true, Destructive = false), Description("Get a single Vitally organisation by ID")]
+    [McpServerTool(Name = "Get_organization", Title = "Get organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally organisation by ID")]
     public static async Task<string> GetOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string id,
@@ -34,7 +34,7 @@ public static class OrganizationsTools
         return await vitallyService.GetResourceByIdAsync("organizations", id, fields, traits);
     }
 
-    [McpServerTool(Name = "Create_organization", Title = "Create organization", ReadOnly = false, Destructive = false), Description("Create a new Vitally organisation")]
+    [McpServerTool(Name = "Create_organization", Title = "Create organization", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally organisation")]
     public static async Task<string> CreateOrganization(
         VitallyService vitallyService,
         [Description("JSON body containing organisation data. Required fields: externalId (string), name (string). Optional: traits (object)")] string jsonBody)
@@ -42,7 +42,7 @@ public static class OrganizationsTools
         return await vitallyService.CreateResourceAsync("organizations", jsonBody);
     }
 
-    [McpServerTool(Name = "Update_organization", Title = "Update organization", ReadOnly = false, Destructive = true), Description("Update an existing Vitally organisation")]
+    [McpServerTool(Name = "Update_organization", Title = "Update organization", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally organisation")]
     public static async Task<string> UpdateOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string id,
@@ -51,7 +51,7 @@ public static class OrganizationsTools
         return await vitallyService.UpdateResourceAsync("organizations", id, jsonBody);
     }
 
-    [McpServerTool(Name = "Delete_organization", Title = "Delete organization", ReadOnly = false, Destructive = true), Description("Delete a Vitally organisation")]
+    [McpServerTool(Name = "Delete_organization", Title = "Delete organization", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally organisation")]
     public static async Task<string> DeleteOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string id)

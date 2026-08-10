@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AdminsTools
 {
-    [McpServerTool(Name = "Search_admins", Title = "Search admins", ReadOnly = true, Destructive = false), Description("Search Vitally admins by email")]
+    [McpServerTool(Name = "Search_admins", Title = "Search admins", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Search Vitally admins by email")]
     public static async Task<string> SearchAdmins(
         VitallyService vitallyService,
         [Description("Email address to search for")] string email,

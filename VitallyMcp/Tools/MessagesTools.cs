@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class MessagesTools
 {
-    [McpServerTool(Name = "List_messages_by_conversation", Title = "List messages by conversation", ReadOnly = true, Destructive = false), Description("List Vitally messages for a specific conversation")]
+    [McpServerTool(Name = "List_messages_by_conversation", Title = "List messages by conversation", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally messages for a specific conversation")]
     public static async Task<string> ListMessagesByConversation(
         VitallyService vitallyService,
         [Description("The conversation ID")] string conversationId,
@@ -18,7 +18,7 @@ public static class MessagesTools
         return await vitallyService.GetResourcesAsync($"conversations/{conversationId}/messages", limit, from, fields, sortBy);
     }
 
-    [McpServerTool(Name = "Get_message", Title = "Get message", ReadOnly = true, Destructive = false), Description("Get a single Vitally message by ID")]
+    [McpServerTool(Name = "Get_message", Title = "Get message", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally message by ID")]
     public static async Task<string> GetMessage(
         VitallyService vitallyService,
         [Description("The message ID")] string id,
@@ -27,7 +27,7 @@ public static class MessagesTools
         return await vitallyService.GetResourceByIdAsync("messages", id, fields);
     }
 
-    [McpServerTool(Name = "Create_message", Title = "Create message", ReadOnly = false, Destructive = false), Description("Create a new message in a Vitally conversation")]
+    [McpServerTool(Name = "Create_message", Title = "Create message", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new message in a Vitally conversation")]
     public static async Task<string> CreateMessage(
         VitallyService vitallyService,
         [Description("The conversation ID")] string conversationId,
@@ -36,7 +36,7 @@ public static class MessagesTools
         return await vitallyService.CreateResourceAsync($"conversations/{conversationId}/messages", jsonBody);
     }
 
-    [McpServerTool(Name = "Delete_message", Title = "Delete message", ReadOnly = false, Destructive = true), Description("Delete a Vitally message")]
+    [McpServerTool(Name = "Delete_message", Title = "Delete message", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally message")]
     public static async Task<string> DeleteMessage(
         VitallyService vitallyService,
         [Description("The message ID")] string id)

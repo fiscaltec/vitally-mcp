@@ -6,7 +6,7 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class CustomTraitsTools
 {
-    [McpServerTool(Name = "List_custom_traits", Title = "List custom traits", ReadOnly = true, Destructive = false), Description("List custom trait definitions (custom fields) configured on a Vitally model. Returns trait label, type, path and createdAt. Useful for discovering which trait names can be passed to the 'traits' parameter on other tools.")]
+    [McpServerTool(Name = "List_custom_traits", Title = "List custom traits", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List custom trait definitions (custom fields) configured on a Vitally model. Returns trait label, type, path and createdAt. Useful for discovering which trait names can be passed to the 'traits' parameter on other tools.")]
     public static async Task<string> ListCustomTraits(
         VitallyService vitallyService,
         [Description("The model to list traits for. One of: users, accounts, organizations, customObjects, tasks, notes, projects, conversations, team")] string model,
