@@ -90,7 +90,7 @@ public static class MeetingsTools
         return await vitallyService.DeleteResourceAsync("meetings", id);
     }
 
-    [McpServerTool(Name = "Add_meeting_participant", Title = "Add meeting participant", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description("Add a participant to a Vitally meeting")]
+    [McpServerTool(Name = "Add_meeting_participant", Title = "Add meeting participant", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Add a participant to a Vitally meeting")]
     public static async Task<string> AddMeetingParticipant(
         VitallyService vitallyService,
         [Description("The meeting ID")] string id,
