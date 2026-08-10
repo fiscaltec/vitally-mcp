@@ -11,6 +11,7 @@ namespace VitallyMcp.Tests;
 /// <c>instructions</c> guidance (<see cref="VitallyServerInstructions"/>), proving it is wired into
 /// the host end-to-end via <c>McpServerOptions.ServerInstructions</c>.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class ServerInstructionsInitializeTests : IClassFixture<ServerInstructionsInitializeTests.Factory>
 {
     private readonly Factory _factory;
