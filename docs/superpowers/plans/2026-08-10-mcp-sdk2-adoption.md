@@ -794,17 +794,21 @@ In `VitallyMcp/Program.cs`, replace the bare `builder.Services.AddAuthorization(
 
 - [ ] **Step 8: Enable the SDK authorization filters**
 
-In `VitallyMcp/Program.cs`, after `.WithToolsFromAssembly()` (line 99), add the call **only when auth is on**:
+In `VitallyMcp/Program.cs`, after `.WithToolsFromAssembly()`, add the call **unconditionally**:
 
 ```csharp
 // Applies [Authorize] on tools: filters tools/list per caller and rejects unauthorised calls
-// before they reach the handler. Guarded on !noAuth because with NoAuth there is no authentication
-// and every policy would fail, leaving local development with an empty tool list.
-if (!noAuth)
-{
-    mcpBuilder.AddAuthorizationFilters();
-}
+// before they reach the handler. NOT guarded on !noAuth: once any tool carries [Authorize], SDK
+// 2.1.0 fails closed and throws ("Authorization filter was not invoked for tools/call operation,
+// but authorization metadata was found on the tool"), so a guarded registration gives a dev server
+// that can neither list nor call anything. Dev mode stays unfiltered because
+// VitallyPermissionHandler succeeds while IsAuthorizationBypassedAsync() reports bypassed.
+mcpBuilder.AddAuthorizationFilters();
 ```
+
+`AddAuthorization()` and the policy registration in Step 7 must likewise be unconditional, and
+therefore move OUT of the existing `if (!noAuth)` block, which is left holding only the
+authentication wiring.
 
 - [ ] **Step 9: Annotate every tool with its policy**
 
@@ -989,7 +993,7 @@ public class AuthorizationFilterToolsListTests
 Run: `dotnet test --filter "FullyQualifiedName~AuthorizationFilterToolsListTests" -v minimal`
 Expected: PASS.
 
-If every tool is filtered out, the policy is not resolving the synthetic principal — check that the test scheme is actually the default and that `AddAuthorizationFilters()` ran (it is guarded on `!noAuth`, and the test sets `OAuth__NoAuth=false`).
+If every tool is filtered out, the policy is not resolving the synthetic principal — check that the test scheme is actually the default. If instead the response is a JSON-RPC error rather than a filtered list, `AddAuthorizationFilters()` was not registered: the SDK fails closed when `[Authorize]` metadata is present without it.
 
 - [ ] **Step 12: Confirm local dev is not broken**
 
@@ -1266,10 +1270,15 @@ In `CLAUDE.md`, update these statements:
 In the `ToolAuthorizationOptions` section of `CLAUDE.md`, after the sentence ending "never call the Vitally API around it.", add:
 
 ```markdown
-- **Per-caller discovery filtering.** `mcpBuilder.AddAuthorizationFilters()` (registered only when
-  `OAuth:NoAuth=false`) makes the SDK evaluate the `[Authorize(Policy = "vitally:read|write|delete")]`
-  attribute on each tool, so `tools/list` shows only the tools the caller may actually invoke and an
-  unauthorised call is rejected before the handler runs. `VitallyPermissionHandler` resolves those
+- **Per-caller discovery filtering.** `mcpBuilder.AddAuthorizationFilters()` makes the SDK evaluate
+  the `[Authorize(Policy = "vitally:read|write|delete")]` attribute on each tool, so `tools/list`
+  shows only the tools the caller may actually invoke and an unauthorised call is rejected before the
+  handler runs. **It and `AddAuthorization()` are registered unconditionally — never guarded on
+  `OAuth:NoAuth`.** Once any tool carries `[Authorize]`, SDK 2.1.0 *fails closed*: it throws
+  ("Authorization filter was not invoked for tools/call operation, but authorization metadata was
+  found on the tool") so a guarded registration yields a dev server that can neither list nor call
+  any tool. Dev mode stays unfiltered instead via `VitallyPermissionHandler`, which succeeds when
+  `ToolAuthorizer.IsAuthorizationBypassedAsync()` reports RBAC disabled or `NoAuth`. `VitallyPermissionHandler` resolves those
   policies through `ToolAuthorizer.HasEffectivePermissionAsync`, so discovery and the
   `VitallyService.SendAsync` backstop cannot drift apart. This is **discovery filtering** — the
   security boundary remains `SendAsync`. Distinct from the deployment-wide `Authorization:ReadOnly`
