@@ -102,7 +102,7 @@ git commit -m "build: Bump MCP SDK to 2.1.0"
 
 ### Task 2: Add `tools/list` cache hints
 
-The 2026-07-28 spec lets a server tell clients how long to cache `tools/list`. With 95 tools this is the largest response the server emits, and re-sending it on every session costs model context.
+The 2026-07-28 spec lets a server tell clients how long to cache `tools/list`. With 93 tools this is the largest response the server emits, and re-sending it on every session costs model context.
 
 **Files:**
 - Create: `VitallyMcp/ToolsListCacheOptions.cs`
@@ -246,7 +246,7 @@ using ModelContextProtocol.Protocol;
 namespace VitallyMcp;
 
 /// <summary>
-/// Cache hints advertised on tools/list, per the 2026-07-28 MCP spec. With 95 tools this is the
+/// Cache hints advertised on tools/list, per the 2026-07-28 MCP spec. With 93 tools this is the
 /// largest response the server emits, so letting clients cache it avoids re-sending the whole
 /// catalogue every session.
 ///
@@ -342,7 +342,7 @@ git commit -m "feat: Advertise tools/list cache hints per MCP 2026-07-28"
 
 ### Task 3: Complete the tool annotations
 
-Every tool sets `ReadOnly` and `Destructive`, but none sets `Idempotent` or `OpenWorld`. Clients use these to decide whether a failed call is safe to retry. A reflection coverage test enforces the rule rather than trusting 95 hand edits.
+Every tool sets `ReadOnly` and `Destructive`, but none sets `Idempotent` or `OpenWorld`. Clients use these to decide whether a failed call is safe to retry. A reflection coverage test enforces the rule rather than trusting 93 hand edits.
 
 **Files:**
 - Create: `VitallyMcp.Tests/ToolAnnotationCoverageTests.cs`
@@ -400,7 +400,7 @@ public class ToolAnnotationCoverageTests
     [Fact]
     public void EveryToolIsDiscovered()
     {
-        AllTools().Should().HaveCountGreaterThan(90, "the server exposes ~95 tools; a big drop means discovery broke");
+        AllTools().Should().HaveCountGreaterThan(90, "the server exposes 93 tools; a big drop means discovery broke");
     }
 
     [Theory]
@@ -612,7 +612,7 @@ git commit -m "refactor: Expose permission resolution on ToolAuthorizer for poli
 
 ### Task 5: Per-caller `tools/list` filtering via `AddAuthorizationFilters()`
 
-Today `ReadOnlyToolFilter` hides destructive tools *deployment-wide* only. A reader-tier user on the read-write production deployment still sees all 95 tools and only discovers the denial at call time. `AddAuthorizationFilters()` makes the SDK evaluate `[Authorize]` on each tool and filter `tools/list` per caller.
+Today `ReadOnlyToolFilter` hides destructive tools *deployment-wide* only. A reader-tier user on the read-write production deployment still sees all 93 tools and only discovers the denial at call time. `AddAuthorizationFilters()` makes the SDK evaluate `[Authorize]` on each tool and filter `tools/list` per caller.
 
 **Files:**
 - Create: `VitallyMcp/VitallyPermissionRequirement.cs`
