@@ -21,6 +21,16 @@
   - `ProtectedResourceMetadata` fields: `resource`, `authorization_servers` (`IList<string>`), `bearer_methods_supported`, `scopes_supported`, `resource_name`.
   - `McpAuthenticationOptions` has `ResourceMetadata` (`ProtectedResourceMetadata`) and `ResourceMetadataUri` (`Uri`).
 - **Existing suites must stay green**, in particular `ReadOnlyToolsListTests`, `ToolAuthorizerTests`, `VitallyServiceAuthorizationTests`, `OAuthProxyEndpointsTests`.
+- **Every integration test class that sets environment variables MUST carry
+  `[Collection(IntegrationTestCollection.Name)]`.** `Program.cs` reads `OAuth:NoAuth` and
+  `Authorization:ReadOnly` at composition time, so the fixtures can only override them through
+  process-wide environment variables. xUnit runs test classes in parallel by default and the test
+  project has no parallelisation control, so two fixtures setting `OAuth__NoAuth` to different
+  values will race and produce order-dependent flakiness. The shared collection serialises them.
+  For the same reason **each fixture must set every variable it depends on explicitly**, never
+  relying on a default, so a value leaked by a sibling class is deterministically overwritten.
+  This applies to `ToolsListCachingTests`, `AuthorizationFilterToolsListTests`,
+  `ResourceMetadataDiscoveryTests` and the existing `ReadOnlyToolsListTests`.
 - Validation gates are defined in `docs/superpowers/specs/2026-08-10-mcp-sdk2-validation-design.md`. This plan delivers **Layer 1** in full; Layers 2 and 3 are manual and covered by Task 8.
 
 ## Out of scope
@@ -97,11 +107,42 @@ The 2026-07-28 spec lets a server tell clients how long to cache `tools/list`. W
 **Files:**
 - Create: `VitallyMcp/ToolsListCacheOptions.cs`
 - Modify: `VitallyMcp/Program.cs` (options binding near line 28; list-tools filter near line 121)
+- Create: `VitallyMcp.Tests/IntegrationTestCollection.cs`
 - Create: `VitallyMcp.Tests/ToolsListCachingTests.cs`
+- Modify: `VitallyMcp.Tests/ReadOnlyToolsListTests.cs` (add the collection attribute)
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `ToolsListCacheOptions` with `SectionName = "ToolsListCache"`, `TimeToLive` (`TimeSpan`, default 5 min), `Scope` (`CacheScope`, default `Private`), `Enabled` (`bool`, default `true`).
+- Produces: `ToolsListCacheOptions` with `SectionName = "ToolsListCache"`, `TimeToLive` (`TimeSpan`, default 5 min), `Scope` (`CacheScope`, default `Private`), `Enabled` (`bool`, default `true`); and `IntegrationTestCollection.Name` — the xUnit collection name every env-var-mutating integration test class must join (used again in Tasks 5 and 6).
+
+- [ ] **Step 0: Create the shared test collection**
+
+Environment variables are process-wide, so the integration fixtures must not run concurrently. Create `VitallyMcp.Tests/IntegrationTestCollection.cs`:
+
+```csharp
+namespace VitallyMcp.Tests;
+
+/// <summary>
+/// Serialises every integration test class that overrides configuration through environment
+/// variables. <c>Program.cs</c> reads <c>OAuth:NoAuth</c> and <c>Authorization:ReadOnly</c> at
+/// composition time — before <see cref="Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{T}"/>
+/// can inject configuration — so environment variables are the only override that works. They are
+/// process-wide, and xUnit runs test classes in parallel by default, so without this collection two
+/// fixtures setting <c>OAuth__NoAuth</c> to different values race and fail depending on scheduling.
+/// </summary>
+[CollectionDefinition(Name)]
+public class IntegrationTestCollection
+{
+    public const string Name = "Integration (serialised: mutates environment variables)";
+}
+```
+
+Then add `[Collection(IntegrationTestCollection.Name)]` to the existing `ReadOnlyToolsListTests` class declaration in `VitallyMcp.Tests/ReadOnlyToolsListTests.cs`:
+
+```csharp
+[Collection(IntegrationTestCollection.Name)]
+public class ReadOnlyToolsListTests : IClassFixture<ReadOnlyToolsListTests.Factory>
+```
 
 - [ ] **Step 1: Write the failing test**
 
@@ -120,6 +161,7 @@ namespace VitallyMcp.Tests;
 /// The property names are deliberately asserted as raw JSON (`ttlMs`, `cacheScope`) rather than
 /// via the SDK's CLR properties, so a future SDK rename is caught here rather than by clients.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class ToolsListCachingTests : IClassFixture<ToolsListCachingTests.Factory>
 {
     private readonly Factory _factory;
@@ -174,8 +216,11 @@ public class ToolsListCachingTests : IClassFixture<ToolsListCachingTests.Factory
         {
             // Program.cs reads these at composition time, before WebApplicationFactory can inject
             // configuration, so environment variables are the only reliable override. Same
-            // constraint documented in ReadOnlyToolsListTests.
+            // constraint documented in ReadOnlyToolsListTests. Every variable this fixture depends
+            // on is set explicitly — they are process-wide, so a value left behind by a sibling
+            // class must be overwritten rather than inherited.
             Environment.SetEnvironmentVariable("OAuth__NoAuth", "true");
+            Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
             Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
             return base.CreateHost(builder);
@@ -859,11 +904,16 @@ namespace VitallyMcp.Tests;
 /// This is the load-bearing test for the AddAuthorizationFilters() adoption. Staging only confirms
 /// it against real Entra groups; correctness is established here.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class AuthorizationFilterToolsListTests
 {
     private static async Task<IReadOnlyList<string>> ToolNamesForAsync(params string[] permissions)
     {
+        // All process-wide, so set every one explicitly. Authorization__ReadOnly MUST be false here:
+        // if a sibling class leaves it true, ReadOnlyToolFilter strips every destructive tool and the
+        // editor/admin assertions below fail for the wrong reason.
         Environment.SetEnvironmentVariable("OAuth__NoAuth", "false");
+        Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
         Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
         Environment.SetEnvironmentVariable("Vitally__Region", "EU");
         Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
@@ -994,6 +1044,7 @@ namespace VitallyMcp.Tests;
 /// pointer, clients can only guess the well-known location — which is how discovery silently
 /// depends on a fallback today.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDiscoveryTests.Factory>
 {
     private readonly Factory _factory;
@@ -1048,8 +1099,10 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
     {
         protected override IHost CreateHost(IHostBuilder builder)
         {
-            // Auth ON — this fixture is specifically about the 401 challenge.
+            // Auth ON — this fixture is specifically about the 401 challenge. Every variable set
+            // explicitly because they are process-wide (see IntegrationTestCollection).
             Environment.SetEnvironmentVariable("OAuth__NoAuth", "false");
+            Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
             Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
             Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
