@@ -25,7 +25,7 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
     {
         using var client = _factory.CreateClient();
 
-        var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", Encoding.UTF8, "application/json")
         };
@@ -59,7 +59,7 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
         // without needing a real Auth0 tenant.
         const string junkJwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.aW52YWxpZC1zaWduYXR1cmU";
 
-        var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", Encoding.UTF8, "application/json")
         };

@@ -61,7 +61,11 @@ public class AuthorizationFilterToolsListTests
 
         try
         {
-            using var factory = new WebApplicationFactory<Program>()
+            // Both factories are disposed deliberately: WithWebHostBuilder returns a *new*
+            // WebApplicationFactory rather than mutating the receiver, so disposing only the
+            // result would leak the one created by the constructor (CodeQL cs/local-not-disposed).
+            using var baseFactory = new WebApplicationFactory<Program>();
+            using var factory = baseFactory
                 .WithWebHostBuilder(b =>
                 {
                     if (auditSink is not null)

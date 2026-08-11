@@ -62,6 +62,12 @@ public class ToolAuthorizePolicyCoverageTests
                 // A positional [Authorize("policy")] also sets Policy, via the constructor.
                 ?? authorizeUsages[0].ConstructorArguments.FirstOrDefault().Value as string;
 
+            // Assert non-null before the tier checks below dereference it. A bare [Authorize] with
+            // no policy — named or positional — leaves this null, which would otherwise surface as
+            // a confusing failure further down rather than naming the real problem here.
+            policy.Should().NotBeNull(
+                $"{name} must name a policy on its [Authorize] attribute, not just [Authorize]");
+
             policy.Should().BeOneOf([ReadPolicy, WritePolicy, DeletePolicy],
                 $"{name} must use one of the three registered vitally:* policies");
 

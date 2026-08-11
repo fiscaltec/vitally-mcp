@@ -30,7 +30,7 @@ public class ToolsListCachingTests : IClassFixture<ToolsListCachingTests.Factory
         body.Headers.Remove("Content-Type");
         body.Headers.TryAddWithoutValidation("Content-Type", "application/json");
 
-        var request = new HttpRequestMessage(HttpMethod.Post, "/mcp") { Content = body };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp") { Content = body };
         request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
 
         var response = await client.SendAsync(request);
