@@ -114,15 +114,18 @@ Storage or SQL there is no `networkAcls` allowlist for query. The only resource-
 the public-access toggle and AMPLS. So "restrict to the office range" cannot be expressed at the
 resource; it must be expressed at the identity layer.
 
-### Companion control (recommended, separate change)
+### Companion control: considered and declined
 
-A **Conditional Access named-location policy** scoped to the Azure Management API for the group that
-needs log access, restricting to office and VPN ranges and optionally requiring a compliant device.
-This delivers the "only from our network" property that was asked for, and is strictly stronger than
-an IP ACL because it requires identity *and* location *and* optionally device posture.
+A **Conditional Access named-location policy** scoped to the Azure Management API was considered —
+restricting query to office and VPN ranges, and optionally requiring a compliant device. It was
+**declined (dsearle, 2026-08-11)** in favour of relying on Entra authentication plus workspace RBAC
+alone.
 
-This is a tenant-level change with blast radius beyond this project, so it is called out as a
-recommendation to be actioned separately rather than folded into this work.
+Recorded here so a future reader does not mistake the absence of a location restriction for an
+oversight. The reasoning: query is not an anonymous surface, RBAC is the substantive control, and a
+tenant-level Conditional Access policy carries blast radius well beyond this project. If a location
+restriction is later required, the named-location policy is the mechanism — not an IP allowlist,
+which Azure Monitor does not support.
 
 ### Preferred long-term hardening
 
@@ -177,6 +180,25 @@ Fields only, no free-text blobs: timestamp, `AuditUserId` (the opaque `sub`), ev
 (query string stripped), status code, required permission, and a correlation id. **No email, no
 request or response body, no tool arguments, no query strings.**
 
+Two further fields, added on review:
+
+- **`EffectivePermissionTier`** — the tier the caller actually resolved to at the moment of the call.
+  This is the more important of the two. Because `LiveGroupCheck` resolves entitlement from *live*
+  Entra group membership, entitlement at a past moment **cannot be reconstructed afterwards** — once
+  someone leaves a group, the audit trail can no longer answer "was this person entitled to do that
+  at the time?" That is a real hole in an access record, and capturing the resolved tier alongside
+  the required permission closes it.
+- **`McpClient`** — which client made the call. Useful for adoption analysis and for scoping the
+  blast radius when one client misbehaves. Note the mechanism: in stateless mode there is no
+  `initialize` handshake to read `clientInfo` from, because the 2026-07-28 revision removed it —
+  client identity arrives in per-request `_meta` instead, so it is read per call rather than per
+  session.
+
+**Duration was considered and deliberately excluded.** The OTel histogram already carries latency at
+better fidelity, and performance data has no compliance value — putting it in a table retained for
+365 days means paying a year of storage for something useful for a week. The audit table stays lean;
+performance lives in metrics.
+
 ## Phase 3 — coverage, dashboards, alerts
 
 ### Wiring
@@ -225,15 +247,30 @@ One Workbook, three sections:
 
 ### Alerts
 
-Deliberately few, to stay actionable:
+Seven, all agreed on review. Kept deliberately few so each one means something when it fires.
 
-1. Denial rate for a single user exceeding a threshold in a short window — possible
-   misconfiguration or probing.
-2. Vitally 429s appearing at all — the budget is 1000 req/min and hitting it means something is
-   looping.
-3. Tool-call error rate above a threshold.
-4. Audit ingestion stopping — a silent audit trail is worse than a noisy one, and this is the alert
-   that catches the telemetry itself failing.
+1. **Audit ingestion stops.** A silent audit trail is worse than a noisy one — you discover the gap
+   only when you need the evidence. Catches the telemetry itself failing.
+2. **Microsoft Graph group-lookup failure.** This is a *security* alert, not an operational one.
+   When `LiveGroupCheck` is on and the Graph lookup fails, `HasEffectivePermissionAsync` silently
+   falls back to the token claim. That is deliberate fail-degraded design, but it means permissions
+   are resolving from a **frozen claim** rather than live membership — so a revocation just made
+   would not take effect. The degradation is currently invisible.
+3. **Spike in 401s on `/mcp`.** The canary for the auth-discovery rework: if it misbehaves against a
+   real client the signature is a cliff of 401s, and the action is to roll back. Most valuable in
+   the weeks following that change.
+4. **Key Vault secret fetch failure.** If the managed identity cannot retrieve `vitally-shared`,
+   every tool call fails — total outage, currently only a log line. Distinct from the existing
+   near-expiry alerting, which catches a different problem.
+5. **Vitally 429s appearing at all.** The budget is 1000 req/min; hitting it means something is
+   looping or a page-cap sweep has gone wrong. Any occurrence is worth knowing, so no threshold.
+6. **Denial rate for a single user** exceeding a threshold in a short window — misconfigured access
+   or probing. Needs threshold tuning once normal volumes are visible.
+7. **Tool-call error rate** above a threshold. The most likely of the seven to be noisy before
+   baseline data exists, so tune it after Phase 1 measurement rather than guessing now.
+
+Page-cap truncations are deliberately **not** alerted — real, but not actionable at 3am. Dashboard
+only.
 
 ## Not covered
 
