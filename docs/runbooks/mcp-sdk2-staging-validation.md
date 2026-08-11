@@ -70,8 +70,73 @@ round-trips against real Vitally.
 > only thing preventing a validation run from mutating real customer records. Do not remove it
 > from any staging deployment for any reason.
 
-Run these as `dsearle.adm`, with PIM activated for the Graph grant (Global Administrator is
-required to grant `GroupMember.Read.All`; activate via PIM).
+Run all of this as `dsearle.adm`, with PIM activated for Global Administrator (needed for the
+Graph grant in step 2.3).
+
+**Each block below redeclares the shell variables it needs**, rather than relying on variables
+set by an earlier block. Creating the Auth0 client (step 2.5) happens in the portal, between
+blocks — treat every block as if it is starting a fresh shell session, because in practice it
+will be.
+
+### 2.1 Read the production baseline image tag
+
+Needed before step 2.4, since the Container App is created with an explicit image tag rather
+than `:latest`.
+
+```bash
+RG=vitally-prod-rg-uksouth
+az containerapp show -g "$RG" -n vitally-prod-ca-uksouth \
+  --query "properties.template.containers[0].image" -o tsv
+```
+
+Note the returned tag — you will substitute it for `PLACEHOLDER_BASELINE_TAG` in step 2.4.
+
+### 2.2 Create the identity and role grants
+
+```bash
+set -euo pipefail
+RG=vitally-prod-rg-uksouth
+ACR=vitallyproducruksouth
+KV=vitally-prod-kv-uksouth
+ID=vitally-staging-id-uksouth
+SUB=$(az account show --query id -o tsv)
+
+az identity create -g "$RG" -n "$ID" -l uksouth
+ID_PRINCIPAL=$(az identity show -g "$RG" -n "$ID" --query principalId -o tsv)
+
+# Role grants — pull images, read the Vitally secret
+az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+  --role AcrPull --scope "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ContainerRegistry/registries/$ACR"
+az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.KeyVault/vaults/$KV"
+
+echo "Identity principal id (needed for step 2.3): $ID_PRINCIPAL"
+```
+
+### 2.3 Grant Microsoft Graph `GroupMember.Read.All` to the identity
+
+This is an **application permission (app role) on the managed identity's service principal**,
+not a delegated permission grant on an app registration — `az ad app permission grant` is the
+wrong shape for this and is not used here. Do it through the portal:
+
+1. Requires **Global Administrator**, activated via PIM — application-permission (app role)
+   grants need admin consent.
+2. Microsoft Entra admin centre → **Enterprise applications** → search for
+   `vitally-staging-id-uksouth` (the identity created in step 2.2 — managed identities appear
+   here as service principals) → **Permissions** → **Grant admin consent for FISCAL Technologies**,
+   adding the Microsoft Graph application permission `GroupMember.Read.All`.
+3. Confirm the permission shows as **Granted** against that service principal before continuing.
+   Until it is granted, `ToolAuthorizer`'s live Graph lookup fails and falls back to the token
+   claim, which is a different code path from the one this layer exists to validate.
+
+A CLI equivalent exists (an app-role assignment on the service principal, not a permission grant
+on an app registration), but it is deliberately not included here as a copy-paste command: it
+needs the exact Graph app-role id for `GroupMember.Read.All`, which has not been verified for
+this runbook. If you want to script it, look that id up against the Microsoft Graph service
+principal's `appRoles` first, confirm it, and only then build the `az rest` /
+`New-MgServicePrincipalAppRoleAssignment` call — do not guess the id.
+
+### 2.4 Create the Container App
 
 ```bash
 set -euo pipefail
@@ -81,28 +146,11 @@ ACR=vitallyproducruksouth
 KV=vitally-prod-kv-uksouth
 APP=vitally-staging-ca-uksouth
 ID=vitally-staging-id-uksouth
-SUB=$(az account show --query id -o tsv)
-
-# 1. Identity
-az identity create -g "$RG" -n "$ID" -l uksouth
-ID_PRINCIPAL=$(az identity show -g "$RG" -n "$ID" --query principalId -o tsv)
 ID_CLIENT=$(az identity show -g "$RG" -n "$ID" --query clientId -o tsv)
 ID_RESOURCE=$(az identity show -g "$RG" -n "$ID" --query id -o tsv)
 
-# 2. Role grants — pull images, read the Vitally secret
-az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-  --role AcrPull --scope "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ContainerRegistry/registries/$ACR"
-az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" --scope "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.KeyVault/vaults/$KV"
-
-# 3. Graph GroupMember.Read.All (application permission) — needs Global Administrator via PIM.
-#    00000003-0000-0000-c000-000000000000 is Microsoft Graph; the role id is GroupMember.Read.All.
-az ad app permission grant --id "$ID_PRINCIPAL" --api 00000003-0000-0000-c000-000000000000 \
-  --scope GroupMember.Read.All 2>/dev/null \
-  || echo "Grant GroupMember.Read.All to $ID_PRINCIPAL via the portal (Enterprise applications > Permissions) if this fails"
-
-# 4. Container App. ReadOnly is hard-wired true — this is the only guard against mutating
-#    real customer data, since there is one live Vitally tenant.
+# ReadOnly is hard-wired true — this is the only guard against mutating real customer data,
+# since there is one live Vitally tenant. Substitute the tag from step 2.1 below.
 az containerapp create -g "$RG" -n "$APP" --environment "$CAE" \
   --image "$ACR.azurecr.io/vitally-mcp:PLACEHOLDER_BASELINE_TAG" \
   --registry-server "$ACR.azurecr.io" --registry-identity "$ID_RESOURCE" \
@@ -121,23 +169,25 @@ az containerapp create -g "$RG" -n "$APP" --environment "$CAE" \
     "OAuth__NoAuth=false" \
     "OAuth__Authority=https://fiscal-it.uk.auth0.com/"
 
-# 5. Read the assigned FQDN, then set the origin-dependent settings to match it.
 FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
 echo "Staging FQDN: https://$FQDN"
 ```
 
-Substitute the real baseline image tag for `PLACEHOLDER_BASELINE_TAG` — read it from production
-with:
+Note the FQDN — it is needed to create the Auth0 objects in step 2.5, and that block re-derives
+it independently rather than relying on this shell's `$FQDN` surviving.
+
+### 2.5 Configure Auth0 and finish wiring
+
+Create the Auth0 Resource Server (identifier `https://<staging FQDN>`) and a native client whose
+only allowed callback is `https://<staging FQDN>/oauth/callback`, using the FQDN noted in step
+2.4. Then apply the remaining settings:
 
 ```bash
-az containerapp show -g "$RG" -n vitally-prod-ca-uksouth \
-  --query "properties.template.containers[0].image" -o tsv
-```
+set -euo pipefail
+RG=vitally-prod-rg-uksouth
+APP=vitally-staging-ca-uksouth
+FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
 
-Then create the Auth0 Resource Server (identifier `https://$FQDN`) and a native client whose only
-allowed callback is `https://$FQDN/oauth/callback`, and apply the remaining settings:
-
-```bash
 az containerapp secret set -g "$RG" -n "$APP" \
   --secrets "oauth-shared-client-secret=<staging client secret>"
 
