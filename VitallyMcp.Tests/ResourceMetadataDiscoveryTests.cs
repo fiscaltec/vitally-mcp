@@ -36,10 +36,45 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
             "the deploy.yml smoke check asserts 401 — this must not change");
 
-        var challenge = string.Join(", ", response.Headers.WwwAuthenticate.Select(h => h.ToString()));
+        // Exactly one challenge value — not Contains. A second, bare "Bearer" challenge
+        // appended alongside ours is HTTP-legal but lets a client that reads only one of the
+        // two values (first or last) see no resource_metadata pointer at all, which is the
+        // discovery failure this task exists to close. Contains alone let that regression
+        // through unnoticed; asserting the count is the point.
+        response.Headers.WwwAuthenticate.Should().HaveCount(1);
+
+        var challenge = response.Headers.WwwAuthenticate.Single().ToString();
         challenge.Should().Contain("resource_metadata",
             "MCP clients use this parameter to locate the protected-resource metadata document");
         challenge.Should().Contain("/.well-known/oauth-protected-resource");
+    }
+
+    [Fact]
+    public async Task InvalidBearerToken_Returns401WithBothResourceMetadataAndInvalidTokenError()
+    {
+        using var client = _factory.CreateClient();
+
+        // Syntactically valid JWT shape (header.payload.signature, all base64url) but an
+        // unverifiable signature — enough to reach JwtBearerHandler's failed-validation path
+        // without needing a real Auth0 tenant.
+        const string junkJwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.aW52YWxpZC1zaWduYXR1cmU";
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", Encoding.UTF8, "application/json")
+        };
+        request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", junkJwt);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        response.Headers.WwwAuthenticate.Should().HaveCount(1);
+
+        var challenge = response.Headers.WwwAuthenticate.Single().ToString();
+        challenge.Should().Contain("resource_metadata",
+            "the pointer must still be present even when the failure is an invalid token, not just a missing one");
+        challenge.Should().Contain("error=\"invalid_token\"");
     }
 
     [Theory]

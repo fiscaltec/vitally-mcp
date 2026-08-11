@@ -103,8 +103,28 @@ if (!noAuth)
                         : oauth.Value.PublicBaseUrl;
 
                     var metadataUrl = $"{baseUrl}{ProtectedResourceMetadataBuilder.MetadataPath}/mcp";
-                    context.Response.Headers.WWWAuthenticate =
-                        $"Bearer resource_metadata=\"{metadataUrl}\"";
+
+                    // Build a single WWW-Authenticate challenge and call HandleResponse() to stop
+                    // JwtBearerHandler appending its own bare "Bearer" afterward — two challenges
+                    // is HTTP-legal, but a client that reads only one of them (first or last) then
+                    // sees no resource_metadata pointer at all, which is the exact discovery
+                    // failure this task exists to close. Setting the status code ourselves is what
+                    // makes suppressing the default handler safe here; ResourceMetadataDiscoveryTests
+                    // pins the 401 independently, so the deploy.yml smoke contract stays covered.
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+
+                    var challenge = $"Bearer resource_metadata=\"{metadataUrl}\"";
+                    if (context.AuthenticateFailure is not null)
+                    {
+                        // A token was presented but failed validation — preserve that diagnostic
+                        // (the default handler would otherwise add it) so expired/invalid-token
+                        // issues stay debuggable in production. Never echo exception text or any
+                        // token content into the header; the description stays generic.
+                        challenge += ", error=\"invalid_token\", error_description=\"The access token is invalid or expired\"";
+                    }
+                    context.Response.Headers.WWWAuthenticate = challenge;
+
+                    context.HandleResponse();
                     return Task.CompletedTask;
                 }
             };
