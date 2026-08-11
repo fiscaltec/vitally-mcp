@@ -280,14 +280,14 @@ only.
   precisely why its retention matters. Per-user keys via the `secret_ref` claim remain a future
   option that would change this.
 - Peering to the connectivity hub (recorded above as preferred long-term hardening, out of scope here).
-- The Conditional Access policy (recommended, actioned separately as a tenant-level change).
+- A Conditional Access location restriction on log query — considered and declined (see Phase 1).
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
 | **Customer emails leaking into telemetry via `url.full`** | Redaction mandatory at OTel registration; gated by a test asserting a known email never appears in emitted attributes |
-| Opening public query reverses a hardening item | Ingestion stays private; justification recorded above; Conditional Access recommended; reversible in favour of hub peering |
+| Opening public query reverses a hardening item | Ingestion stays private; justification recorded above; reversible in favour of hub peering |
 | Scheduled alert rules may not evaluate under the current scope | Explicitly verified in Phase 1; if broken, Phase 3 alerting is redesigned |
 | Retention cost unknown | Phase 1 enables measurement before any retention decision is taken |
 | Logs Ingestion API adds a failure mode to the audit path | Sink failures must never fail a tool call; audit write errors are logged through `ILogger` as a fallback so records are degraded, never silently dropped |
