@@ -93,13 +93,14 @@ if (!noAuth)
         });
 }
 
-// Registered unconditionally, including in NoAuth dev mode. The MCP SDK fails *closed*: if a tool
-// carries an authorisation attribute but the policy services or the SDK's authorisation filters are
-// missing, tools/list and tools/call throw ("You must call AddAuthorization() because an
-// authorization related attribute was found on ..." / "Authorization filter was not invoked for
-// tools/list operation ..."). Since every tool carries [Authorize], skipping this under NoAuth would
-// leave local development with a server that cannot list or call anything. Discovery is still
-// unfiltered in dev mode — VitallyPermissionHandler short-circuits to success while
+// Registered unconditionally, including in NoAuth dev mode. The MCP SDK fails *closed*: with an
+// authorisation attribute on a tool but no policy services (and no AddAuthorizationFilters() below),
+// both tools/list and tools/call fail — observed as JSON-RPC -32603 "An error occurred." Since every
+// tool carries [Authorize], guarding either of these on !noAuth leaves local development with a
+// server that can neither list nor call anything. Verified both ways round; the regression is pinned
+// by AuthorizationFilterToolsListTests.NoAuthDevMode_SeesEveryToolUnfiltered, which asserts the full
+// tool count and so fails whichever way this breaks. Discovery is still unfiltered in dev mode —
+// VitallyPermissionHandler short-circuits to success while
 // ToolAuthorizer.IsAuthorizationBypassedAsync() is true (RBAC off or NoAuth).
 //
 // Scoped, not singleton: VitallyPermissionHandler depends on the scoped ToolAuthorizer, and a
@@ -132,8 +133,13 @@ var mcpBuilder = builder.Services.AddMcpServer(options => options.ServerInstruct
 
 // Applies [Authorize] on tools: filters tools/list per caller and rejects unauthorised calls
 // before they reach the handler. Not guarded on !noAuth — see the AddAuthorizationBuilder comment
-// above: the SDK throws on any tool carrying authorisation metadata when this was never called, so
-// omitting it in dev mode breaks tools/list outright. NoAuth is handled inside the policy handler.
+// above: with authorisation metadata on a tool and this call missing, tools/list fails outright, so
+// omitting it in dev mode breaks local development. NoAuth is handled inside the policy handler.
+//
+// The checkpoint this installs sits *outside* the whole call-tool filter pipeline (the SDK's
+// "alternate-result pipeline"), so a refused call never reaches the filters registered below —
+// including the error-surfacing one. That is why the denial is audited from
+// VitallyPermissionHandler rather than from a filter here.
 mcpBuilder.AddAuthorizationFilters();
 
 mcpBuilder.WithRequestFilters(filters =>

@@ -3,8 +3,10 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace VitallyMcp.Tests;
 
@@ -37,7 +39,15 @@ public class AuthorizationFilterToolsListTests
     /// Composes a host at the given auth posture, posts one JSON-RPC message to <c>/mcp</c> and
     /// returns the JSON payload (unwrapping SSE framing if the transport used it).
     /// </summary>
-    private static async Task<string> PostMcpAsync(bool noAuth, string[] permissions, string jsonRpcBody)
+    /// <param name="auditSink">
+    /// When supplied, is attached to the host's logging so the caller can assert on what
+    /// <see cref="AuditLogger"/> recorded during the request.
+    /// </param>
+    private static async Task<string> PostMcpAsync(
+        bool noAuth,
+        string[] permissions,
+        string jsonRpcBody,
+        CapturingLoggerProvider? auditSink = null)
     {
         // All process-wide, so set every one explicitly. Authorization__ReadOnly MUST be false here:
         // if a sibling class leaves it true, ReadOnlyToolFilter strips every destructive tool and the
@@ -52,25 +62,33 @@ public class AuthorizationFilterToolsListTests
         try
         {
             using var factory = new WebApplicationFactory<Program>()
-                .WithWebHostBuilder(b => b.ConfigureServices(services =>
+                .WithWebHostBuilder(b =>
                 {
-                    if (noAuth)
+                    if (auditSink is not null)
                     {
-                        // Dev mode registers no authentication scheme at all; leave it that way so the
-                        // test exercises the real local-development composition.
-                        return;
+                        b.ConfigureLogging(logging => logging.AddProvider(auditSink));
                     }
 
-                    // Replace the JwtBearer default with a scheme that authenticates as our synthetic
-                    // principal, so real policy evaluation runs against known permissions.
-                    services.AddAuthentication(TestAuthHandler.SchemeName)
-                        .AddScheme<TestAuthHandlerOptions, TestAuthHandler>(
-                            TestAuthHandler.SchemeName, o => o.Permissions = permissions);
+                    b.ConfigureServices(services =>
+                    {
+                        if (noAuth)
+                        {
+                            // Dev mode registers no authentication scheme at all; leave it that way
+                            // so the test exercises the real local-development composition.
+                            return;
+                        }
 
-                    services.Configure<AuthorizationOptions>(o =>
-                        o.DefaultPolicy = new AuthorizationPolicyBuilder(TestAuthHandler.SchemeName)
-                            .RequireAuthenticatedUser().Build());
-                }));
+                        // Replace the JwtBearer default with a scheme that authenticates as our
+                        // synthetic principal, so real policy evaluation runs against known permissions.
+                        services.AddAuthentication(TestAuthHandler.SchemeName)
+                            .AddScheme<TestAuthHandlerOptions, TestAuthHandler>(
+                                TestAuthHandler.SchemeName, o => o.Permissions = permissions);
+
+                        services.Configure<AuthorizationOptions>(o =>
+                            o.DefaultPolicy = new AuthorizationPolicyBuilder(TestAuthHandler.SchemeName)
+                                .RequireAuthenticatedUser().Build());
+                    });
+                });
 
             using var client = factory.CreateClient();
 
@@ -208,5 +226,52 @@ public class AuthorizationFilterToolsListTests
             "a reader must not be able to invoke a write tool even by naming it directly");
         error.GetProperty("message").GetString().Should().Contain("Access forbidden");
         json.Should().NotContain("\"result\"");
+    }
+
+    /// <summary>
+    /// A refused out-of-tier call must leave exactly one audit record. This is not incidental: the
+    /// SDK's checkpoint rejects the call before <c>VitallyService.SendAsync</c> runs, so
+    /// <c>AuditLogger.LogDenied</c> — whose only call site is inside <c>SendAsync</c> — never fires
+    /// for a tier mismatch. <c>LogToolCallDenied</c> exists to close that gap, and "exactly one"
+    /// is what proves the two hooks do not both fire.
+    /// </summary>
+    [Fact]
+    public async Task DeniedOutOfTierCall_ProducesExactlyOneAuditDenyRecord()
+    {
+        var auditSink = new CapturingLoggerProvider(typeof(AuditLogger).FullName!);
+
+        await PostMcpAsync(noAuth: false, ["vitally:read"],
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"Delete_account","arguments":{"id":"acc-1"}}}""",
+            auditSink);
+
+        var denials = auditSink.Entries.Where(e => e.Message.Contains("DENIED", StringComparison.Ordinal)).ToList();
+
+        denials.Should().ContainSingle("a single refused call must yield exactly one audit record, not zero and not two");
+        var (level, message) = denials[0];
+        level.Should().Be(LogLevel.Warning);
+        message.Should().Contain("test-subject", "the record must attribute the denial to the caller's subject id");
+        message.Should().Contain("Delete_account", "the record must name the tool that was refused");
+        message.Should().Contain("vitally:delete", "the record must state the permission the caller lacked");
+        message.Should().NotContain("acc-1", "call arguments must never reach the audit log");
+    }
+
+    /// <summary>
+    /// Discovery filtering is normal operation, not a denial. The SDK evaluates the policy once per
+    /// tool per <c>tools/list</c> (93 evaluations, uncached), so auditing every non-success would
+    /// write 37 spurious records for a reader on every list — on every client reconnect — and bury
+    /// the real denials. This pins the resource-type discrimination in
+    /// <c>VitallyPermissionHandler</c> that prevents it.
+    /// </summary>
+    [Fact]
+    public async Task ReaderToolsList_ProducesNoAuditDenyRecords()
+    {
+        var auditSink = new CapturingLoggerProvider(typeof(AuditLogger).FullName!);
+
+        await PostMcpAsync(noAuth: false, ["vitally:read"],
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+            auditSink);
+
+        auditSink.Entries.Where(e => e.Message.Contains("DENIED", StringComparison.Ordinal))
+            .Should().BeEmpty("filtering a tool out of tools/list is not a denial and must not be audited");
     }
 }
