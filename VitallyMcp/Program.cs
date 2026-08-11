@@ -90,6 +90,24 @@ if (!noAuth)
         {
             jwt.Authority = oauth.Value.Authority;
             jwt.Audience = oauth.Value.Audience;
+
+            // MCP requires the 401 to point at the protected-resource metadata document. Without
+            // this, clients can only guess the well-known location. Built from PublicBaseUrl so a
+            // Host header cannot inject the pointer; falls back to the request origin in local dev.
+            jwt.Events = new JwtBearerEvents
+            {
+                OnChallenge = context =>
+                {
+                    var baseUrl = string.IsNullOrWhiteSpace(oauth.Value.PublicBaseUrl)
+                        ? $"{context.Request.Scheme}://{context.Request.Host}"
+                        : oauth.Value.PublicBaseUrl;
+
+                    var metadataUrl = $"{baseUrl}{ProtectedResourceMetadataBuilder.MetadataPath}/mcp";
+                    context.Response.Headers.WWWAuthenticate =
+                        $"Bearer resource_metadata=\"{metadataUrl}\"";
+                    return Task.CompletedTask;
+                }
+            };
         });
 }
 
@@ -237,24 +255,19 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
         : publicBaseUrl;
 }
 
-// RFC 9728 — Protected Resource Metadata. Points clients at the authorization server,
-// which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
-// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints
-// for everything except registration_endpoint.
-app.MapGet("/.well-known/oauth-protected-resource", (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
-{
-    var o = oauth.Value;
-    var resource = string.IsNullOrWhiteSpace(o.Resource) ? o.Audience : o.Resource;
-    var asUrl = string.IsNullOrWhiteSpace(o.SharedClientId)
-        ? o.Authority?.TrimEnd('/')
-        : GetServerBaseUrl(ctx, o.PublicBaseUrl);
-    return Results.Json(new
-    {
-        resource,
-        authorization_servers = new[] { asUrl },
-        bearer_methods_supported = new[] { "header" }
-    });
-});
+// RFC 9728 — Protected Resource Metadata, served from both the canonical path and the
+// resource-path-suffixed variant (…/mcp) that RFC 9728 and the MCP SDK prefer. Clients probe
+// either, so serving both removes a discovery failure mode. Points clients at the authorization
+// server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
+// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints for
+// everything except registration_endpoint.
+var resourceMetadataHandler = (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
+    Results.Json(ProtectedResourceMetadataBuilder.Build(
+        oauth.Value,
+        GetServerBaseUrl(ctx, oauth.Value.PublicBaseUrl)));
+
+app.MapGet(ProtectedResourceMetadataBuilder.MetadataPath, resourceMetadataHandler);
+app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetadataHandler);
 
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
 // Auth0 still issues tokens (its endpoints are what `authorization_endpoint`/`token_endpoint`
