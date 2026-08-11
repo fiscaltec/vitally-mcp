@@ -220,8 +220,37 @@ Auth0 client is misconfigured" — both look identical from the client's side.
 Deploy the feature-branch image to the same staging app. Verify:
 
 - All three baseline checks above still pass.
-- `tools/list` differs by caller tier (reader / editor / admin).
 - `ttlMs` is present on the `tools/list` response.
+- **All tiers see the same 56 read-only tools.** Under `Authorization__ReadOnly=true` this is the
+  correct expected result — see the note below before concluding that tier filtering is broken.
+
+### Note: do not expect `tools/list` to differ by tier under `ReadOnly=true`
+
+Staging hard-wires `Authorization__ReadOnly=true`, which installs `ReadOnlyToolFilter`. That filter
+keeps only tools whose `ReadOnlyHint` is true, so **every destructive tool is stripped for every
+caller regardless of tier**. Reader, editor and admin therefore all see the same 56 read tools, and
+a per-tier difference cannot appear.
+
+This is expected, not a defect. Per-caller filtering is proven by
+`AuthorizationFilterToolsListTests`, which asserts the exact 56 / 81 / 93 split for reader / editor
+/ admin. **Do not disable `Authorization__ReadOnly` to make a tier difference appear** — it is the
+only control preventing a validation run from mutating real customer records, because there is one
+live Vitally tenant and no sandbox.
+
+### Optional: validating the tier split against real Entra groups
+
+Only if you specifically want to see tier filtering working against live group membership rather
+than synthetic test principals. `tools/list` makes no Vitally API call at all, so this needs a valid
+Auth0 token and group membership — not a working Vitally key.
+
+1. Redeploy staging with `Authorization__ReadOnly=false` **and** the `Vitally__KeyVaultUri` pointing
+   at a secret that is deliberately invalid. The invalid key is the guard here: listing still works,
+   while any mutating call fails upstream at Vitally rather than relying on an application flag.
+2. Connect as a member of each of the three `sg-vitally-*` groups in turn and confirm 56 / 81 / 93.
+3. **Restore `Authorization__ReadOnly=true` immediately afterwards**, and confirm it took effect
+   before doing anything else with the app.
+
+Skip this step unless you need it. The in-process test covers the same invariant with no exposure.
 
 ## 5. Teardown
 

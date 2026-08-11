@@ -3,7 +3,7 @@ using ModelContextProtocol.Protocol;
 namespace VitallyMcp;
 
 /// <summary>
-/// Cache hints advertised on tools/list, per the 2026-07-28 MCP spec. With 95 tools this is the
+/// Cache hints advertised on tools/list, per the 2026-07-28 MCP spec. With 93 tools this is the
 /// largest response the server emits, so letting clients cache it avoids re-sending the whole
 /// catalogue every session.
 ///

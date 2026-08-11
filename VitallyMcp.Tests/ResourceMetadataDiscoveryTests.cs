@@ -91,12 +91,22 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
         var root = doc.RootElement;
 
         root.GetProperty("resource").GetString().Should().NotBeNullOrWhiteSpace();
-        root.GetProperty("authorization_servers").EnumerateArray().Should().NotBeEmpty();
+
+        // Exact counts, not Contain/NotBeEmpty. ProtectedResourceMetadata ships with
+        // BearerMethodsSupported pre-populated with ["header"], so a nested-initialiser form
+        // appends rather than replaces and silently yields ["header", "header"]. The builder
+        // uses assignment to avoid that; a Contain assertion would not notice a regression to
+        // the appending form. The same applies to the other two collection properties, which
+        // are assigned the same way.
         root.GetProperty("bearer_methods_supported").EnumerateArray()
-            .Select(e => e.GetString()).Should().Contain("header");
+            .Select(e => e.GetString()).Should().ContainSingle().Which.Should().Be("header");
+        root.GetProperty("authorization_servers").EnumerateArray().Should().HaveCount(1);
+
         root.TryGetProperty("scopes_supported", out var scopes).Should().BeTrue(
             "clients use this to request the right scopes up front");
-        scopes.EnumerateArray().Should().NotBeEmpty();
+        scopes.EnumerateArray().Select(e => e.GetString()).Should()
+            .BeEquivalentTo(ProtectedResourceMetadataBuilder.SupportedScopes,
+                "the advertised scopes must match the builder's list exactly, with no duplicates");
     }
 
     public class Factory : WebApplicationFactory<Program>

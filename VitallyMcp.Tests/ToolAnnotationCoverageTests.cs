@@ -54,7 +54,7 @@ public class ToolAnnotationCoverageTests
     [Fact]
     public void EveryToolIsDiscovered()
     {
-        AllTools().Should().HaveCountGreaterThan(90, "the server exposes ~95 tools; a big drop means discovery broke");
+        AllTools().Should().HaveCountGreaterThan(90, "the server exposes 93 tools; a big drop means discovery broke");
     }
 
     [Theory]
