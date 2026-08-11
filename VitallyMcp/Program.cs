@@ -98,9 +98,7 @@ if (!noAuth)
             {
                 OnChallenge = context =>
                 {
-                    var baseUrl = string.IsNullOrWhiteSpace(oauth.Value.PublicBaseUrl)
-                        ? $"{context.Request.Scheme}://{context.Request.Host}"
-                        : oauth.Value.PublicBaseUrl;
+                    var baseUrl = GetServerBaseUrl(context.HttpContext, oauth.Value.PublicBaseUrl);
 
                     var metadataUrl = $"{baseUrl}{ProtectedResourceMetadataBuilder.MetadataPath}/mcp";
 
