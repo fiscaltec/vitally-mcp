@@ -23,6 +23,30 @@ All notable changes to this project are documented here. Format based on
 
 ### Added
 
+- **Per-caller `tools/list` filtering.** All 93 tools now carry
+  `[Authorize(Policy = "vitally:read|write|delete")]` (56 read / 25 write /
+  12 delete), and `AddAuthorizationFilters()` makes the MCP SDK evaluate it,
+  so a caller sees only the tools their tier permits — 56 / 81 / 93 for
+  reader / editor / admin. Previously every caller saw all 93 and only
+  discovered the denial on invocation. This is *discovery filtering*; the
+  security boundary remains `VitallyService.SendAsync`, and both resolve
+  permissions through the same `ToolAuthorizer.HasEffectivePermissionAsync`
+  so they cannot drift apart.
+- **`tools/list` cache hints** per MCP 2026-07-28, bound from the new
+  `ToolsListCache:` section (`Enabled`, `TimeToLive` default 5 minutes,
+  `Scope` default `Private`) and serialised as `ttlMs` / `cacheScope`.
+  `Scope` must stay `Private` while per-caller filtering is active — a
+  public cache would serve one tier's catalogue to another.
+- **`AuditLogger.LogToolCallDenied`**, recording tool calls refused on the
+  caller's permission tier. Needed because the SDK's authorisation
+  checkpoint rejects an out-of-tier call *before* `VitallyService.SendAsync`
+  runs, so the existing `LogDenied` could never fire for a tier mismatch and
+  those denials would have gone unrecorded. Logs the opaque subject id, tool
+  name and required permission — never the email, bodies or call arguments.
+- **`Idempotent` and `OpenWorld` annotations** on every tool, so clients can
+  reason about retry safety. `ToolAnnotationCoverageTests` enforces by
+  reflection that all four hints are explicitly set and that `ReadOnly` and
+  `Destructive` stay mutually consistent, prefix-independently.
 - `OAuth:AllowedClientRedirectUris` configuration option (string array)
   for the proxy redirect-URI allowlist described above. See README
   *Configuration* + *OAuth proxy* sections for the loopback + allowlist
@@ -30,6 +54,24 @@ All notable changes to this project are documented here. Format based on
 
 ### Changed
 
+- **MCP SDK upgraded to 2.1.0**, adopting the **2026-07-28** protocol
+  revision (stateless Streamable HTTP). No configuration change required.
+- **The 401 challenge on `/mcp` now points at the protected-resource
+  metadata document.** `WWW-Authenticate` carries a single challenge with
+  `resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`,
+  adding `error="invalid_token"` when a token was presented and failed
+  validation. Previously the challenge was JWT-Bearer's bare `Bearer`, so
+  clients could only locate the metadata by guessing the well-known root.
+  The document is now served from both that path and the unsuffixed one, and
+  gained `scopes_supported` and `resource_name`. **The status code remains
+  exactly 401** — the deploy smoke check asserts it.
+- **Out-of-tier tool calls now return the SDK's generic "Access forbidden"**
+  rather than `ToolAuthorizer`'s message naming the missing permission,
+  because the SDK's authorisation checkpoint sits outside the call-tool
+  filter pipeline that surfaced it. Similarly, an authenticated user in no
+  `sg-vitally-*` group now sees an empty tool list rather than 93 tools plus
+  an explanatory denial. The security posture is strictly better; the
+  diagnosability is worse, so support should be briefed before rollout.
 - `VitallyService.SendAsync` now surfaces the Vitally response body in the
   `HttpRequestException` it throws on non-2xx responses, instead of using
   `EnsureSuccessStatusCode()` which discards it. The LLM (and operators
