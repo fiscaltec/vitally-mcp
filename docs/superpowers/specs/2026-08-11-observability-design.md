@@ -160,7 +160,7 @@ continues to write through `ILogger`, with the custom-table sink enabled by conf
 The alternative considered was a **workspace transformation DCR** splitting matching `AppTraces` rows
 into a custom table with no application change. Attractive, but transformations are easy to get
 subtly wrong and the exact routing capability must be confirmed against current Azure documentation
-before relying on it. The app-side sink is preferred for predictability and testability. **If the
+before relying on it. **Decided 2026-08-11: the app-side sink**, for predictability and testability. **If the
 transformation approach is confirmed workable during implementation it may be substituted, provided
 the resulting table and schema are identical.**
 
@@ -295,7 +295,8 @@ only.
 
 ## Open inputs
 
-- **Whether the Conditional Access companion policy is adopted**, and by whom. Does not block Phase 1.
+- ~~Whether the Conditional Access companion policy is adopted~~ — **resolved 2026-08-11:
+  declined.** Entra authentication plus workspace RBAC is the accepted control; see Phase 1.
 - **Whether the workspace transformation DCR is viable** as a substitute for the app-side sink;
   to be confirmed against current documentation during Phase 2 implementation.
 - Ingest volume, and therefore the retention cost for operational tables. Answerable only after
