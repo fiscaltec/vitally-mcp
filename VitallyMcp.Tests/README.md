@@ -28,6 +28,7 @@ tenant, no Key Vault.
 | `OAuthOptionsTests` | `IsRedirectUriAllowed` — RFC 8252 loopback any-port acceptance, https-loopback rejection, allowlist matching with subdomain/path-segment spoof guards, validation normalisation. |
 | `OAuthProxyEndpointsTests` | Integration test (via `WebApplicationFactory<Program>`) for `/oauth/authorize` and `/oauth/register`: rejects disallowed `redirect_uri`, accepts loopback + allowlisted hosted callbacks, filters partially-disallowed registration requests. |
 | `Tools/AccountsToolsTests` | List / get / create / update / delete + status filter + traits + list-by-organisation |
+| `Tools/SummaryToolsTests` | `Get_organization_summary` — the read-only composite (org get-by-id with curated rollup traits, object-name resolution, two organisation-scoped instance searches) and its per-sub-call error isolation |
 | `Tools/OrganizationsToolsTests` | CRUD + traits |
 | `Tools/UsersToolsTests` | CRUD + search + list-by-account/organisation + traits |
 | `Tools/AdminsToolsTests` | `SearchAdmins` by email |

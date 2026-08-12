@@ -8,7 +8,7 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 
 ## Features
 
-- **Full CRUD coverage** of 92 endpoints across 17 Vitally resource types: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
+- **Full CRUD coverage** of 16 Vitally resource types via 93 tools: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
 - **Permission-aware tools** — every tool is annotated `ReadOnly` / `Destructive` / `Idempotent` / `OpenWorld` so MCP clients can enable or disable categories of operation in bulk and reason about retry safety. Beyond those advisory hints, `tools/list` is **filtered per caller**: a client is shown only the tools the signed-in user's permission tier permits.
 - **EU and US data centres** — defaults to EU (`rest.vitally-eu.io`); set `Vitally:Region=US` to point at `{subdomain}.rest.vitally.io`.
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
