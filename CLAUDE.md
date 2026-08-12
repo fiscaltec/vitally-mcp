@@ -47,9 +47,10 @@ With the server running locally (or against the deployed URL with a real JWT in 
 # OAuth metadata document — clients use this to discover the auth server
 Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
 
-# MCP initialise. This example requests the older 2025-06-18 revision, which the server still
-# accepts; it answers with the revision it supports (2026-07-28). Send 2026-07-28 to skip the
-# negotiation.
+# MCP initialise. This deliberately requests 2025-06-18: the `initialize` handshake exists only in
+# revisions up to 2025-11-25, because 2026-07-28 removed it in favour of per-request `_meta` and
+# headers. So this is a legacy-path smoke test, and the server replies with a revision it supports.
+# Do NOT substitute 2026-07-28 here — that revision has no `initialize` method and the call errors.
 $body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 

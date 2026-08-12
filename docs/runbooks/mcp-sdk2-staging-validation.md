@@ -243,12 +243,63 @@ Only if you specifically want to see tier filtering working against live group m
 than synthetic test principals. `tools/list` makes no Vitally API call at all, so this needs a valid
 Auth0 token and group membership — not a working Vitally key.
 
-1. Redeploy staging with `Authorization__ReadOnly=false` **and** the `Vitally__KeyVaultUri` pointing
-   at a secret that is deliberately invalid. The invalid key is the guard here: listing still works,
-   while any mutating call fails upstream at Vitally rather than relying on an application flag.
-2. Connect as a member of each of the three `sg-vitally-*` groups in turn and confirm 56 / 81 / 93.
-3. **Restore `Authorization__ReadOnly=true` immediately afterwards**, and confirm it took effect
-   before doing anything else with the app.
+> **Read this warning before running anything below.** Staging deliberately reuses **production's
+> Key Vault** (`vitally-prod-kv-uksouth`, set in step 2.4) and, because
+> `Vitally__DefaultSecretRef` is left at its default, **the same `vitally-shared` secret production
+> reads**. Two settings are easy to confuse and the consequences differ enormously:
+>
+> - `Vitally__KeyVaultUri` — the **vault** URI. Not a secret reference.
+> - `Vitally__DefaultSecretRef` — the **secret name** (defaults to `vitally-shared`).
+>
+> **Never modify the value of `vitally-shared`.** It is the key production uses for every Vitally
+> call, `SecretCacheDuration` is only 5 minutes, and overwriting it would break the live service for
+> every user with no step below to restore it. To use an invalid key, create a *separate* secret and
+> point staging at it by name.
+
+The guard for this procedure is a deliberately invalid Vitally key in a **separate secret**, so that
+`tools/list` still works while any mutating call fails upstream at Vitally.
+
+1. **Create a new, distinctly named secret** holding a deliberately invalid key. This does not touch
+   `vitally-shared`:
+
+```bash
+az keyvault secret set \
+  --vault-name vitally-prod-kv-uksouth \
+  --name vitally-staging-invalid \
+  --value "sk_invalid_for_staging_tier_validation_only"
+```
+
+2. **Point staging at that secret by name** — `DefaultSecretRef`, *not* `KeyVaultUri` — and relax the
+   read-only flag. The vault URI is unchanged:
+
+```bash
+az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth --set-env-vars \
+  "Vitally__DefaultSecretRef=vitally-staging-invalid" \
+  "Authorization__ReadOnly=false"
+```
+
+3. Connect as a member of each of the three `sg-vitally-*` groups in turn and confirm 56 / 81 / 93.
+
+4. **Restore immediately afterwards** and confirm both took effect before doing anything else:
+
+```bash
+az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth --set-env-vars \
+  "Vitally__DefaultSecretRef=vitally-shared" \
+  "Authorization__ReadOnly=true"
+```
+
+5. **Confirm production is unaffected** — this is the check that catches an accidental edit to the
+   shared secret:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://vitally.fiscaltec.com/health   # expect 200
+```
+
+   If production Vitally calls are failing, check whether `vitally-shared` was modified. Restoring it
+   requires the correct live key from Vitally — it is **not** recoverable from this runbook.
+
+6. Optionally delete the throwaway secret: `az keyvault secret delete --vault-name
+   vitally-prod-kv-uksouth --name vitally-staging-invalid`.
 
 Skip this step unless you need it. The in-process test covers the same invariant with no exposure.
 
