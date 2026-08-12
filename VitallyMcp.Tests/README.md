@@ -4,9 +4,19 @@ Automated test suite for the Vitally MCP server.
 
 ## Coverage
 
-**216 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
+**387 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
 test host), running fully in-process — no live API calls, no real Auth0
 tenant, no Key Vault.
+
+> **Integration tests that set environment variables must join
+> `IntegrationTestCollection`.** `Program.cs` reads `OAuth:NoAuth` and
+> `Authorization:ReadOnly` at composition time — before `WebApplicationFactory`
+> can inject configuration — so environment variables are the only override
+> that works, and they are process-wide. xUnit runs test classes in parallel by
+> default, so without the shared collection two fixtures setting
+> `OAuth__NoAuth` differently will race. Set every variable your fixture
+> depends on explicitly rather than relying on a default, so a value left
+> behind by a sibling is overwritten deterministically.
 
 ### Test classes
 

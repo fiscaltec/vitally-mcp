@@ -27,19 +27,37 @@ Then trigger any MCP use (e.g. `/mcp`) and Claude Code opens the Microsoft sign-
 | Claude Desktop | Settings → Connectors → Add custom connector → paste `https://vitally.fiscaltec.com/mcp` |
 | VS Code / Cursor / other | Add an MCP server entry pointing at the URL; the client handles sign-in |
 
-If you sign in successfully but every tool call returns an error, you're likely **authenticated but not yet authorised** — you need to be in one of the access groups below.
+### "It connected, but there are no tools"
+
+If you sign in successfully but your client shows **no Vitally tools at all**, you are
+**authenticated but not yet authorised** — you're not in any of the access groups below. This is the
+expected behaviour, not a broken connector: the server only advertises the tools your tier permits,
+so with no tier you see an empty list rather than an error message.
+
+Ask the IT & Security team for membership of the group matching the tier you need (see
+[Access model](#access-model)); the tools appear within about a minute, with no need to reconnect.
+
+**You will also see fewer tools than a colleague on a higher tier** — that is by design. A reader
+sees the list/get/search tools only; editors additionally see create and update; admins see
+everything. If a tool you expect is missing, it usually means your tier doesn't include it rather
+than that anything is wrong.
 
 ## Access model
 
 Authentication alone grants nothing. Every action is checked against your permission tier, which is derived from your **Microsoft Entra group membership**:
 
-| Tier | Permission | What you can do | Entra group |
-|---|---|---|---|
-| Read | `vitally:read` | List, get and search all resources | `sg-vitally-readers` |
-| Write | `vitally:write` | Read **+** create and update | `sg-vitally-editors` |
-| Delete | `vitally:delete` | Read + write **+** delete | `sg-vitally-admins` |
+| Tier | Permission | What you can do | Tools you see | Entra group |
+|---|---|---|---|---|
+| *(none)* | — | Nothing | **None** — an empty tool list | — |
+| Read | `vitally:read` | List, get and search all resources | List / get / search | `sg-vitally-readers` |
+| Write | `vitally:write` | Read **+** create and update | Read tools + create / update | `sg-vitally-editors` |
+| Delete | `vitally:delete` | Read + write **+** delete | All tools | `sg-vitally-admins` |
 
 Tiers are cumulative (editors can read; admins can do everything). You only need to be in **one** group — the highest tier you require.
+
+Your tier determines not just what you may *do* but what your client is *shown*: the server
+advertises only the tools your tier permits, so you will not see — or be able to invoke — tools above
+it.
 
 Group object IDs (for IT reference):
 
