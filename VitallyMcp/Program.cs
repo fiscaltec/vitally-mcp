@@ -148,6 +148,13 @@ builder.Services.AddScoped<IAuthorizationHandler, VitallyPermissionHandler>();
 // ToolAuthorizationOptions, so a deployment that renames a permission stays consistent.
 var permissions = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName)
     .Get<ToolAuthorizationOptions>() ?? new ToolAuthorizationOptions();
+// Validate() must be called here, not just relied upon via the IOptions PostConfigure above.
+// It trims the permission strings, and ToolAuthorizer receives the *validated* instance — so
+// without this a config value like "vitally:read " (trailing space) would reach the [Authorize]
+// policy requirement untrimmed while the SendAsync backstop compared against the trimmed form.
+// Discovery filtering and enforcement would then disagree, which is the one thing sharing
+// HasEffectivePermissionAsync is supposed to make impossible.
+permissions.Validate();
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("vitally:read", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.ReadPermission)))

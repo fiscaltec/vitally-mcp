@@ -181,6 +181,46 @@ public class AuthorizationFilterToolsListTests
     /// A caller who authenticates but holds no <c>vitally:*</c> permission at all must be shown
     /// nothing. This is the other side of the risk: a filter that fails open would advertise all 93.
     /// </summary>
+    /// <summary>
+    /// Pins the invariant the whole design rests on: discovery filtering and the
+    /// <see cref="VitallyService"/> enforcement backstop must resolve permissions identically, so
+    /// they cannot disagree about what a caller may see versus do.
+    ///
+    /// <para>
+    /// The specific regression guarded here is subtle. <c>ToolAuthorizationOptions.Validate()</c>
+    /// trims the permission strings, and <see cref="ToolAuthorizer"/> receives the validated
+    /// instance via the <c>IOptions</c> <c>PostConfigure</c>. But the <c>[Authorize]</c> policy
+    /// requirements are built in <c>Program.cs</c> from a separately-bound instance, so if that one
+    /// is not validated too, a configured value with surrounding whitespace reaches the policy
+    /// untrimmed while the backstop compares against the trimmed form. The tool then vanishes from
+    /// <c>tools/list</c> despite the caller holding the permission — fail-closed, so not a security
+    /// hole, but a baffling one to debug and a broken guarantee.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task WhitespaceInConfiguredPermission_DoesNotDesyncDiscoveryFromEnforcement()
+    {
+        // Trailing whitespace is what Validate() exists to normalise. Set it before the helper
+        // composes the host so the policy registration reads this value.
+        Environment.SetEnvironmentVariable("Authorization__ReadPermission", "vitally:read ");
+        try
+        {
+            // The caller holds the *trimmed* permission, as a real Auth0/Entra principal would.
+            var names = await ToolNamesAsync(noAuth: false, permissions: ["vitally:read"]);
+
+            names.Should().Contain(n => n.StartsWith("List_", StringComparison.Ordinal),
+                "the configured permission differs from the caller's only by whitespace, which "
+                + "Validate() normalises — so the reader's tools must still be discoverable");
+            names.Should().HaveCount(56,
+                "a reader should see exactly the 56 read tools; a different count means the policy "
+                + "requirement and ToolAuthorizer disagreed about the permission string");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("Authorization__ReadPermission", null);
+        }
+    }
+
     [Fact]
     public async Task CallerWithNoPermissions_SeesNoTools()
     {
