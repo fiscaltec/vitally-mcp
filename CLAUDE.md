@@ -54,10 +54,39 @@ Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
 $body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 
-# tools/list
+# tools/list on the legacy path (no MCP-Protocol-Version header — the server accepts it)
 $body = @{ jsonrpc='2.0'; id=2; method='tools/list' } | ConvertTo-Json -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 ```
+
+**Exercising the 2026-07-28 path itself.** The revision above replaced the `initialize` handshake with
+per-request metadata, and the server enforces the full contract — so a bare request is *not* enough.
+All of the following are required together, and the server rejects each omission with a distinct
+error (verified against the running container):
+
+1. the `MCP-Protocol-Version: 2026-07-28` header — omit it and you get
+   `-32020 "The MCP-Protocol-Version header is required when the request body declares a per-request metadata protocol version."`
+2. `_meta/io.modelcontextprotocol/protocolVersion` in `params` — omit it and you get
+   `-32602 "Requests using protocol version '2026-07-28' must include '_meta/io.modelcontextprotocol/protocolVersion'."`
+3. `_meta/io.modelcontextprotocol/clientCapabilities` as a JSON object — omit it and you get a
+   matching `-32602`.
+
+`Mcp-Method` must also equal the body's `method`; a mismatch is rejected with
+`"Header mismatch: Mcp-Method header value 'x' does not match body value 'y'."`
+
+```powershell
+$meta = @{
+  'io.modelcontextprotocol/protocolVersion'   = '2026-07-28'
+  'io.modelcontextprotocol/clientCapabilities' = @{}
+  'io.modelcontextprotocol/clientInfo'         = @{ name = 'smoke'; version = '0.0.1' }
+}
+$body = @{ jsonrpc='2.0'; id=3; method='tools/list'; params=@{ _meta=$meta } } | ConvertTo-Json -Depth 10 -Compress
+Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' `
+  -Headers @{ Accept='application/json, text/event-stream'; 'MCP-Protocol-Version'='2026-07-28'; 'Mcp-Method'='tools/list' } `
+  -Body $body
+```
+
+A successful response carries `ttlMs: 300000` and `cacheScope: "private"` alongside `tools`.
 
 ## Installing for End Users
 
