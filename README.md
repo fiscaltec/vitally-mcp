@@ -175,7 +175,7 @@ All HTTP traffic flows through `VitallyRateLimitHandler`, a `DelegatingHandler` 
 
 ## Tool catalogue
 
-The server publishes 93 MCP tools, one per Vitally REST endpoint. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk, plus `Idempotent` and `OpenWorld` so they can reason about retry safety.
+The server publishes 93 MCP tools, mostly one per Vitally REST endpoint — though not strictly one-to-one, since `Get_organization_summary` is a read-only composite that fans out to four upstream calls. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk, plus `Idempotent` and `OpenWorld` so they can reason about retry safety.
 
 **An individual caller will not see all 93.** Each tool also carries an `[Authorize]` policy matching its tier, and `tools/list` is filtered per caller — a reader sees the 56 read tools, an editor 81, an admin all 93. See [Security](#security).
 
