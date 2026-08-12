@@ -263,6 +263,7 @@ The guard for this procedure is a deliberately invalid Vitally key in a **separa
    `vitally-shared`:
 
 ```bash
+set -euo pipefail
 az keyvault secret set \
   --vault-name vitally-prod-kv-uksouth \
   --name vitally-staging-invalid \
@@ -273,6 +274,7 @@ az keyvault secret set \
    read-only flag. The vault URI is unchanged:
 
 ```bash
+set -euo pipefail
 az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth --set-env-vars \
   "Vitally__DefaultSecretRef=vitally-staging-invalid" \
   "Authorization__ReadOnly=false"
@@ -283,6 +285,7 @@ az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth 
 4. **Restore immediately afterwards** and confirm both took effect before doing anything else:
 
 ```bash
+set -euo pipefail
 az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth --set-env-vars \
   "Vitally__DefaultSecretRef=vitally-shared" \
   "Authorization__ReadOnly=true"
