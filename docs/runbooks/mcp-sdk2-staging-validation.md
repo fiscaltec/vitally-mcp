@@ -55,7 +55,7 @@ Point MCP Inspector, then Claude Code, at `http://localhost:5099/mcp`. Record:
 - whether `ttlMs` appears on the `tools/list` response
 - that a read tool round-trips successfully
 
-**Behavioural note:** once any tool carries an `[Authorize]` attribute, MCP SDK 2.1.0 requires
+**Behavioural note:** once any tool carries an `[Authorize]` attribute, MCP SDK 2.1.0 and later require
 `AddAuthorization()` and `AddAuthorizationFilters()` to be registered in **every** deployment
 posture, including local dev with `OAuth__NoAuth=true` — it fails closed and throws at startup
 otherwise. Local dev stays unfiltered not because registration is skipped, but because the

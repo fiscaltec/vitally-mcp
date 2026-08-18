@@ -54,7 +54,7 @@ All notable changes to this project are documented here. Format based on
 
 ### Changed
 
-- **MCP SDK upgraded to 2.1.0**, adopting the **2026-07-28** protocol
+- **MCP SDK upgraded to 2.2.0**, adopting the **2026-07-28** protocol
   revision (stateless Streamable HTTP). No configuration change required.
 - **The 401 challenge on `/mcp` now points at the protected-resource
   metadata document.** `WWW-Authenticate` carries a single challenge with
