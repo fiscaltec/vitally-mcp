@@ -5,6 +5,13 @@
 staging down afterwards. Layer 1 (in-process integration tests) is automated and already covered
 by the test suite — this runbook is for the two layers that are not.
 
+> **Executed end to end on 2026-08-12** for the SDK 2.1.0 branch, and corrected from what that run
+> found. Both gates passed: the baseline (production image) showed a bare `Bearer` challenge and a 404
+> on the `/mcp`-suffixed metadata path, and the branch image showed the `resource_metadata` pointer and
+> 200 on both paths — with the status staying exactly 401 throughout. A real MCP client completed the
+> Auth0→Entra flow, listed 56 tools, and successfully invoked a read tool that fetched the Vitally key
+> from Key Vault via managed identity. Teardown completed and production verified unaffected.
+
 > **Read this in full before running anything.** Section 3 provisions a real Container App
 > against production's Key Vault and ACR. Section 5 (teardown) is not optional — skipping it
 > leaves an orphaned Auth0 client and an unused managed identity as standing security debt.
@@ -73,6 +80,12 @@ round-trips against real Vitally.
 Run all of this as `dsearle.adm`, with PIM activated for Global Administrator (needed for the
 Graph grant in step 2.3).
 
+> **Git Bash on Windows mangles resource ids.** Any `az` command taking a `/subscriptions/...`
+> resource id needs `export MSYS_NO_PATHCONV=1` first, or MSYS rewrites the leading slash and the
+> path arrives as `C:/Program Files/Git/subscriptions/...`. Azure then returns the misleading
+> `MissingSubscription: The request did not have a subscription or a valid tenant level resource
+> provider`. This silently cost two role-assignment grants on the first run.
+
 **Each block below redeclares the shell variables it needs**, rather than relying on variables
 set by an earlier block. Creating the Auth0 client (step 2.5) happens in the portal, between
 blocks — treat every block as if it is starting a fresh shell session, because in practice it
@@ -116,25 +129,38 @@ echo "Identity principal id (needed for step 2.3): $ID_PRINCIPAL"
 ### 2.3 Grant Microsoft Graph `GroupMember.Read.All` to the identity
 
 This is an **application permission (app role) on the managed identity's service principal**,
-not a delegated permission grant on an app registration — `az ad app permission grant` is the
-wrong shape for this and is not used here. Do it through the portal:
+not a delegated permission grant on an app registration. `az ad app permission grant` is the wrong
+shape and will not work. Requires **Global Administrator** via PIM, since app-role grants need admin
+consent.
 
-1. Requires **Global Administrator**, activated via PIM — application-permission (app role)
-   grants need admin consent.
-2. Microsoft Entra admin centre → **Enterprise applications** → search for
-   `vitally-staging-id-uksouth` (the identity created in step 2.2 — managed identities appear
-   here as service principals) → **Permissions** → **Grant admin consent for FISCAL Technologies**,
-   adding the Microsoft Graph application permission `GroupMember.Read.All`.
-3. Confirm the permission shows as **Granted** against that service principal before continuing.
-   Until it is granted, `ToolAuthorizer`'s live Graph lookup fails and falls back to the token
-   claim, which is a different code path from the one this layer exists to validate.
+The CLI path below was verified end-to-end on 2026-08-12. Look the app role up and confirm it before
+assigning — do not paste the id on trust:
 
-A CLI equivalent exists (an app-role assignment on the service principal, not a permission grant
-on an app registration), but it is deliberately not included here as a copy-paste command: it
-needs the exact Graph app-role id for `GroupMember.Read.All`, which has not been verified for
-this runbook. If you want to script it, look that id up against the Microsoft Graph service
-principal's `appRoles` first, confirm it, and only then build the `az rest` /
-`New-MgServicePrincipalAppRoleAssignment` call — do not guess the id.
+```bash
+export MSYS_NO_PATHCONV=1
+SP=$(az identity show -g vitally-prod-rg-uksouth -n vitally-staging-id-uksouth --query principalId -o tsv)
+
+# Confirm the app role. Expect allowedMemberTypes ["Application"] — that is the correct type for a
+# managed identity. As of 2026-08-12 the id is 98830695-27a2-44f7-8c18-0c3ebc9698f6.
+az ad sp show --id 00000003-0000-0000-c000-000000000000   --query "appRoles[?value=='GroupMember.Read.All'].{id:id,value:value,allowed:allowedMemberTypes}" -o json
+
+GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
+ROLE=98830695-27a2-44f7-8c18-0c3ebc9698f6
+
+# NOTE: az rest does NOT accept --body "@file" (that is curl syntax); pass the JSON inline.
+az rest --method POST   --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments"   --headers "Content-Type=application/json"   --body "{\"principalId\":\"$SP\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$ROLE\"}"
+
+# Verify
+az rest --method GET   --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments"   --query "value[].{resource:resourceDisplayName,appRoleId:appRoleId}" -o json
+```
+
+The portal equivalent: Microsoft Entra admin centre → **Enterprise applications** → search
+`vitally-staging-id-uksouth` (managed identities appear here as service principals) → **Permissions**
+→ **Grant admin consent**, adding Microsoft Graph `GroupMember.Read.All`.
+
+Confirm the grant before continuing. Until it exists, `ToolAuthorizer`'s live Graph lookup fails and
+falls back silently to the token claim — a different code path from the one this layer exists to
+validate, so the validation would pass while testing the wrong thing.
 
 ### 2.4 Create the Container App
 
@@ -167,7 +193,8 @@ az containerapp create -g "$RG" -n "$APP" --environment "$CAE" \
     "Authorization__EditorGroupId=19b9d659-284c-4f93-b1c3-a6354db1027c" \
     "Authorization__AdminGroupId=70b48a20-d4b1-47dc-a132-21bc99272a86" \
     "OAuth__NoAuth=false" \
-    "OAuth__Authority=https://fiscal-it.uk.auth0.com/"
+    "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \
+    "OAuth__Audience=https://placeholder.invalid/CORRECTED-IN-STEP-2.5"
 
 FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
 echo "Staging FQDN: https://$FQDN"
@@ -176,11 +203,46 @@ echo "Staging FQDN: https://$FQDN"
 Note the FQDN — it is needed to create the Auth0 objects in step 2.5, and that block re-derives
 it independently rather than relying on this shell's `$FQDN` surviving.
 
+> **Why the audience is a deliberate placeholder.** `OAuthOptions.Validate()` throws
+> *"OAuth:Audience is required when OAuth:NoAuth is false"*, and `Program.cs` forces options
+> resolution immediately after `Build()` — so omitting the audience here makes the container
+> crash-loop until step 2.5 supplies it. The real audience is the FQDN, which does not exist until
+> after this command runs, hence the chicken-and-egg. Setting `OAuth__NoAuth=true` instead does
+> **not** work either: `StartupGuards.EnsureSafeAuthConfig` refuses `NoAuth` alongside a configured
+> `Vitally__KeyVaultUri`. A non-empty placeholder is the only option that starts, and `Validate()`
+> only checks the audience is non-empty. **Step 2.5 must overwrite it** — if it is left in place,
+> every token validation fails on audience mismatch.
+
 ### 2.5 Configure Auth0 and finish wiring
 
-Create the Auth0 Resource Server (identifier `https://<staging FQDN>`) and a native client whose
-only allowed callback is `https://<staging FQDN>/oauth/callback`, using the FQDN noted in step
-2.4. Then apply the remaining settings:
+Create the Auth0 Resource Server and application, mirroring production — read the production
+objects first rather than trusting this list, since Auth0 defaults differ from what the proxy needs.
+
+**Resource Server (API):**
+
+- Identifier: `https://<staging FQDN>/` — **with a trailing slash.** MCP clients request the audience
+  in that form, and production's identifier (`https://vitally.fiscaltec.com/`) carries one for exactly
+  this reason. Omitting it produces `access_denied: Service not found: https://<FQDN>/` at sign-in, and
+  **Auth0 API identifiers are immutable**, so getting it wrong costs a second API. `OAuth__Audience`
+  must then match it character-for-character.
+- `signing_alg: RS256`, `allow_offline_access: true`, `token_lifetime: 28800`
+- `skip_consent_for_verifiable_first_party_clients: true` — this is what suppresses the consent screen
+- `enforce_policies: true`, and the four scopes `mcp.access`, `vitally:read`, `vitally:write`,
+  `vitally:delete`
+- **A client grant is then mandatory**, because `enforce_policies: true` pairs with
+  `require_client_grant`. Without it, token requests fail.
+
+**Application — `app_type: regular_web` with `token_endpoint_auth_method: client_secret_post`.**
+Not a native app: the proxy injects the client secret server-side, so this must be a *confidential*
+client. Auth0 defaults a Native app to `token_endpoint_auth_method: none`, which cannot accept the
+injected secret. Also set `oidc_conformant: true`, `is_first_party: true`, grant types
+`authorization_code` and `refresh_token`, and the single allowed callback
+`https://<staging FQDN>/oauth/callback`.
+
+**Enable the Entra connection on the new application.** Connections are enabled per-application in
+Auth0, so a new app does not inherit it. Without this, sign-in fails before ever reaching the server.
+
+Then apply the remaining settings:
 
 ```bash
 set -euo pipefail
@@ -199,7 +261,7 @@ az containerapp update -g "$RG" -n "$APP" --set-env-vars \
   "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"
 ```
 
-`<staging client secret>` and `<staging client id>` come from the Auth0 native client created
+`<staging client secret>` and `<staging client id>` come from the Auth0 application created
 above. **Never paste the actual secret into a committed file** — supply it at the prompt only.
 
 ## 3. Baseline gate
@@ -216,6 +278,35 @@ failure on the branch image is indistinguishable between "the change broke it" a
 Auth0 client is misconfigured" — both look identical from the client's side.
 
 ## 4. Change gate
+
+### Getting the branch image into the private ACR
+
+`vitallyproducruksouth` has `publicNetworkAccess: Disabled`, so you **cannot** `docker push` to it
+from a workstation, and `az acr repository show-tags` will fail too (data-plane call). Use the same
+route `deploy.yml` uses: push to GHCR, then `az acr import`, which runs server-side in Azure and can
+reach public registries.
+
+`gh auth token` does **not** carry `write:packages` by default — add it once with
+`gh auth refresh -h github.com -s write:packages` (interactive, device code).
+
+```bash
+export MSYS_NO_PATHCONV=1
+SHA=$(git rev-parse --short HEAD); TAG="staging-$SHA"
+
+docker build -t vitally-mcp:branch .
+docker tag vitally-mcp:branch "ghcr.io/fiscaltec/vitally-mcp:$TAG"
+gh auth token | docker login ghcr.io -u <your-github-user> --password-stdin
+docker push "ghcr.io/fiscaltec/vitally-mcp:$TAG"
+
+az acr import --name vitallyproducruksouth   --source "ghcr.io/fiscaltec/vitally-mcp:$TAG"   --image "vitally-mcp:$TAG"   --username <your-github-user> --password "$(gh auth token)" --force
+
+az containerapp update -g vitally-prod-rg-uksouth -n vitally-staging-ca-uksouth   --image "vitallyproducruksouth.azurecr.io/vitally-mcp:$TAG"
+```
+
+A successful pull by the new revision is your confirmation the import worked — you cannot list ACR
+tags from outside the VNet to check directly.
+
+### Verify
 
 Deploy the feature-branch image to the same staging app. Verify:
 
@@ -319,15 +410,32 @@ ID=vitally-staging-id-uksouth
 ID_PRINCIPAL=$(az identity show -g "$RG" -n "$ID" --query principalId -o tsv)
 
 # Role assignments first — deleting the identity leaves orphaned assignments behind otherwise.
-az role assignment list --assignee "$ID_PRINCIPAL" --all --query "[].id" -o tsv \
-  | xargs -r -n1 az role assignment delete --ids
+# Delete by --role and --scope, NOT by --ids: on 2026-08-12 the --ids form returned
+# "Operation returned an invalid status 'Bad Request'" and left one assignment behind, while
+# role+scope succeeded. Always confirm the count reaches 0.
+az role assignment list --assignee "$ID_PRINCIPAL" --all \
+  --query "[].{role:roleDefinitionName,scope:scope}" -o tsv \
+  | while IFS=$'\t' read -r role scope; do
+      az role assignment delete --assignee "$ID_PRINCIPAL" --role "$role" --scope "$scope"
+    done
+echo "remaining role assignments: $(az role assignment list --assignee "$ID_PRINCIPAL" --all --query "length(@)" -o tsv)"
 
 az containerapp delete -g "$RG" -n "$APP" --yes
 az identity delete -g "$RG" -n "$ID"
 ```
 
-Then in Auth0: delete the staging Resource Server (API) and the staging native client. Confirm
-the production client `VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D` and the API
+The Microsoft Graph `GroupMember.Read.All` app-role assignment needs no separate step — deleting the
+managed identity removes its service principal, and the assignment with it. Delete it explicitly only
+if you tore down in a different order.
+
+**Then in Auth0, via the dashboard** (the Auth0 MCP tools expose no delete for these):
+
+- the staging **application** — this also removes its client grants, and if the client secret was ever
+  pasted anywhere, **deleting the application is what invalidates it**
+- the staging **Resource Server (API)** — and check whether there is more than one. Identifiers are
+  immutable, so a wrong audience on the first attempt leaves an orphaned API behind.
+
+Confirm the production client `VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D` and the API
 `https://vitally.fiscaltec.com/` are untouched.
 
 Finally, verify production is unaffected:
