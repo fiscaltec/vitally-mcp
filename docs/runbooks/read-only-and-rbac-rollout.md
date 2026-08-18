@@ -8,6 +8,12 @@ Set `Authorization__ReadOnly=true` on the Container App revision. Effect:
 - `tools/list` advertises only read tools (no `Create_*`/`Update_*`/`Delete_*`).
 - Independent of `Authorization:Enabled` and of any Entra-group/Auth0 setup — a guaranteed lock.
 
+> **This is deployment-wide, and it overrides per-caller filtering.** Since the SDK 2.1.0 adoption,
+> `tools/list` is *also* filtered per caller by permission tier (56 read / 81 editor / 93 admin).
+> `Authorization__ReadOnly=true` strips every destructive tool for **everyone regardless of tier**,
+> so with it on, readers, editors and admins all see the same 56 read tools. Do not read that as
+> per-caller filtering being broken — it is the read-only switch doing its job.
+
 Use this for CS-facing deployments until per-user RBAC (below) is rolled out and verified.
 
 ## Per-user RBAC rollout (finer-grained; out of the application repo)

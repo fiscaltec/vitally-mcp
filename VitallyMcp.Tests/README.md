@@ -4,9 +4,19 @@ Automated test suite for the Vitally MCP server.
 
 ## Coverage
 
-**216 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
+**387 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
 test host), running fully in-process — no live API calls, no real Auth0
 tenant, no Key Vault.
+
+> **Integration tests that set environment variables must join
+> `IntegrationTestCollection`.** `Program.cs` reads `OAuth:NoAuth` and
+> `Authorization:ReadOnly` at composition time — before `WebApplicationFactory`
+> can inject configuration — so environment variables are the only override
+> that works, and they are process-wide. xUnit runs test classes in parallel by
+> default, so without the shared collection two fixtures setting
+> `OAuth__NoAuth` differently will race. Set every variable your fixture
+> depends on explicitly rather than relying on a default, so a value left
+> behind by a sibling is overwritten deterministically.
 
 ### Test classes
 
@@ -18,6 +28,7 @@ tenant, no Key Vault.
 | `OAuthOptionsTests` | `IsRedirectUriAllowed` — RFC 8252 loopback any-port acceptance, https-loopback rejection, allowlist matching with subdomain/path-segment spoof guards, validation normalisation. |
 | `OAuthProxyEndpointsTests` | Integration test (via `WebApplicationFactory<Program>`) for `/oauth/authorize` and `/oauth/register`: rejects disallowed `redirect_uri`, accepts loopback + allowlisted hosted callbacks, filters partially-disallowed registration requests. |
 | `Tools/AccountsToolsTests` | List / get / create / update / delete + status filter + traits + list-by-organisation |
+| `Tools/SummaryToolsTests` | `Get_organization_summary` — the read-only composite (org get-by-id with curated rollup traits, object-name resolution, two organisation-scoped instance searches) and its per-sub-call error isolation |
 | `Tools/OrganizationsToolsTests` | CRUD + traits |
 | `Tools/UsersToolsTests` | CRUD + search + list-by-account/organisation + traits |
 | `Tools/AdminsToolsTests` | `SearchAdmins` by email |

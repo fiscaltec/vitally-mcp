@@ -2,6 +2,7 @@ using System.Text.Json;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -27,6 +28,10 @@ builder.Services.AddOptions<ToolAuthorizationOptions>()
 
 builder.Services.AddOptions<AuditOptions>()
     .Bind(builder.Configuration.GetSection(AuditOptions.SectionName));
+
+builder.Services.AddOptions<ToolsListCacheOptions>()
+    .Bind(builder.Configuration.GetSection(ToolsListCacheOptions.SectionName))
+    .PostConfigure(o => o.Validate());
 
 builder.Services.AddMemoryCache();
 
@@ -85,18 +90,100 @@ if (!noAuth)
         {
             jwt.Authority = oauth.Value.Authority;
             jwt.Audience = oauth.Value.Audience;
-        });
 
-    builder.Services.AddAuthorization();
+            // MCP requires the 401 to point at the protected-resource metadata document. Without
+            // this, clients can only guess the well-known location. Built from PublicBaseUrl so a
+            // Host header cannot inject the pointer; falls back to the request origin in local dev.
+            jwt.Events = new JwtBearerEvents
+            {
+                OnChallenge = context =>
+                {
+                    var baseUrl = GetServerBaseUrl(context.HttpContext, oauth.Value.PublicBaseUrl);
+
+                    var metadataUrl = $"{baseUrl}{ProtectedResourceMetadataBuilder.MetadataPath}/mcp";
+
+                    // Build a single WWW-Authenticate challenge and call HandleResponse() to stop
+                    // JwtBearerHandler appending its own bare "Bearer" afterward — two challenges
+                    // is HTTP-legal, but a client that reads only one of them (first or last) then
+                    // sees no resource_metadata pointer at all, which is the exact discovery
+                    // failure this task exists to close. Setting the status code ourselves is what
+                    // makes suppressing the default handler safe here; ResourceMetadataDiscoveryTests
+                    // pins the 401 independently, so the deploy.yml smoke contract stays covered.
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+
+                    var challenge = $"Bearer resource_metadata=\"{metadataUrl}\"";
+                    if (context.AuthenticateFailure is not null)
+                    {
+                        // A token was presented but failed validation — preserve that diagnostic
+                        // (the default handler would otherwise add it) so expired/invalid-token
+                        // issues stay debuggable in production. Never echo exception text or any
+                        // token content into the header; the description stays generic.
+                        challenge += ", error=\"invalid_token\", error_description=\"The access token is invalid or expired\"";
+                    }
+                    context.Response.Headers.WWWAuthenticate = challenge;
+
+                    context.HandleResponse();
+                    return Task.CompletedTask;
+                }
+            };
+        });
 }
+
+// Registered unconditionally, including in NoAuth dev mode. The MCP SDK fails *closed*: with an
+// authorisation attribute on a tool but no policy services (and no AddAuthorizationFilters() below),
+// both tools/list and tools/call fail — observed as JSON-RPC -32603 "An error occurred." Since every
+// tool carries [Authorize], guarding either of these on !noAuth leaves local development with a
+// server that can neither list nor call anything. Verified both ways round; the regression is pinned
+// by AuthorizationFilterToolsListTests.NoAuthDevMode_SeesEveryToolUnfiltered, which asserts the full
+// tool count and so fails whichever way this breaks. Discovery is still unfiltered in dev mode —
+// VitallyPermissionHandler short-circuits to success while
+// ToolAuthorizer.IsAuthorizationBypassedAsync() is true (RBAC off or NoAuth).
+//
+// Scoped, not singleton: VitallyPermissionHandler depends on the scoped ToolAuthorizer, and a
+// singleton capturing it would be a captive-dependency bug.
+builder.Services.AddScoped<IAuthorizationHandler, VitallyPermissionHandler>();
+
+// Policy *names* must be compile-time constants for [Authorize(Policy = "...")], so they are
+// literals here. The permission *values* carried by each requirement come from
+// ToolAuthorizationOptions, so a deployment that renames a permission stays consistent.
+var permissions = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName)
+    .Get<ToolAuthorizationOptions>() ?? new ToolAuthorizationOptions();
+// Validate() must be called here, not just relied upon via the IOptions PostConfigure above.
+// It trims the permission strings, and ToolAuthorizer receives the *validated* instance — so
+// without this a config value like "vitally:read " (trailing space) would reach the [Authorize]
+// policy requirement untrimmed while the SendAsync backstop compared against the trimmed form.
+// Discovery filtering and enforcement would then disagree, which is the one thing sharing
+// HasEffectivePermissionAsync is supposed to make impossible.
+permissions.Validate();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("vitally:read", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.ReadPermission)))
+    .AddPolicy("vitally:write", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.WritePermission)))
+    .AddPolicy("vitally:delete", p => p.AddRequirements(new VitallyPermissionRequirement(permissions.DeletePermission)));
 
 // Read the read-only flag from raw config at startup (same pattern as `noAuth` above) so the
 // destructive tools can be filtered out of tools/list for read-only deployments.
 var readOnlyMode = builder.Configuration.GetSection(ToolAuthorizationOptions.SectionName).GetValue<bool>("ReadOnly");
 
+// Bound separately for the list-tools filter below, which is constructed at composition time.
+var toolsListCache = builder.Configuration.GetSection(ToolsListCacheOptions.SectionName)
+    .Get<ToolsListCacheOptions>() ?? new ToolsListCacheOptions();
+toolsListCache.Validate();
+
 var mcpBuilder = builder.Services.AddMcpServer(options => options.ServerInstructions = VitallyServerInstructions.Text)
     .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
+
+// Applies [Authorize] on tools: filters tools/list per caller and rejects unauthorised calls
+// before they reach the handler. Not guarded on !noAuth — see the AddAuthorizationBuilder comment
+// above: with authorisation metadata on a tool and this call missing, tools/list fails outright, so
+// omitting it in dev mode breaks local development. NoAuth is handled inside the policy handler.
+//
+// The checkpoint this installs sits *outside* the whole call-tool filter pipeline (the SDK's
+// "alternate-result pipeline"), so a refused call never reaches the filters registered below —
+// including the error-surfacing one. That is why the denial is audited from
+// VitallyPermissionHandler rather than from a filter here.
+mcpBuilder.AddAuthorizationFilters();
 
 mcpBuilder.WithRequestFilters(filters =>
 {
@@ -114,6 +201,19 @@ mcpBuilder.WithRequestFilters(filters =>
             return ToolErrorResult.Build(ex);
         }
     });
+
+    // Advertise how long clients may cache tools/list (2026-07-28 spec). Private scope because
+    // the list is per-caller once authorisation filtering is on.
+    if (toolsListCache.Enabled)
+    {
+        filters.AddListToolsFilter(next => async (context, cancellationToken) =>
+        {
+            var result = await next(context, cancellationToken);
+            result.TimeToLive = toolsListCache.TimeToLive;
+            result.CacheScope = toolsListCache.Scope;
+            return result;
+        });
+    }
 
     // Read-only deployments: hide destructive tools from tools/list (enforcement is in ToolAuthorizer).
     if (readOnlyMode)
@@ -180,24 +280,19 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
         : publicBaseUrl;
 }
 
-// RFC 9728 — Protected Resource Metadata. Points clients at the authorization server,
-// which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
-// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints
-// for everything except registration_endpoint.
-app.MapGet("/.well-known/oauth-protected-resource", (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
-{
-    var o = oauth.Value;
-    var resource = string.IsNullOrWhiteSpace(o.Resource) ? o.Audience : o.Resource;
-    var asUrl = string.IsNullOrWhiteSpace(o.SharedClientId)
-        ? o.Authority?.TrimEnd('/')
-        : GetServerBaseUrl(ctx, o.PublicBaseUrl);
-    return Results.Json(new
-    {
-        resource,
-        authorization_servers = new[] { asUrl },
-        bearer_methods_supported = new[] { "header" }
-    });
-});
+// RFC 9728 — Protected Resource Metadata, served from both the canonical path and the
+// resource-path-suffixed variant (…/mcp) that RFC 9728 and the MCP SDK prefer. Clients probe
+// either, so serving both removes a discovery failure mode. Points clients at the authorization
+// server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
+// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints for
+// everything except registration_endpoint.
+var resourceMetadataHandler = (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
+    Results.Json(ProtectedResourceMetadataBuilder.Build(
+        oauth.Value,
+        GetServerBaseUrl(ctx, oauth.Value.PublicBaseUrl)));
+
+app.MapGet(ProtectedResourceMetadataBuilder.MetadataPath, resourceMetadataHandler);
+app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetadataHandler);
 
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
 // Auth0 still issues tokens (its endpoints are what `authorization_endpoint`/`token_endpoint`

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,7 +7,8 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class ProjectTemplatesTools
 {
-    [McpServerTool(Name = "List_project_templates", Title = "List project templates", ReadOnly = true, Destructive = false), Description("List Vitally project templates with optional pagination and filtering")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_project_templates", Title = "List project templates", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally project templates with optional pagination and filtering")]
     public static async Task<string> ListProjectTemplates(
         VitallyService vitallyService,
         [Description("Maximum number of project templates to return (default: 20, max: 100)")] int limit = 20,
@@ -25,7 +27,8 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourcesAsync("projectTemplates", limit, from, fields, sortBy, additionalParams, traits);
     }
 
-    [McpServerTool(Name = "Get_project_template", Title = "Get project template", ReadOnly = true, Destructive = false), Description("Get a single Vitally project template by ID")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "Get_project_template", Title = "Get project template", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally project template by ID")]
     public static async Task<string> GetProjectTemplate(
         VitallyService vitallyService,
         [Description("The project template ID")] string id,
@@ -35,7 +38,8 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourceByIdAsync("projectTemplates", id, fields, traits);
     }
 
-    [McpServerTool(Name = "List_project_categories", Title = "List project categories", ReadOnly = true, Destructive = false), Description("List Vitally project categories with optional pagination")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_project_categories", Title = "List project categories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally project categories with optional pagination")]
     public static async Task<string> ListProjectCategories(
         VitallyService vitallyService,
         [Description("Maximum number of project categories to return (default: 20, max: 100)")] int limit = 20,
@@ -46,7 +50,8 @@ public static class ProjectTemplatesTools
         return await vitallyService.GetResourcesAsync("projectCategories", limit, from, fields, sortBy);
     }
 
-    [McpServerTool(Name = "Get_project_category", Title = "Get project category", ReadOnly = true, Destructive = false), Description("Get a single Vitally project category by ID")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "Get_project_category", Title = "Get project category", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally project category by ID")]
     public static async Task<string> GetProjectCategory(
         VitallyService vitallyService,
         [Description("The project category ID")] string id,
