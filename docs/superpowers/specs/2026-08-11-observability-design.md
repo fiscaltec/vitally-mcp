@@ -11,9 +11,9 @@ reliably — but not for the reason one would assume.
 
 The application code is the healthy part. `AuditLogger` already emits structured, attributable,
 deliberately PII-free records at the two choke points that matter (`VitallyService.SendAsync` for
-actions and denials, `VitallyPermissionHandler` for tier-mismatch refusals), and MCP SDK 2.1.0 now
-ships OpenTelemetry instrumentation that yields per-tool usage counts and latency histograms for
-free.
+actions and denials, `VitallyPermissionHandler` for tier-mismatch refusals), and the MCP SDK ships
+OpenTelemetry instrumentation from 2.1.0 onward, which yields per-tool usage counts and latency
+histograms for free.
 
 The gaps are in the telemetry **platform** and in **coverage**:
 
@@ -41,7 +41,10 @@ Established with `az` as `dsearle.adm` against subscription `IT-Production`
 | AMPLS `vitally-prod-ampls-uksouth` | `ingestionAccessMode: PrivateOnly`, `queryAccessMode: PrivateOnly` |
 | VNet `vitally-prod-vnet-uksouth` | no peerings; subnets `snet-pe`, `snet-app`, `snet-pe-monitor`; NAT gateway egress only |
 
-SDK instrumentation confirmed by inspecting `ModelContextProtocol.Core` 2.1.0:
+SDK instrumentation confirmed by inspecting `ModelContextProtocol.Core` **2.1.0**, the version the
+repo was on when this was written. It has since moved to 2.2.0 — treat
+`VitallyMcp/VitallyMcp.csproj` as the authority, and **re-verify the names below against the current
+package before wiring anything to them**, since they were not re-checked after the bump:
 
 - ActivitySource **`ModelContextProtocol`**; Meter **`Experimental.ModelContextProtocol`**
 - Metrics: `mcp.server.operation.duration`, `mcp.server.session.duration` (and client equivalents)
