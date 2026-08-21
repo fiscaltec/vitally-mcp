@@ -83,7 +83,7 @@ Prerequisites: .NET 10 SDK.
 
 ```powershell
 # Restore + build + run the test suite
-dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+dotnet test VitallyMcp.sln -c Debug
 
 # Start the server in dev mode (no Auth0, no Key Vault — uses DevelopmentApiKey from env)
 $env:OAuth__NoAuth = "true"

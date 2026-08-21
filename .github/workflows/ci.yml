@@ -50,16 +50,20 @@ jobs:
       - name: Build (Release)
         run: dotnet build VitallyMcp.sln --configuration Release --no-restore --nologo
 
+      # xunit.v3 4.x runs on Microsoft.Testing.Platform, not VSTest (see global.json). On the
+      # .NET 10 SDK the MTP options are first-class `dotnet test` flags, so they take no `--`
+      # separator — and the VSTest-only `--nologo`, `--verbosity`, `--logger` and `--collect`
+      # are rejected outright rather than ignored.
       - name: Run tests with coverage
         run: >
           dotnet test VitallyMcp.sln
           --configuration Release
           --no-build
-          --nologo
-          --verbosity minimal
-          --logger "trx;LogFileName=test-results.trx"
-          --collect:"XPlat Code Coverage"
+          --report-trx
+          --report-trx-filename test-results.trx
           --results-directory TestResults
+          --coverage
+          --coverage-output-format cobertura
 
       - name: Upload test results
         if: always()
@@ -75,7 +79,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: TestResults/**/coverage.cobertura.xml
+          path: TestResults/**/*.cobertura.xml
           if-no-files-found: warn
           retention-days: 14
 
