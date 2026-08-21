@@ -629,10 +629,12 @@ public class VitallyService
         writer.WriteEndObject();
     }
 
+    // CodeQL raises cs/linq/missed-where on the foreach here and in WriteFilteredTraits below.
+    // That cannot be suppressed in source — SuppressMessage is a Roslyn mechanism and CodeQL never
+    // reads it, so an attribute naming a cs/* rule id suppresses nothing. Both are dismissed as
+    // won't-fix on the alerts themselves; reinstating attributes here would only look like it works.
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1860",
         Justification = "JsonElement.TryGetProperty uses an out parameter that LINQ Where cannot expose without a redundant second call. The explicit foreach is clearer and more efficient than the LINQ rewrite.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
-        Justification = "Same as above — TryGetProperty out parameter pattern.")]
     private static void WriteFilteredFields(Utf8JsonWriter writer, JsonElement element, string[] fields, string[]? requestedTraits)
     {
         foreach (var field in fields)
@@ -653,8 +655,6 @@ public class VitallyService
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "cs/linq/missed-where",
-        Justification = "JsonElement.TryGetProperty out parameter doesn't translate to LINQ Where without a redundant second call.")]
     private static void WriteFilteredTraits(Utf8JsonWriter writer, JsonElement traitsElement, string[] requestedTraits)
     {
         writer.WriteStartObject();
