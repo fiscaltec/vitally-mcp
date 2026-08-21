@@ -1,0 +1,70 @@
+name: Security
+description: Hardening, a vulnerability, or a compliance gap
+title: "fix: <short description>"
+labels: ["security", "status: ready"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If this is an exploitable vulnerability in the live service, do not file it here** —
+        raise it directly with the Infrastructure team first. This form is for hardening work,
+        already-mitigated findings, and compliance gaps.
+
+        Add a `priority:` label after creating (`status: ready` is preset).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What the weakness is. Quote real evidence — error output, a metadata document, an `az` query result — rather than asserting it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: exposure
+    attributes:
+      label: Exposure
+      description: What is reachable today, by whom, and what would have to be true for it to be exploited. State plainly whether production is affected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed fix
+      description: Concrete steps. Flag anything designed but not validated as such. Record rejected alternatives and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How to prove the fix works — ideally a test that fails before it and passes after.
+    validations:
+      required: false
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to create/modify
+      description: Explicit paths. Note that `VitallyService.SendAsync` is the RBAC and audit choke point and `OAuthOptions.IsRedirectUriAllowed` is the only guard against the OAuth proxy becoming an open redirector — changes near either need extra care.
+    validations:
+      required: false
+
+  - type: textarea
+    id: claude-md
+    attributes:
+      label: CLAUDE.md updates needed
+      description: Which sections of CLAUDE.md this invalidates, if any.
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Related issues (`#N`) and the relationship.
+    validations:
+      required: false

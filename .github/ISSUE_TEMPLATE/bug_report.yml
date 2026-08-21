@@ -1,7 +1,7 @@
 name: Bug report
 description: Something in the Vitally MCP server isn't working as expected.
 title: "fix: <short description>"
-labels: ["bug"]
+labels: ["bug", "status: ready"]
 
 body:
   - type: markdown
@@ -95,3 +95,21 @@ body:
     id: context
     attributes:
       label: Additional context
+
+  - type: textarea
+    id: verified
+    attributes:
+      label: Verified vs assumed
+      description: Which parts you confirmed against the code or a running server, and which are inference. Saves the next person re-checking your certainties, and catches the ones that were wrong.
+
+  - type: textarea
+    id: claude-md
+    attributes:
+      label: CLAUDE.md updates needed
+      description: Which sections of CLAUDE.md this invalidates, if any. Documentation drift is the most common source of wasted work in this repo.
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "Related issues (`#N`) and the relationship, e.g. \"blocked on #92\". If it depends on unresolved work, use `status: blocked` instead of `status: ready`."

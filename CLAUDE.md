@@ -145,6 +145,12 @@ and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test
 net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
 `mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
 
+**Forms** — `.github/ISSUE_TEMPLATE/` provides six: Bug, Feature, Tech debt, Security, Ops and
+Documentation. Each presets its type label plus `status: ready`, and its title with the matching
+Conventional-Commits prefix; add a `priority:` label after creating. Blank issues stay enabled for
+quick notes. Bug and Feature carry Vitally-specific fields (region, MCP client, server URL, a
+failure timestamp for correlating with Application Insights) — keep those if you edit the forms.
+
 **Writing issues** — aim for "detailed enough to implement without further context":
 
 - **Title** — conveys the scope at a glance without reading the body.
