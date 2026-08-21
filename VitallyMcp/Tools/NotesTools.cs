@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,7 +7,8 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class NotesTools
 {
-    [McpServerTool(Name = "List_notes", Title = "List notes", ReadOnly = true, Destructive = false), Description("List Vitally notes with optional pagination and field selection")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_notes", Title = "List notes", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes with optional pagination and field selection")]
     public static async Task<string> ListNotes(
         VitallyService vitallyService,
         [Description("Maximum number of notes to return (default: 20, max: 100). Ignored when a created date range is supplied.")] int limit = 20,
@@ -25,7 +27,8 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync("notes", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "List_notes_by_account", Title = "List notes by account", ReadOnly = true, Destructive = false), Description("List Vitally notes for a specific account")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_notes_by_account", Title = "List notes by account", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes for a specific account")]
     public static async Task<string> ListNotesByAccount(
         VitallyService vitallyService,
         [Description("The account ID")] string accountId,
@@ -38,7 +41,8 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync($"accounts/{accountId}/notes", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "List_notes_by_organization", Title = "List notes by organization", ReadOnly = true, Destructive = false), Description("List Vitally notes for a specific organisation")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_notes_by_organization", Title = "List notes by organization", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally notes for a specific organisation")]
     public static async Task<string> ListNotesByOrganization(
         VitallyService vitallyService,
         [Description("The organisation ID")] string organizationId,
@@ -51,7 +55,8 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync($"organizations/{organizationId}/notes", limit, from, fields, sortBy, null, traits);
     }
 
-    [McpServerTool(Name = "List_note_categories", Title = "List note categories", ReadOnly = true, Destructive = false), Description("List Vitally note categories with optional pagination")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "List_note_categories", Title = "List note categories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("List Vitally note categories with optional pagination")]
     public static async Task<string> ListNoteCategories(
         VitallyService vitallyService,
         [Description("Maximum number of note categories to return (default: 20, max: 100)")] int limit = 20,
@@ -62,7 +67,8 @@ public static class NotesTools
         return await vitallyService.GetResourcesAsync("noteCategories", limit, from, fields, sortBy, null, null);
     }
 
-    [McpServerTool(Name = "Get_note", Title = "Get note", ReadOnly = true, Destructive = false), Description("Get a single Vitally note by ID")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "Get_note", Title = "Get note", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Get a single Vitally note by ID")]
     public static async Task<string> GetNote(
         VitallyService vitallyService,
         [Description("The note ID")] string id,
@@ -72,7 +78,8 @@ public static class NotesTools
         return await vitallyService.GetResourceByIdAsync("notes", id, fields, traits);
     }
 
-    [McpServerTool(Name = "Create_note", Title = "Create note", ReadOnly = false, Destructive = false), Description("Create a new Vitally note")]
+    [Authorize(Policy = "vitally:write")]
+    [McpServerTool(Name = "Create_note", Title = "Create note", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description("Create a new Vitally note")]
     public static async Task<string> CreateNote(
         VitallyService vitallyService,
         [Description("JSON body containing note data. Required fields: accountId or organizationId (string), note (string, may include HTML), noteDate (timestamp). Optional: subject, traits, tags (array)")] string jsonBody)
@@ -80,7 +87,8 @@ public static class NotesTools
         return await vitallyService.CreateResourceAsync("notes", jsonBody);
     }
 
-    [McpServerTool(Name = "Update_note", Title = "Update note", ReadOnly = false, Destructive = true), Description("Update an existing Vitally note")]
+    [Authorize(Policy = "vitally:write")]
+    [McpServerTool(Name = "Update_note", Title = "Update note", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Update an existing Vitally note")]
     public static async Task<string> UpdateNote(
         VitallyService vitallyService,
         [Description("The note ID")] string id,
@@ -89,7 +97,8 @@ public static class NotesTools
         return await vitallyService.UpdateResourceAsync("notes", id, jsonBody);
     }
 
-    [McpServerTool(Name = "Delete_note", Title = "Delete note", ReadOnly = false, Destructive = true), Description("Delete a Vitally note")]
+    [Authorize(Policy = "vitally:delete")]
+    [McpServerTool(Name = "Delete_note", Title = "Delete note", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false), Description("Delete a Vitally note")]
     public static async Task<string> DeleteNote(
         VitallyService vitallyService,
         [Description("The note ID")] string id)

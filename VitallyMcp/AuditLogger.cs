@@ -60,12 +60,41 @@ public class AuditLogger
             ResolveUserId(), method.Method, ResourcePath(url));
     }
 
+    /// <summary>
+    /// Records a tool call refused on the caller's permission tier. Needed because the MCP SDK's
+    /// authorisation checkpoint rejects an out-of-tier <c>tools/call</c> <b>before</b> the handler
+    /// runs, so <see cref="VitallyService"/> — and therefore <see cref="LogDenied"/> — is never
+    /// reached. Without this, tier-mismatch denials (the event class most worth auditing) would go
+    /// unrecorded.
+    ///
+    /// <para>
+    /// Called from <see cref="VitallyPermissionHandler"/>, which passes the policy's own principal
+    /// rather than relying on the ambient HTTP context. Records only the opaque subject id, the tool
+    /// name and the permission that was required — never the caller's email, and never the call
+    /// arguments (they can carry customer PII).
+    /// </para>
+    /// </summary>
+    public void LogToolCallDenied(ClaimsPrincipal? user, string? toolName, string requiredPermission)
+    {
+        if (!_options.Enabled)
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission})",
+            ResolveUserId(user), toolName ?? "unknown", requiredPermission);
+    }
+
     // Resolve the stable, attributable actor identity: the Entra subject id. This is an opaque
     // object id (resolvable to a person in Entra) rather than the user's email, so the audit trail
     // stays fully attributable without scattering personal data through telemetry.
-    private string ResolveUserId()
+    private string ResolveUserId() => ResolveUserId(_httpContextAccessor?.HttpContext?.User);
+
+    // Same rule applied to an explicitly supplied principal, so callers that already hold one (the
+    // authorisation policy handler) attribute identically to those relying on the ambient context.
+    private static string ResolveUserId(ClaimsPrincipal? user)
     {
-        var user = _httpContextAccessor?.HttpContext?.User;
         if (user?.Identity?.IsAuthenticated != true)
         {
             return "anonymous";

@@ -1,0 +1,55 @@
+name: Content / copy
+description: Wording of tool descriptions, titles, or server instructions
+title: "docs: <short description>"
+labels: ["content", "status: ready"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For the copy an **LLM** reads, not documentation for humans — tool `[Description]` and
+        `Title` values, and `VitallyServerInstructions.Text`. This copy directly shapes which tool a
+        model picks and how it calls it, so misleading wording is a behavioural defect rather than a
+        cosmetic one. For human-facing docs use the Documentation form instead.
+
+        Add a `priority:` label after creating (`status: ready` is preset).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What & where
+      description: The current wording and where it lives — the tool name, or the section of `VitallyServerInstructions.Text`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed effect
+      description: What a model actually did as a result — wrong tool picked, wrong parameter, a capability ignored. This is what distinguishes a real problem from a preference.
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed wording
+      description: The replacement text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to modify
+      description: "Explicit paths, e.g. `VitallyMcp/Tools/AccountsTools.cs`, `VitallyMcp/VitallyServerInstructions.cs`. Never change a tool's `Name` — renaming a tool breaks live client configurations."
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Related issues (`#N`) and the relationship — or leave blank.
+    validations:
+      required: false

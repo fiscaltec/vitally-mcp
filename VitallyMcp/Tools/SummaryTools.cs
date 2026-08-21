@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -31,7 +32,8 @@ public static class SummaryTools
         "vitally.custom.lastNpsFeedbackRollup,sfdc.Customer_Health_Score__c," +
         "sfdc.Health_Score_Status__c,sfdc.Renew_Date__c,vitally.custom.mostRecentRenewalDate";
 
-    [McpServerTool(Name = "Get_organization_summary", Title = "Get organization summary", ReadOnly = true, Destructive = false),
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "Get_organization_summary", Title = "Get organization summary", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false),
      Description("One-call customer summary for an organisation: the organisation with its curated rollup traits (support-ticket / product-feedback / open-goal counts, NPS, health, renewal), plus its open goals and product-feedback custom-object instances. Collapses the ~10+ calls a full customer review otherwise needs. Returns { organization, goals, productFeedback }; goals/productFeedback are each { results: [...] } or { error: ... } if that part could not be fetched.")]
     public static async Task<string> GetOrganizationSummary(
         VitallyService vitallyService,

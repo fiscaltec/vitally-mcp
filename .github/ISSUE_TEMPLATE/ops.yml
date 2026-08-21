@@ -1,0 +1,89 @@
+name: Ops / infrastructure
+description: Azure, deployment, configuration, or Auth0 work
+title: "chore: <short description>"
+labels: ["ops", "status: ready"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For Azure, deployment, config or Auth0 work. Add a `priority:` label after creating
+        (`status: ready` is preset).
+
+        Two standing constraints worth knowing before you write the steps:
+
+        - **Never run `terraform apply`.** `infra/terraform/` is back-filled documentation of
+          record; the live resources are managed with `az cli`. A plan against shared state would
+          try to reconcile production drift as a side effect of whatever you were doing.
+        - **There is one live Vitally tenant and no sandbox.** Anything touching Vitally data must
+          keep `Authorization__ReadOnly=true`, and `vitally-shared` in
+          `vitally-prod-kv-uksouth` is the key production reads — never overwrite it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs setting up or changing, and why (1–3 sentences).
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current state
+      description: What the live configuration is now, with the `az` query that establishes it. Verified values, not recollection — Azure state drifts and memory is worse.
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: |
+        The `az` commands or portal steps. Make each code block independently runnable by
+        redeclaring its variables — work is often interrupted by portal steps in between.
+        In Git Bash, any command taking a `/subscriptions/...` resource id needs
+        `export MSYS_NO_PATHCONV=1` first, or Azure returns a misleading `MissingSubscription`.
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: wire-up
+    attributes:
+      label: Wire-up
+      description: Config, env vars, secrets, or repo files needing updates — including the Terraform back-fill (import block, not apply).
+    validations:
+      required: false
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How to confirm it worked, and how to confirm production is unaffected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: teardown
+    attributes:
+      label: Teardown
+      description: If this creates temporary resources, what must be removed and in what order — role assignments before identities, and any Auth0 objects. Say so if not applicable.
+    validations:
+      required: false
+
+  - type: textarea
+    id: claude-md
+    attributes:
+      label: CLAUDE.md updates needed
+      description: Which sections of CLAUDE.md this invalidates, if any — usually Deployment or Configuration.
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "Related issues (`#N`) and the relationship. If it depends on unresolved work, use `status: blocked`."
+    validations:
+      required: false

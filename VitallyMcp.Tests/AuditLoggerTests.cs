@@ -9,21 +9,6 @@ namespace VitallyMcp.Tests;
 
 public class AuditLoggerTests
 {
-    private sealed class CapturingLogger<T> : ILogger<T>
-    {
-        public List<(LogLevel Level, string Message)> Entries { get; } = new();
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception)));
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-            public void Dispose() { }
-        }
-    }
-
     private static (AuditLogger audit, CapturingLogger<AuditLogger> logger) Build(
         bool enabled = true,
         bool includeReads = false,
@@ -104,6 +89,49 @@ public class AuditLoggerTests
         message.Should().Contain("auth0|999", "the stable subject id is the audit actor key");
         message.Should().NotContain("bob@fiscaltec.com", "email must not be written to the audit log");
         message.Should().Contain("DENIED");
+    }
+
+    [Fact]
+    public void LogToolCallDenied_RecordsSubjectToolAndRequiredPermission()
+    {
+        // No HttpContext at all: the principal comes from the authorisation policy, not the ambient
+        // context, which is the whole reason this overload takes one.
+        var (audit, logger) = Build(user: null);
+
+        audit.LogToolCallDenied(
+            AuthenticatedUser("carol@fiscaltec.com", "waad|entra|abc-123"),
+            "Create_organization",
+            "vitally:write");
+
+        logger.Entries.Should().ContainSingle();
+        var (level, message) = logger.Entries[0];
+        level.Should().Be(LogLevel.Warning);
+        message.Should().Contain("waad|entra|abc-123", "the stable subject id is the audit actor key");
+        message.Should().NotContain("carol@fiscaltec.com", "email must not be written to the audit log");
+        message.Should().Contain("DENIED");
+        message.Should().Contain("Create_organization");
+        message.Should().Contain("vitally:write");
+    }
+
+    [Fact]
+    public void LogToolCallDenied_FallsBackToAnonymous_ForUnauthenticatedPrincipal()
+    {
+        var (audit, logger) = Build(user: null);
+
+        audit.LogToolCallDenied(new ClaimsPrincipal(new ClaimsIdentity()), "Delete_account", "vitally:delete");
+
+        logger.Entries.Should().ContainSingle();
+        logger.Entries[0].Message.Should().Contain("anonymous");
+    }
+
+    [Fact]
+    public void LogToolCallDenied_NoOp_WhenDisabled()
+    {
+        var (audit, logger) = Build(enabled: false);
+
+        audit.LogToolCallDenied(AuthenticatedUser(null, "auth0|123"), "Delete_account", "vitally:delete");
+
+        logger.Entries.Should().BeEmpty();
     }
 
     [Fact]
