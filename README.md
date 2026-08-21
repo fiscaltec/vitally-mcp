@@ -212,6 +212,17 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
 - The OAuth proxy validates every client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus the implicit RFC 8252 loopback rule). Without this check, an attacker could exfiltrate authorisation codes via the proxy's `/oauth/callback` reflector; with it, the proxy refuses anything that isn't a loopback URI or an explicitly-allowlisted hosted callback.
 
+### Known limitation: strict RFC 8414 clients
+
+The OAuth proxy serves authorisation-server metadata from this server's own origin while declaring
+Auth0's `issuer`. RFC 8414 §3.3 requires those to match, so a client enforcing it — including **MCP
+Inspector** — aborts before dynamic client registration and cannot connect. Claude Desktop and Claude
+Code do not enforce it, which is why they work.
+
+Everything up to that point is correct: the 401 challenge, the `resource_metadata` pointer and both
+metadata documents. Fixing it properly collides with RFC 9207 `iss` validation and is tracked
+separately; see the *Known limitation* section in `CLAUDE.md` for the analysis and the proposed shape.
+
 ## Licence
 
 Proprietary — © FISCAL Technologies Ltd. All rights reserved.

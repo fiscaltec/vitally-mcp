@@ -1,0 +1,5 @@
+# Blank issues stay enabled for quick notes; the forms below give structure for the common types.
+# See CLAUDE.md → "GitHub issues (issue-driven work)" for the writing standards, the label set and
+# the lifecycle. Each form presets its type label plus `status: ready` — add a `priority:` label
+# after creating.
+blank_issues_enabled: true

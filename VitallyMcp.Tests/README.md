@@ -4,7 +4,7 @@ Automated test suite for the Vitally MCP server.
 
 ## Coverage
 
-**387 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
+**388 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
 test host), running fully in-process — no live API calls, no real Auth0
 tenant, no Key Vault.
 
@@ -43,6 +43,14 @@ tenant, no Key Vault.
 | `Tools/MeetingsToolsTests` | Full CRUD + add / remove participant + 4 transcript methods + `archived` filter + traits |
 | `Tools/CustomTraitsToolsTests` | List custom traits for `accounts` and `customObjects` models |
 | `Tools/SurveysToolsTests` | List responses + get response + get question (raw `{data}` envelope passthrough) |
+| `ToolAnnotationCoverageTests` | Reflection sweep over every `[McpServerTool]`: all four annotation hints explicitly set, values matching the name-prefix rules, and a prefix-independent check that `ReadOnly == true` implies `Destructive == false` (and vice versa). Uses `CustomAttributeData.NamedArguments` rather than the attribute instance, because the four properties are non-nullable `bool` — a defaulted value is otherwise indistinguishable from an explicit one. |
+| `ToolAuthorizePolicyCoverageTests` | Every tool carries exactly one `[Authorize]` whose policy matches its annotations, plus the exact 56 / 25 / 12 read / write / delete distribution. Pairs with the count assertion so neither can pass vacuously. |
+| `AuthorizationFilterToolsListTests` | The load-bearing authorisation suite. Per-tier `tools/list` filtering (exact 56 / 81 / 93 partition, subset relations, and the two off-prefix tools by name), the no-permissions caller seeing nothing, NoAuth dev mode seeing all 93 unfiltered, a reader's write call being refused, and exactly one audit-deny record per refused call. Also pins that whitespace in a configured permission cannot desync discovery from enforcement. |
+| `VitallyPermissionHandlerTests` | The ASP.NET Core authorisation handler: succeeds when the caller holds the permission, does not when they lack it, and short-circuits to success when authorisation is bypassed (RBAC off or `NoAuth`) so local dev is never filtered to an empty list. |
+| `ResourceMetadataDiscoveryTests` | The 401 challenge carries exactly **one** `WWW-Authenticate` value with a `resource_metadata` pointer, adds `error="invalid_token"` when a token was presented, and keeps the status at exactly 401 — which `.github/workflows/deploy.yml` smoke-tests. Both well-known metadata paths serve, asserted with exact collection counts rather than `Contain`, since `ProtectedResourceMetadata` ships `BearerMethodsSupported` pre-populated and an append would silently duplicate it. |
+| `ToolsListCachingTests` | Asserts the serialised wire form of the cache hints — `ttlMs` as integer milliseconds and `cacheScope` as `"private"` — deliberately on the raw JSON rather than the SDK's CLR properties, so an SDK rename is caught here rather than by clients. |
+| `IntegrationTestCollection` | Not a test — the xUnit collection definition serialising every class that mutates process-wide environment variables. See the note above; membership is mandatory for such classes. |
+| `CapturingLogger` / `CapturingLoggerProvider` | Test helper capturing `ILogger` output so audit assertions can be made against what `AuditLogger` actually recorded. |
 
 ## Framework & dependencies
 

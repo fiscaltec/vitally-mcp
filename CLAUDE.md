@@ -100,6 +100,81 @@ FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. 
 
 To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
 
+## GitHub issues (issue-driven work)
+
+Track non-trivial work as GitHub issues via the `gh` CLI. Trivial one-off changes don't need an
+issue — use judgement. This mirrors the flow used in `searledan/rosetechnologies.co.uk`,
+`searledan/dansearle.co.uk` and `searledan/spendy`; the labels below were created here to match.
+
+**Why it matters here:** each issue is normally picked up in a *fresh* session, often in a worktree or
+via a subagent. The issue body and this file are the only context that new session gets, so an issue
+that assumes prior conversation is an issue that cannot be worked.
+
+**Labels** — one of each per issue:
+
+- **type** (categorises the issue — *distinct* from the Conventional-Commits type in the PR title):
+  `feature`, `bug`, `tech-debt`, `security`, `ux`, `content`, `ops` (infra/deployment/config),
+  `documentation`
+- **priority:** `priority: high` / `priority: medium` / `priority: low`
+- **status** (progresses `ready` → `in-progress` → `complete`; `blocked` is a side-state):
+  `status: ready` (defined enough to start) / `status: in-progress` / `status: blocked` (waiting on a
+  dependency) / `status: complete` (work merged)
+
+**Lifecycle** — one `status:` label at a time:
+
+1. Pick a `status: ready` issue respecting priority, or create one with type + priority +
+   `status: ready`.
+2. Flip to in-progress:
+   `gh issue edit <n> --remove-label "status: ready" --add-label "status: in-progress"`.
+3. Branch `<cc-type>/<short-description>`, where `<cc-type>` is the **Conventional-Commits** type used
+   in the PR title — not the issue's type label. They map loosely: `feature` → `feat/…`,
+   `documentation`/`content` → `docs/…`, `tech-debt` → `chore/…` or `refactor/…`, `bug` → `fix/…`,
+   `ops` → `ci/…` or `chore/…`.
+4. Reference `#<n>` in commits where relevant.
+5. Open the PR with **`Closes #<n>`**. `.github/workflows/pr-title.yml` enforces the
+   Conventional-Commits prefix on the PR *title*, and `main` takes squash merges — so the PR title
+   becomes the commit subject on `main`. On squash-merge the issue auto-closes; flip it to
+   `status: complete` then, so a finished issue ends up *closed + `status: complete`*, distinguishable
+   from one closed as won't-fix or duplicate.
+6. If work stalls, swap the status for `status: blocked` and comment what's blocking.
+
+**What actually gates a merge** (the `Secure branches` ruleset, verified 2026-08-18):
+`required_approving_review_count` is **0** — no approving review is needed. What is required is all
+review threads resolved, the branch up to date with `main` (`strict_required_status_checks_policy`),
+and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test (ubuntu-latest,
+net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
+`mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
+
+**Forms** — `.github/ISSUE_TEMPLATE/` provides seven, one per type label except `ux`: `bug.yml`,
+`feature.yml`, `tech-debt.yml`, `security.yml`, `ops.yml`, `documentation.yml`, `content.yml`.
+Filenames match the label they preset, and the shared four match the sibling repos. Each form
+presets its type label plus `status: ready`, and its title with the matching Conventional-Commits
+prefix; add a `priority:` label after creating. Blank issues stay enabled for quick notes and for
+`ux`. Bug and Feature carry Vitally-specific fields (region, MCP client, server URL, a failure
+timestamp for correlating with Application Insights) — keep those if you edit the forms.
+
+`documentation` and `content` both map to `docs/…` branches but cover different audiences:
+**Documentation** is prose for humans (`CLAUDE.md`, `README.md`, `docs/`), whereas **Content** is the
+copy an *LLM* reads — tool `[Description]` and `Title` values and `VitallyServerInstructions.Text`.
+Content wording changes model behaviour (which tool gets picked, how it's called), so they are
+defects rather than cosmetics; the form asks for the observed effect to keep that distinction sharp.
+
+**Writing issues** — aim for "detailed enough to implement without further context":
+
+- **Title** — conveys the scope at a glance without reading the body.
+- **Lead paragraph** — what and why, plus how it was discovered if that matters.
+- **`## Problem`** (or `## Description` + `## Current state / problem`) — evidence, not assertion.
+  Quote real error output, cite file paths and line numbers, and say what was *verified* versus
+  *assumed*.
+- **`## Proposed fix` / `## Proposed solution`** — concrete numbered steps. Record rejected
+  alternatives and why, so the next session doesn't re-litigate them.
+- **`## Files to create/modify`** — explicit paths.
+- **`## CLAUDE.md updates needed`** — which sections of this file the change invalidates. Easy to
+  forget and the most common source of drift.
+- **`## Dependencies`** — related issues as `#N` with the relationship ("blocked on #92", "related to
+  #90"); if it depends on unresolved work, use `status: blocked`.
+- Prefer tables for structured data. Flag anything designed-but-unvalidated as such, explicitly.
+
 ## Architecture
 
 ### Hosting and transport (Program.cs)
@@ -110,6 +185,11 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - Binds `OAuthOptions` from `OAuth:` (provider-agnostic — works with Auth0, Entra direct, Keycloak, etc.).
 - Conditionally registers `SecretClient` (Azure Key Vault) as singleton when `Vitally:KeyVaultUri` is set; uses `DefaultAzureCredential` so it works with managed identity in production and `az login` locally.
 - `IMemoryCache` registered for the API key cache and OAuth proxy state cache.
+- Authorisation policy plumbing: `VitallyPermissionRequirement.cs` carries one `vitally:*` permission,
+  and `VitallyPermissionHandler.cs` evaluates it by delegating to `ToolAuthorizer`, so tool discovery
+  filtering and the `VitallyService.SendAsync` backstop share one resolution path.
+- `ToolsListCacheOptions.cs` binds the `ToolsListCache:` section for the `tools/list` cache hints.
+- `ProtectedResourceMetadataBuilder.cs` builds the RFC 9728 document served from both well-known paths.
 - `VitallyApiKeyProvider` registered scoped.
 - `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
 - `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
@@ -125,6 +205,49 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 - The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it.
+
+
+### Known limitation: strict RFC 8414 clients cannot complete the OAuth flow
+
+The proxy serves RFC 8414 authorisation-server metadata **from our own origin** while declaring
+**Auth0's** issuer:
+
+- served from `https://vitally.fiscaltec.com/.well-known/oauth-authorization-server`
+- declares `"issuer": "https://fiscal-it.uk.auth0.com/"`
+
+RFC 8414 §3.3 requires the issuer to correspond to the URL the document was fetched from — an
+anti-mix-up control, so a metadata document can only ever speak for itself. The TypeScript MCP SDK
+enforces it and aborts:
+
+```
+Issuer mismatch in authorization server metadata (RFC 8414 §3.3):
+expected "<our origin>/", received "https://fiscal-it.uk.auth0.com/"
+```
+
+**So MCP Inspector cannot connect to this server — production included.** Verified against both a
+local container and a live staging deployment on 2026-08-12. Everything before that point works: the
+401 challenge, the `resource_metadata` pointer, the protected-resource document (parsed successfully)
+and the AS metadata fetch. It halts only at issuer validation, before DCR.
+
+**Why production works anyway:** Claude's clients do not enforce §3.3, so they take our endpoints and
+proceed. This is a latent problem rather than an outage — but the 2026-07-28 revision tightens OAuth,
+so a client that starts enforcing it would break every user at once.
+
+**Why it is not a one-line fix.** Declaring our own origin as `issuer` satisfies §3.3 but collides
+with RFC 9207, where the client checks the `iss` returned on the authorization response — Auth0
+returns its own. Any fix must reconcile both, or stop proxying `/oauth/authorize` and `/oauth/token`,
+which would give up the DCR shim that exists to converge every client on one pre-registered app.
+
+The likely shape (designed, **not** validated): make the proxy a complete authorisation-server façade
+— declare our own origin as `issuer`, have `/oauth/callback` **inject** `iss` set to our origin
+(injecting unconditionally is more robust than rewriting, since whether Auth0 sends `iss` depends on
+tenant config), and advertise `authorization_response_iss_parameter_supported: true`. Check first
+whether any client validates an access token's `iss` against the metadata `issuer`; MCP clients treat
+access tokens as opaque, so this is probably safe, but verify rather than assume. Our own JwtBearer
+validates against Auth0's `Authority` internally and is unaffected either way.
+
+Fixing this would also make **MCP Inspector a usable test client**, which materially cheapens future
+validation work — the practical argument, rather than RFC pedantry.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 

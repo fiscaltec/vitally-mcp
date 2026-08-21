@@ -1,0 +1,51 @@
+name: Tech debt
+description: Refactoring, dependency upgrades, test gaps, or cleanup
+title: "chore: <short description>"
+labels: ["tech-debt", "status: ready"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For work that improves the codebase without changing behaviour for users.
+        Add a `priority:` label after creating (`status: ready` is preset).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong now, and what it costs. Cite file paths and line numbers rather than describing them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed fix
+      description: Concrete steps. Record any alternative you rejected and why, so the next session does not re-litigate it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to create/modify
+      description: Explicit paths.
+    validations:
+      required: false
+
+  - type: textarea
+    id: claude-md
+    attributes:
+      label: CLAUDE.md updates needed
+      description: Which sections of CLAUDE.md this invalidates, if any.
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "Related issues (`#N`) and the relationship. If it depends on unresolved work, use `status: blocked`."
+    validations:
+      required: false

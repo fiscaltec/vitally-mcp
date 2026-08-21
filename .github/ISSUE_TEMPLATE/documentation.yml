@@ -1,0 +1,56 @@
+name: Documentation
+description: Corrections or additions to CLAUDE.md, README, ACCESS, runbooks
+title: "docs: <short description>"
+labels: ["documentation", "status: ready"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation here is load-bearing: issues are normally picked up in a fresh session, and
+        CLAUDE.md plus the issue body are the only context that session gets. A stale doc means the
+        next session starts from a false picture.
+
+        Add a `priority:` label after creating (`status: ready` is preset).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What is wrong or missing
+      description: The specific claim that is inaccurate, or the thing that is undocumented. Quote the current text and give the file and line.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reality
+    attributes:
+      label: What is actually true
+      description: The correct position, and **how you established it** — the command or file you checked. Claims verified by re-reading prose are how drift persists.
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to modify
+      description: |
+        Explicit paths. The usual candidates: `CLAUDE.md`, `README.md`, `ACCESS.md` (user-facing),
+        `CHANGELOG.md`, `VitallyMcp.Tests/README.md`, `docs/runbooks/*`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: historical
+    attributes:
+      label: Anything that should NOT change
+      description: References that are correctly historical — released CHANGELOG entries, or a runbook recording what a past run did. Blanket search-and-replace introduces errors while fixing them.
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Related issues (`#N`) and the relationship — often "documents the change in #N".
+    validations:
+      required: false
