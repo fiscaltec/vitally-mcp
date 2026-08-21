@@ -100,6 +100,67 @@ FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. 
 
 To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
 
+## GitHub issues (issue-driven work)
+
+Track non-trivial work as GitHub issues via the `gh` CLI. Trivial one-off changes don't need an
+issue — use judgement. This mirrors the flow used in `searledan/rosetechnologies.co.uk`,
+`searledan/dansearle.co.uk` and `searledan/spendy`; the labels below were created here to match.
+
+**Why it matters here:** each issue is normally picked up in a *fresh* session, often in a worktree or
+via a subagent. The issue body and this file are the only context that new session gets, so an issue
+that assumes prior conversation is an issue that cannot be worked.
+
+**Labels** — one of each per issue:
+
+- **type** (categorises the issue — *distinct* from the Conventional-Commits type in the PR title):
+  `feature`, `bug`, `tech-debt`, `security`, `ux`, `content`, `ops` (infra/deployment/config),
+  `documentation`
+- **priority:** `priority: high` / `priority: medium` / `priority: low`
+- **status** (progresses `ready` → `in-progress` → `complete`; `blocked` is a side-state):
+  `status: ready` (defined enough to start) / `status: in-progress` / `status: blocked` (waiting on a
+  dependency) / `status: complete` (work merged)
+
+**Lifecycle** — one `status:` label at a time:
+
+1. Pick a `status: ready` issue respecting priority, or create one with type + priority +
+   `status: ready`.
+2. Flip to in-progress:
+   `gh issue edit <n> --remove-label "status: ready" --add-label "status: in-progress"`.
+3. Branch `<cc-type>/<short-description>`, where `<cc-type>` is the **Conventional-Commits** type used
+   in the PR title — not the issue's type label. They map loosely: `feature` → `feat/…`,
+   `documentation`/`content` → `docs/…`, `tech-debt` → `chore/…` or `refactor/…`, `bug` → `fix/…`,
+   `ops` → `ci/…` or `chore/…`.
+4. Reference `#<n>` in commits where relevant.
+5. Open the PR with **`Closes #<n>`**. `.github/workflows/pr-title.yml` enforces the
+   Conventional-Commits prefix on the PR *title*, and `main` takes squash merges — so the PR title
+   becomes the commit subject on `main`. On squash-merge the issue auto-closes; flip it to
+   `status: complete` then, so a finished issue ends up *closed + `status: complete`*, distinguishable
+   from one closed as won't-fix or duplicate.
+6. If work stalls, swap the status for `status: blocked` and comment what's blocking.
+
+**What actually gates a merge** (the `Secure branches` ruleset, verified 2026-08-18):
+`required_approving_review_count` is **0** — no approving review is needed. What is required is all
+review threads resolved, the branch up to date with `main` (`strict_required_status_checks_policy`),
+and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test (ubuntu-latest,
+net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
+`mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
+
+**Writing issues** — aim for "detailed enough to implement without further context":
+
+- **Title** — conveys the scope at a glance without reading the body.
+- **Lead paragraph** — what and why, plus how it was discovered if that matters.
+- **`## Problem`** (or `## Description` + `## Current state / problem`) — evidence, not assertion.
+  Quote real error output, cite file paths and line numbers, and say what was *verified* versus
+  *assumed*.
+- **`## Proposed fix` / `## Proposed solution`** — concrete numbered steps. Record rejected
+  alternatives and why, so the next session doesn't re-litigate them.
+- **`## Files to create/modify`** — explicit paths.
+- **`## CLAUDE.md updates needed`** — which sections of this file the change invalidates. Easy to
+  forget and the most common source of drift.
+- **`## Dependencies`** — related issues as `#N` with the relationship ("blocked on #92", "related to
+  #90"); if it depends on unresolved work, use `status: blocked`.
+- Prefer tables for structured data. Flag anything designed-but-unvalidated as such, explicitly.
+
 ## Architecture
 
 ### Hosting and transport (Program.cs)
