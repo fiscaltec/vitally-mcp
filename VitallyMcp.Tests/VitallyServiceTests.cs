@@ -1268,8 +1268,6 @@ public class VitallyServiceTests
     // org get = single object; customObjects list = {results:[...]}; instance search = BARE ARRAY.
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
         Justification = "Test mock — HttpResponseMessage lifetime is bounded by the test run.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
-        Justification = "Test mock — owned by the Moq setup, bounded by the test method.")]
     private static (HttpClient client, Mock<HttpMessageHandler> handler) RoutedClient(
         IReadOnlyList<(string urlContains, HttpStatusCode status, string body)> routes)
     {
