@@ -227,6 +227,30 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
     }
 
     [Fact]
+    public async Task Callback_ReplacesAnUpstreamIssRegardlessOfItsCasing()
+    {
+        // IQueryCollection lookups are case-insensitive but enumeration preserves the casing as
+        // parsed, so an exact-match skip would forward a differently-cased `ISS` alongside ours.
+        // A conformant client would never read it — OAuth parameter names are case-sensitive, so
+        // only the lowercase `iss` is ever compared — but leaving it there means the next reader
+        // has to derive that for themselves before concluding the redirect is safe.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var location = await AuthorizeThenCallbackAsync(client, state: "iss-mixed-case",
+            upstreamExtras: "&ISS=" + Uri.EscapeDataString("https://example.auth0.com/"));
+
+        var issLike = QueryHelpers.ParseQuery(location.Query)
+            .Where(kv => string.Equals(kv.Key, "iss", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(kv => kv.Value.ToArray())
+            .ToArray();
+
+        issLike.Should().BeEquivalentTo(new[] { "http://localhost" });
+    }
+
+    [Fact]
     public async Task Callback_PreservesTheAuthorizationCodeAndState()
     {
         // Guards the iss handling against over-reach: rewriting the query string must not disturb

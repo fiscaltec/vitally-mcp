@@ -416,7 +416,10 @@ app.MapGet("/oauth/callback", (HttpContext ctx, IOptions<OAuthOptions> oauth, IM
         // would leave the client two values to choose between. Clients compare a *present* `iss`
         // against the metadata issuer even when the parameter is not advertised, so both shapes
         // fail rather than degrade.
-        if (kv.Key == "iss") continue;
+        // OrdinalIgnoreCase, not ==: IQueryCollection lookups are case-insensitive but enumeration
+        // yields keys as they were parsed, so an exact match would forward a differently-cased
+        // `ISS` alongside the one we append below.
+        if (string.Equals(kv.Key, "iss", StringComparison.OrdinalIgnoreCase)) continue;
         foreach (var v in kv.Value)
         {
             sb.Append(Uri.EscapeDataString(kv.Key)).Append('=').Append(Uri.EscapeDataString(v ?? string.Empty)).Append('&');
