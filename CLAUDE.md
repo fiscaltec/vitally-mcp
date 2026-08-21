@@ -145,11 +145,19 @@ and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test
 net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
 `mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
 
-**Forms** — `.github/ISSUE_TEMPLATE/` provides six: Bug, Feature, Tech debt, Security, Ops and
-Documentation. Each presets its type label plus `status: ready`, and its title with the matching
-Conventional-Commits prefix; add a `priority:` label after creating. Blank issues stay enabled for
-quick notes. Bug and Feature carry Vitally-specific fields (region, MCP client, server URL, a
-failure timestamp for correlating with Application Insights) — keep those if you edit the forms.
+**Forms** — `.github/ISSUE_TEMPLATE/` provides seven, one per type label except `ux`: `bug.yml`,
+`feature.yml`, `tech-debt.yml`, `security.yml`, `ops.yml`, `documentation.yml`, `content.yml`.
+Filenames match the label they preset, and the shared four match the sibling repos. Each form
+presets its type label plus `status: ready`, and its title with the matching Conventional-Commits
+prefix; add a `priority:` label after creating. Blank issues stay enabled for quick notes and for
+`ux`. Bug and Feature carry Vitally-specific fields (region, MCP client, server URL, a failure
+timestamp for correlating with Application Insights) — keep those if you edit the forms.
+
+`documentation` and `content` both map to `docs/…` branches but cover different audiences:
+**Documentation** is prose for humans (`CLAUDE.md`, `README.md`, `docs/`), whereas **Content** is the
+copy an *LLM* reads — tool `[Description]` and `Title` values and `VitallyServerInstructions.Text`.
+Content wording changes model behaviour (which tool gets picked, how it's called), so they are
+defects rather than cosmetics; the form asks for the observed effect to keep that distinction sharp.
 
 **Writing issues** — aim for "detailed enough to implement without further context":
 
