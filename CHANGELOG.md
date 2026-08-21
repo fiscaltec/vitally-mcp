@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrated the test suite from VSTest to Microsoft.Testing.Platform** to take
+  `xunit.v3` `3.2.2` -> `4.0.0`, which drops VSTest support entirely: under the
+  .NET 10 SDK its targets fail the build rather than falling back. A `global.json`
+  now selects the MTP runner (pinning no SDK version), `VitallyMcp.Tests` builds
+  as an `Exe` because xunit.v3 self-hosts its runner, and
+  `Microsoft.NET.Test.Sdk` / `xunit.runner.visualstudio` / `coverlet.collector`
+  are replaced by `Microsoft.Testing.Extensions.TrxReport` and
+  `Microsoft.Testing.Extensions.CodeCoverage`. CI now reports via
+  `--report-trx` / `--coverage --coverage-output-format cobertura` instead of
+  `--logger trx` / `--collect "XPlat Code Coverage"`; the documented developer
+  commands lose `--nologo` / `--verbosity` and use `--filter-class` /
+  `--filter-method` in place of `--filter "FullyQualifiedName~X"`, all of which
+  MTP rejects outright. All 388 tests pass unchanged.
+
 ### Security
 
 - **Fixed an open-redirector / authorisation-code theft vulnerability in

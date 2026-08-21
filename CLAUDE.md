@@ -23,13 +23,13 @@ This is a Model Context Protocol (MCP) server implementation in C# that provides
 
 ```powershell
 # Restore + build + run the test suite
-dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+dotnet test VitallyMcp.sln -c Debug
 
 # Build only (Debug)
 dotnet build VitallyMcp.sln
 
 # Run a single test class
-dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
+dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 
 # Start the server in dev mode (no Auth0, no Key Vault)
 $env:OAuth__NoAuth = "true"
@@ -485,12 +485,31 @@ To add support for a new Vitally resource:
 
 The `VitallyMcp.Tests` project contains the automated test suite (xUnit + FluentAssertions + Moq).
 
+**The test runner is Microsoft.Testing.Platform (MTP), not VSTest.** `xunit.v3` 4.0.0 dropped VSTest
+support outright — under the .NET 10 SDK its targets fail the build with *"Testing with VSTest target
+is no longer supported by Microsoft.Testing.Platform"* rather than falling back. Three things follow,
+and each one bites silently if forgotten:
+
+1. **`global.json` selects the runner** (`test.runner = "Microsoft.Testing.Platform"`). Without it
+   `dotnet test` still picks VSTest and every run fails at that MSBuild error. It pins no SDK version
+   — deliberately, so `actions/setup-dotnet` stays in charge of that.
+2. **The test project is an `Exe`.** xunit.v3 self-hosts its runner, so `Microsoft.NET.Test.Sdk` and
+   `xunit.runner.visualstudio` are gone from `VitallyMcp.Tests.csproj`; omitting `<OutputType>Exe</OutputType>`
+   fails the build with *"xUnit.net v3 test projects must be executable"*.
+3. **VSTest-only CLI options are rejected, not ignored** — `--nologo`, `--verbosity`, `--logger`,
+   `--collect` and `--filter "FullyQualifiedName~X"` all error out or silently run zero tests. On the
+   .NET 10 SDK the MTP replacements are first-class `dotnet test` flags needing **no `--` separator**:
+   `--report-trx` / `--report-trx-filename` (via `Microsoft.Testing.Extensions.TrxReport`), `--coverage`
+   / `--coverage-output-format cobertura` (via `Microsoft.Testing.Extensions.CodeCoverage`), and
+   `--filter-class` / `--filter-method`. MTP's coverage report is named `<guid>.cobertura.xml`, so
+   `.github/workflows/ci.yml` globs `TestResults/**/*.cobertura.xml` rather than a fixed filename.
+
 ```powershell
 # Run the full suite
-dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+dotnet test VitallyMcp.sln -c Debug
 
 # Run a single test class
-dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
+dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 ```
 
 **Coverage:**

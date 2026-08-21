@@ -58,8 +58,8 @@ tenant, no Key Vault.
 - **Moq** — `HttpClient` mocking (`Mock<HttpMessageHandler>` + `Protected()`)
 - **FluentAssertions** — readable assertions
 - **Microsoft.AspNetCore.Mvc.Testing** — in-process integration host for `OAuthProxyEndpointsTests` (uses `WebApplicationFactory<Program>`)
-- **coverlet.collector** — code coverage
-- **Microsoft.NET.Test.Sdk**
+- **Microsoft.Testing.Extensions.CodeCoverage** — code coverage (`--coverage`)
+- **Microsoft.Testing.Extensions.TrxReport** — TRX output for the CI test summary (`--report-trx`)
 
 Targets `net10.0` to match the main project. See `VitallyMcp.Tests.csproj`
 for the current version pinning — Dependabot keeps these up to date.
@@ -68,16 +68,16 @@ for the current version pinning — Dependabot keeps these up to date.
 
 ```powershell
 # Full suite (from repo root)
-dotnet test VitallyMcp.sln -c Debug --nologo --verbosity minimal
+dotnet test VitallyMcp.sln -c Debug
 
 # Just one class
-dotnet test --filter "FullyQualifiedName~MeetingsToolsTests"
+dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 
 # Just one method
-dotnet test --filter "Name~AddMeetingParticipant"
+dotnet test VitallyMcp.sln -c Debug --filter-method "*AddMeetingParticipant*"
 
-# With coverage (opencover)
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
+# With coverage (cobertura, as CI collects it)
+dotnet test VitallyMcp.sln -c Debug --coverage --coverage-output-format cobertura --results-directory TestResults
 ```
 
 ## Patterns

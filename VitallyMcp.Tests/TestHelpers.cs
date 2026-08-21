@@ -10,6 +10,14 @@ namespace VitallyMcp.Tests;
 /// <summary>
 /// Helper utilities for creating mocks and test data.
 /// </summary>
+/// <remarks>
+/// The <c>CA2000</c> suppressions below cover the mock <c>HttpResponseMessage</c> instances, which
+/// are handed to the <c>HttpClient</c> under test via Moq and so must outlive the setup call.
+/// CodeQL raises its own equivalent (<c>cs/local-not-disposed</c>) and that one <b>cannot</b> be
+/// suppressed here: <c>SuppressMessage</c> is a Roslyn mechanism and CodeQL never reads it, so an
+/// attribute naming a <c>cs/*</c> rule id suppresses nothing. Dismiss those on the alert itself in
+/// the repository's Security tab instead of adding an attribute that only looks like it works.
+/// </remarks>
 public static class TestHelpers
 {
     /// <summary>
@@ -19,8 +27,6 @@ public static class TestHelpers
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
         Justification = "Test mock — HttpResponseMessage is returned via Moq to the consuming HttpClient; lifetime is bounded by the test run.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
-        Justification = "Test mock — HttpResponseMessage is owned by the Moq setup and bounded by the test method's lifetime.")]
     public static HttpClient CreateMockHttpClient(string jsonResponse, HttpStatusCode statusCode = HttpStatusCode.OK)
     {
         var mockHttpMessageHandler = new Mock<HttpMessageHandler>();
@@ -112,7 +118,6 @@ public static class TestHelpers
     /// for testing the auto-pager's multi-page paging.
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "Test mock — see CreateMockHttpClient.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed", Justification = "Test mock — see CreateMockHttpClient.")]
     public static (HttpClient client, Mock<HttpMessageHandler> handler) CreateMockHttpClientPaged(params string[] pages)
     {
         var mock = new Mock<HttpMessageHandler>();
@@ -130,8 +135,6 @@ public static class TestHelpers
     /// The HttpResponseMessage and HttpClient are owned by the test method.
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
-        Justification = "Test mock — see CreateMockHttpClient.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "cs/local-not-disposed",
         Justification = "Test mock — see CreateMockHttpClient.")]
     public static (HttpClient client, Mock<HttpMessageHandler> handler) CreateMockHttpClientWithHandler(
         string jsonResponse,
