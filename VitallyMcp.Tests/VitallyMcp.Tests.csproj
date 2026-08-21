@@ -7,9 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <!-- xunit.v3 4.0.0 dropped VSTest support: the Microsoft.Testing.Platform (MTP) targets
-         refuse to run under VSTest on the .NET 10 SDK. Opt `dotnet test` into MTP instead. -->
-    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
   <ItemGroup>
