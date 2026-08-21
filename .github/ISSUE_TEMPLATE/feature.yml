@@ -1,7 +1,7 @@
 name: Feature request
 description: Suggest a new tool, capability, or improvement for the Vitally MCP server.
 title: "feat: <short description>"
-labels: ["enhancement"]
+labels: ["feature", "status: ready"]
 
 body:
   - type: markdown
@@ -37,3 +37,27 @@ body:
     id: context
     attributes:
       label: Additional context (links, screenshots, related issues)
+
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Open decisions
+      description: "Anything needing a product or safety call before coding starts. If there are any, relabel to `status: blocked` — a decision left implicit tends to get made by whoever writes the code first."
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to create/modify
+      description: Explicit paths. Note any new call path reaching Vitally — it must route through `VitallyService.SendAsync`, the single RBAC and audit choke point.
+
+  - type: textarea
+    id: claude-md
+    attributes:
+      label: CLAUDE.md updates needed
+      description: Which sections of CLAUDE.md this change will invalidate.
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "Related issues (`#N`) and the relationship. If it depends on unresolved work, use `status: blocked`."

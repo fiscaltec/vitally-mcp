@@ -28,6 +28,7 @@ namespace VitallyMcp.Tests;
 /// the test process.
 /// </para>
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class ReadOnlyToolsListTests : IClassFixture<ReadOnlyToolsListTests.Factory>
 {
     private readonly Factory _factory;

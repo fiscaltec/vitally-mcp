@@ -130,3 +130,6 @@ ehthumbs.db
 
 # Auth0 credentials
 .auth0-shared-credentials.env
+
+# Superpowers SDD scratch (ledger, briefs, review packages)
+.superpowers/

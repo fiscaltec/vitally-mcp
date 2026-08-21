@@ -8,12 +8,12 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 
 ## Features
 
-- **Full CRUD coverage** of 92 endpoints across 17 Vitally resource types: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
-- **Permission-aware tools** — every tool is tagged `ReadOnly` / `Destructive` so MCP clients can enable or disable categories of operation in bulk.
+- **Full CRUD coverage** of 16 Vitally resource types via 93 tools: accounts, organisations, users, conversations, messages, notes, projects, project templates, project categories, tasks, NPS responses, admins, custom objects (and instances), meetings (with participants and transcripts), custom traits, and custom surveys.
+- **Permission-aware tools** — every tool is annotated `ReadOnly` / `Destructive` / `Idempotent` / `OpenWorld` so MCP clients can enable or disable categories of operation in bulk and reason about retry safety. Beyond those advisory hints, `tools/list` is **filtered per caller**: a client is shown only the tools the signed-in user's permission tier permits.
 - **EU and US data centres** — defaults to EU (`rest.vitally-eu.io`); set `Vitally:Region=US` to point at `{subdomain}.rest.vitally.io`.
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
 - **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
-- **Streamable HTTP transport** (MCP 2025-06-18) in stateless mode — easy to scale horizontally, no sticky sessions required.
+- **Streamable HTTP transport** (MCP 2026-07-28) in stateless mode — easy to scale horizontally, no sticky sessions required.
 - **OAuth 2.0 protection** via Auth0 — `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
 
 ## Using the server (FISCAL users)
@@ -99,7 +99,9 @@ Smoke test:
 # OAuth protected-resource metadata
 Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
 
-# MCP initialise (returns capabilities + server info)
+# MCP initialise (returns capabilities + server info). Deliberately requests 2025-06-18: the
+# `initialize` handshake exists only in revisions up to 2025-11-25, since 2026-07-28 replaced it
+# with per-request `_meta` and headers. Do NOT substitute 2026-07-28 here — the call would error.
 $body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 ```
@@ -173,7 +175,9 @@ All HTTP traffic flows through `VitallyRateLimitHandler`, a `DelegatingHandler` 
 
 ## Tool catalogue
 
-The server publishes 92 MCP tools, one per Vitally REST endpoint. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk.
+The server publishes 93 MCP tools, mostly one per Vitally REST endpoint — though not strictly one-to-one, since `Get_organization_summary` is a read-only composite that fans out to four upstream calls. Each tool's `[McpServerTool]` attribute sets `ReadOnly = true` for list/get operations and `Destructive = true` for create/update/delete, so MCP clients can permission them in bulk, plus `Idempotent` and `OpenWorld` so they can reason about retry safety.
+
+**An individual caller will not see all 93.** Each tool also carries an `[Authorize]` policy matching its tier, and `tools/list` is filtered per caller — a reader sees the 56 read tools, an editor 81, an admin all 93. See [Security](#security).
 
 | Resource | List / search | Get | Create | Update | Delete | Sub-resources |
 |---|:-:|:-:|:-:|:-:|:-:|---|
@@ -193,12 +197,13 @@ The server publishes 92 MCP tools, one per Vitally REST endpoint. Each tool's `[
 | Custom traits | schema discovery | — | — | — | — | — |
 | Custom surveys | responses (list, get) | survey question | — | — | — | — |
 
-Full per-tool descriptions are auto-generated from the `[McpServerTool]` attributes — call `tools/list` against the server to see them all.
+Full per-tool descriptions are auto-generated from the `[McpServerTool]` attributes — call `tools/list` against the server to see them. Note the response contains the tools available to *the caller's tier*, so a reader's list is a subset of an admin's.
 
 ## Security
 
 - All MCP requests require a valid JWT signed by the configured Auth0 tenant. Tokens are validated server-side against the issuer + audience and the signature.
 - **Server-side RBAC** (`Authorization:*`) enforces a `vitally:read` / `vitally:write` / `vitally:delete` permission on every tool call, mapped from the HTTP verb at a single choke point (`VitallyService.SendAsync`). This is the hard backstop: the `ReadOnly`/`Destructive` tool attributes are advisory hints for MCP clients, but RBAC physically prevents a caller (or a misbehaving agent) from mutating data without the permission. Permissions are sourced from Auth0 (Enable RBAC + Add Permissions in the Access Token) and assigned via roles — ideally driven by Entra group membership.
+- **Per-caller tool discovery.** Every tool additionally carries an `[Authorize]` policy for its tier, which the MCP SDK evaluates so `tools/list` advertises only what the caller may invoke. Discovery filtering and the `SendAsync` backstop resolve permissions through the same code path, so they cannot disagree — but the security boundary remains `SendAsync`. Hiding a tool is a usability improvement, not the control: an out-of-tier call is refused regardless of what the client was shown.
 - **Per-user audit trail** (`Audit:*`) — every action is logged at the choke point with the authenticated user's stable Entra subject id (`sub` — an opaque object id, resolvable to a person in Entra but not itself PII), HTTP verb, target resource path and outcome (denied attempts included). Because all users share one Vitally key, Vitally's own log can't attribute actions to individuals; this server-side record can, and is queryable in Application Insights / Log Analytics. Neither email nor request bodies are logged, keeping personal data out of telemetry while staying fully attributable.
 - The OAuth proxy's `/oauth/token` only services the `authorization_code` and `refresh_token` grants — it rejects any other grant before injecting the confidential client secret, so the secret can't be leveraged to mint tokens without a user sign-in.
 - Set `OAuth:PublicBaseUrl` in production so the OAuth metadata documents emit a fixed canonical origin rather than reflecting the request `Host`.
@@ -206,6 +211,17 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - Tokens are short-lived (8h access, with refresh rotation). The server keeps no session state; restart is transparent to clients.
 - HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
 - The OAuth proxy validates every client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus the implicit RFC 8252 loopback rule). Without this check, an attacker could exfiltrate authorisation codes via the proxy's `/oauth/callback` reflector; with it, the proxy refuses anything that isn't a loopback URI or an explicitly-allowlisted hosted callback.
+
+### Known limitation: strict RFC 8414 clients
+
+The OAuth proxy serves authorisation-server metadata from this server's own origin while declaring
+Auth0's `issuer`. RFC 8414 §3.3 requires those to match, so a client enforcing it — including **MCP
+Inspector** — aborts before dynamic client registration and cannot connect. Claude Desktop and Claude
+Code do not enforce it, which is why they work.
+
+Everything up to that point is correct: the 401 challenge, the `resource_metadata` pointer and both
+metadata documents. Fixing it properly collides with RFC 9207 `iss` validation and is tracked
+separately; see the *Known limitation* section in `CLAUDE.md` for the analysis and the proposed shape.
 
 ## Licence
 

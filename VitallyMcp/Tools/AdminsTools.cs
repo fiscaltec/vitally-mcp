@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 
 namespace VitallyMcp.Tools;
@@ -6,7 +7,8 @@ namespace VitallyMcp.Tools;
 [McpServerToolType]
 public static class AdminsTools
 {
-    [McpServerTool(Name = "Search_admins", Title = "Search admins", ReadOnly = true, Destructive = false), Description("Search Vitally admins by email")]
+    [Authorize(Policy = "vitally:read")]
+    [McpServerTool(Name = "Search_admins", Title = "Search admins", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false), Description("Search Vitally admins by email")]
     public static async Task<string> SearchAdmins(
         VitallyService vitallyService,
         [Description("Email address to search for")] string email,

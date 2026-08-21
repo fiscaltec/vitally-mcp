@@ -247,4 +247,28 @@ public class ToolAuthorizerTests
 
         await act.Should().NotThrowAsync();
     }
+
+    // ---- Shared resolution surface for the policy handler (Task 4) ----
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_IsPublicAndHonoursTokenClaim()
+    {
+        var authorizer = Build(options: new ToolAuthorizationOptions { Enabled = true });
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("permissions", "vitally:read")], "test"));
+
+        (await authorizer.HasEffectivePermissionAsync(user, "vitally:read")).Should().BeTrue();
+        (await authorizer.HasEffectivePermissionAsync(user, "vitally:write")).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]   // RBAC disabled => bypassed
+    [InlineData(false, true, true)]   // NoAuth dev mode => bypassed
+    [InlineData(false, false, false)] // both on => enforced
+    public async Task IsAuthorizationBypassedAsync_ReflectsEnabledAndNoAuth(bool disabled, bool noAuth, bool expected)
+    {
+        var authorizer = Build(enabled: !disabled, noAuth: noAuth);
+
+        (await authorizer.IsAuthorizationBypassedAsync()).Should().Be(expected);
+    }
 }

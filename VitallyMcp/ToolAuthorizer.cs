@@ -68,7 +68,13 @@ public class ToolAuthorizer
         }
     }
 
-    private async Task<bool> HasEffectivePermissionAsync(ClaimsPrincipal user, string required, CancellationToken cancellationToken)
+    /// <summary>
+    /// Resolves whether <paramref name="user"/> effectively holds <paramref name="required"/>, using
+    /// the live Entra group lookup when enabled and falling back to the token claim. Public so the
+    /// ASP.NET Core authorization policy handler can share exactly this resolution — the discovery
+    /// filter and the <see cref="VitallyService"/> enforcement backstop must never disagree.
+    /// </summary>
+    public async Task<bool> HasEffectivePermissionAsync(ClaimsPrincipal user, string required, CancellationToken cancellationToken = default)
     {
         if (_options.LiveGroupCheck && _groupResolver is not null)
         {
@@ -135,6 +141,13 @@ public class ToolAuthorizer
         }
         return _options.DeletePermission;
     }
+
+    /// <summary>
+    /// True when authorisation is switched off entirely (RBAC disabled or NoAuth dev mode), in which
+    /// case discovery filtering must be a pass-through — otherwise local development would see an
+    /// empty tool list. Async purely to keep the policy handler's call site uniform.
+    /// </summary>
+    public Task<bool> IsAuthorizationBypassedAsync() => Task.FromResult(!_options.Enabled || _noAuth);
 
     /// <summary>
     /// True if the principal carries <paramref name="required"/> as an Auth0 RBAC <c>permissions</c>

@@ -9,11 +9,11 @@ This is a Model Context Protocol (MCP) server implementation in C# that provides
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
-- **Streamable HTTP transport** (MCP 2025-06-18) on the `ModelContextProtocol.AspNetCore` package, stateless mode
+- **Streamable HTTP transport** (MCP 2026-07-28) on the `ModelContextProtocol.AspNetCore` package, stateless mode
 - **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts the upstream Auth0 tenant when `OAuth:SharedClientId` is set — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop).
 - **On-demand Vitally API key fetch**: the server fetches the `vitally-shared` secret from Azure Key Vault via its user-assigned managed identity (with a short in-memory cache) and uses it to call Vitally on behalf of all authenticated users. Future per-user keys can be added by reintroducing claim-based secret resolution.
 - .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
-- Built on the official `ModelContextProtocol` C# SDK (1.3.0 GA) + `ModelContextProtocol.AspNetCore`
+- Built on the official `ModelContextProtocol` C# SDK 2.2.0 + `ModelContextProtocol.AspNetCore` 2.2.0
 - Multi-region support: EU (default, `rest.vitally-eu.io`) and US (`{subdomain}.rest.vitally.io`)
 - Rate-limit-aware HTTP pipeline: auto-retries on `429 Too Many Requests` and logs a warning when `X-RateLimit-Remaining` drops below threshold
 
@@ -47,14 +47,46 @@ With the server running locally (or against the deployed URL with a real JWT in 
 # OAuth metadata document — clients use this to discover the auth server
 Invoke-RestMethod http://localhost:5099/.well-known/oauth-protected-resource
 
-# MCP initialise
+# MCP initialise. This deliberately requests 2025-06-18: the `initialize` handshake exists only in
+# revisions up to 2025-11-25, because 2026-07-28 removed it in favour of per-request `_meta` and
+# headers. So this is a legacy-path smoke test, and the server replies with a revision it supports.
+# Do NOT substitute 2026-07-28 here — that revision has no `initialize` method and the call errors.
 $body = @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='smoke'; version='0.0.1' } } } | ConvertTo-Json -Depth 10 -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 
-# tools/list
+# tools/list on the legacy path (no MCP-Protocol-Version header — the server accepts it)
 $body = @{ jsonrpc='2.0'; id=2; method='tools/list' } | ConvertTo-Json -Compress
 Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' -Headers @{ Accept='application/json, text/event-stream' } -Body $body
 ```
+
+**Exercising the 2026-07-28 path itself.** The revision above replaced the `initialize` handshake with
+per-request metadata, and the server enforces the full contract — so a bare request is *not* enough.
+All of the following are required together, and the server rejects each omission with a distinct
+error (verified against the running container):
+
+1. the `MCP-Protocol-Version: 2026-07-28` header — omit it and you get
+   `-32020 "The MCP-Protocol-Version header is required when the request body declares a per-request metadata protocol version."`
+2. `_meta/io.modelcontextprotocol/protocolVersion` in `params` — omit it and you get
+   `-32602 "Requests using protocol version '2026-07-28' must include '_meta/io.modelcontextprotocol/protocolVersion'."`
+3. `_meta/io.modelcontextprotocol/clientCapabilities` as a JSON object — omit it and you get a
+   matching `-32602`.
+
+`Mcp-Method` must also equal the body's `method`; a mismatch is rejected with
+`"Header mismatch: Mcp-Method header value 'x' does not match body value 'y'."`
+
+```powershell
+$meta = @{
+  'io.modelcontextprotocol/protocolVersion'   = '2026-07-28'
+  'io.modelcontextprotocol/clientCapabilities' = @{}
+  'io.modelcontextprotocol/clientInfo'         = @{ name = 'smoke'; version = '0.0.1' }
+}
+$body = @{ jsonrpc='2.0'; id=3; method='tools/list'; params=@{ _meta=$meta } } | ConvertTo-Json -Depth 10 -Compress
+Invoke-RestMethod -Method Post -Uri http://localhost:5099/mcp -ContentType 'application/json' `
+  -Headers @{ Accept='application/json, text/event-stream'; 'MCP-Protocol-Version'='2026-07-28'; 'Mcp-Method'='tools/list' } `
+  -Body $body
+```
+
+A successful response carries `ttlMs: 300000` and `cacheScope: "private"` alongside `tools`.
 
 ## Installing for End Users
 
@@ -68,6 +100,81 @@ FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. 
 
 To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
 
+## GitHub issues (issue-driven work)
+
+Track non-trivial work as GitHub issues via the `gh` CLI. Trivial one-off changes don't need an
+issue — use judgement. This mirrors the flow used in `searledan/rosetechnologies.co.uk`,
+`searledan/dansearle.co.uk` and `searledan/spendy`; the labels below were created here to match.
+
+**Why it matters here:** each issue is normally picked up in a *fresh* session, often in a worktree or
+via a subagent. The issue body and this file are the only context that new session gets, so an issue
+that assumes prior conversation is an issue that cannot be worked.
+
+**Labels** — one of each per issue:
+
+- **type** (categorises the issue — *distinct* from the Conventional-Commits type in the PR title):
+  `feature`, `bug`, `tech-debt`, `security`, `ux`, `content`, `ops` (infra/deployment/config),
+  `documentation`
+- **priority:** `priority: high` / `priority: medium` / `priority: low`
+- **status** (progresses `ready` → `in-progress` → `complete`; `blocked` is a side-state):
+  `status: ready` (defined enough to start) / `status: in-progress` / `status: blocked` (waiting on a
+  dependency) / `status: complete` (work merged)
+
+**Lifecycle** — one `status:` label at a time:
+
+1. Pick a `status: ready` issue respecting priority, or create one with type + priority +
+   `status: ready`.
+2. Flip to in-progress:
+   `gh issue edit <n> --remove-label "status: ready" --add-label "status: in-progress"`.
+3. Branch `<cc-type>/<short-description>`, where `<cc-type>` is the **Conventional-Commits** type used
+   in the PR title — not the issue's type label. They map loosely: `feature` → `feat/…`,
+   `documentation`/`content` → `docs/…`, `tech-debt` → `chore/…` or `refactor/…`, `bug` → `fix/…`,
+   `ops` → `ci/…` or `chore/…`.
+4. Reference `#<n>` in commits where relevant.
+5. Open the PR with **`Closes #<n>`**. `.github/workflows/pr-title.yml` enforces the
+   Conventional-Commits prefix on the PR *title*, and `main` takes squash merges — so the PR title
+   becomes the commit subject on `main`. On squash-merge the issue auto-closes; flip it to
+   `status: complete` then, so a finished issue ends up *closed + `status: complete`*, distinguishable
+   from one closed as won't-fix or duplicate.
+6. If work stalls, swap the status for `status: blocked` and comment what's blocking.
+
+**What actually gates a merge** (the `Secure branches` ruleset, verified 2026-08-18):
+`required_approving_review_count` is **0** — no approving review is needed. What is required is all
+review threads resolved, the branch up to date with `main` (`strict_required_status_checks_policy`),
+and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test (ubuntu-latest,
+net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
+`mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
+
+**Forms** — `.github/ISSUE_TEMPLATE/` provides seven, one per type label except `ux`: `bug.yml`,
+`feature.yml`, `tech-debt.yml`, `security.yml`, `ops.yml`, `documentation.yml`, `content.yml`.
+Filenames match the label they preset, and the shared four match the sibling repos. Each form
+presets its type label plus `status: ready`, and its title with the matching Conventional-Commits
+prefix; add a `priority:` label after creating. Blank issues stay enabled for quick notes and for
+`ux`. Bug and Feature carry Vitally-specific fields (region, MCP client, server URL, a failure
+timestamp for correlating with Application Insights) — keep those if you edit the forms.
+
+`documentation` and `content` both map to `docs/…` branches but cover different audiences:
+**Documentation** is prose for humans (`CLAUDE.md`, `README.md`, `docs/`), whereas **Content** is the
+copy an *LLM* reads — tool `[Description]` and `Title` values and `VitallyServerInstructions.Text`.
+Content wording changes model behaviour (which tool gets picked, how it's called), so they are
+defects rather than cosmetics; the form asks for the observed effect to keep that distinction sharp.
+
+**Writing issues** — aim for "detailed enough to implement without further context":
+
+- **Title** — conveys the scope at a glance without reading the body.
+- **Lead paragraph** — what and why, plus how it was discovered if that matters.
+- **`## Problem`** (or `## Description` + `## Current state / problem`) — evidence, not assertion.
+  Quote real error output, cite file paths and line numbers, and say what was *verified* versus
+  *assumed*.
+- **`## Proposed fix` / `## Proposed solution`** — concrete numbered steps. Record rejected
+  alternatives and why, so the next session doesn't re-litigate them.
+- **`## Files to create/modify`** — explicit paths.
+- **`## CLAUDE.md updates needed`** — which sections of this file the change invalidates. Easy to
+  forget and the most common source of drift.
+- **`## Dependencies`** — related issues as `#N` with the relationship ("blocked on #92", "related to
+  #90"); if it depends on unresolved work, use `status: blocked`.
+- Prefer tables for structured data. Flag anything designed-but-unvalidated as such, explicitly.
+
 ## Architecture
 
 ### Hosting and transport (Program.cs)
@@ -78,6 +185,11 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - Binds `OAuthOptions` from `OAuth:` (provider-agnostic — works with Auth0, Entra direct, Keycloak, etc.).
 - Conditionally registers `SecretClient` (Azure Key Vault) as singleton when `Vitally:KeyVaultUri` is set; uses `DefaultAzureCredential` so it works with managed identity in production and `az login` locally.
 - `IMemoryCache` registered for the API key cache and OAuth proxy state cache.
+- Authorisation policy plumbing: `VitallyPermissionRequirement.cs` carries one `vitally:*` permission,
+  and `VitallyPermissionHandler.cs` evaluates it by delegating to `ToolAuthorizer`, so tool discovery
+  filtering and the `VitallyService.SendAsync` backstop share one resolution path.
+- `ToolsListCacheOptions.cs` binds the `ToolsListCache:` section for the `tools/list` cache hints.
+- `ProtectedResourceMetadataBuilder.cs` builds the RFC 9728 document served from both well-known paths.
 - `VitallyApiKeyProvider` registered scoped.
 - `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
 - `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
@@ -92,6 +204,50 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
   - `POST /oauth/token` — proxies code/refresh exchanges to Auth0, server-side-injecting `SharedClientSecret`.
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
+- The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it.
+
+
+### Known limitation: strict RFC 8414 clients cannot complete the OAuth flow
+
+The proxy serves RFC 8414 authorisation-server metadata **from our own origin** while declaring
+**Auth0's** issuer:
+
+- served from `https://vitally.fiscaltec.com/.well-known/oauth-authorization-server`
+- declares `"issuer": "https://fiscal-it.uk.auth0.com/"`
+
+RFC 8414 §3.3 requires the issuer to correspond to the URL the document was fetched from — an
+anti-mix-up control, so a metadata document can only ever speak for itself. The TypeScript MCP SDK
+enforces it and aborts:
+
+```
+Issuer mismatch in authorization server metadata (RFC 8414 §3.3):
+expected "<our origin>/", received "https://fiscal-it.uk.auth0.com/"
+```
+
+**So MCP Inspector cannot connect to this server — production included.** Verified against both a
+local container and a live staging deployment on 2026-08-12. Everything before that point works: the
+401 challenge, the `resource_metadata` pointer, the protected-resource document (parsed successfully)
+and the AS metadata fetch. It halts only at issuer validation, before DCR.
+
+**Why production works anyway:** Claude's clients do not enforce §3.3, so they take our endpoints and
+proceed. This is a latent problem rather than an outage — but the 2026-07-28 revision tightens OAuth,
+so a client that starts enforcing it would break every user at once.
+
+**Why it is not a one-line fix.** Declaring our own origin as `issuer` satisfies §3.3 but collides
+with RFC 9207, where the client checks the `iss` returned on the authorization response — Auth0
+returns its own. Any fix must reconcile both, or stop proxying `/oauth/authorize` and `/oauth/token`,
+which would give up the DCR shim that exists to converge every client on one pre-registered app.
+
+The likely shape (designed, **not** validated): make the proxy a complete authorisation-server façade
+— declare our own origin as `issuer`, have `/oauth/callback` **inject** `iss` set to our origin
+(injecting unconditionally is more robust than rewriting, since whether Auth0 sends `iss` depends on
+tenant config), and advertise `authorization_response_iss_parameter_supported: true`. Check first
+whether any client validates an access token's `iss` against the metadata `issuer`; MCP clients treat
+access tokens as opaque, so this is probably safe, but verify rather than assume. Our own JwtBearer
+validates against Auth0's `Authority` internally and is unaffected either way.
+
+Fixing this would also make **MCP Inspector a usable test client**, which materially cheapens future
+validation work — the practical argument, rather than RFC pedantry.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 
@@ -121,11 +277,14 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - `LiveGroupCheck` (default `false`), `LiveGroupCacheSeconds` (default `60`), `ReaderGroupId`/`EditorGroupId`/`AdminGroupId` (Entra group object ids).
 - Permissions are read from the JWT `permissions` claim (Auth0 RBAC), the namespaced `CustomPermissionsClaim` (for the Entra-group→Action→custom-claim assignment model), or space-delimited `scope`. The Entra-group-driven model is the chosen assignment approach: a post-login Auth0 Action maps Entra group membership to the `vitally:*` permissions and writes them to the custom claim.
 - **Live group check (preferred for prompt propagation):** when `LiveGroupCheck=true`, `ToolAuthorizer` resolves permissions from the caller's *current* Entra group membership via `GraphGroupPermissionResolver` (Microsoft Graph — it lists each configured group's `transitiveMembers` filtered to the caller's object id, using the managed identity, cached `LiveGroupCacheSeconds` per user) instead of the token claim — so grants and **revocations** take effect within the cache window regardless of token/refresh age (the post-login Action does **not** re-run on refresh grants, so the claim alone is frozen at login). **`transitiveMembers` expands nested groups**, so a user who gets a tier via a department group nested inside an `sg-vitally-*` group is authorised, not only users assigned to the `sg-vitally-*` group directly. The object id is taken from the `oid` claim or the trailing GUID of `sub`. The token claim is the automatic fallback if the Graph lookup fails (fail-degraded). Requires the managed identity to hold Graph `GroupMember.Read.All`.
-- Server-side RBAC backstop. `ToolAuthorizer.EnsureAuthorizedAsync(method, ct)` is awaited from **`VitallyService.SendAsync`** — the single point every Vitally call funnels through — so all ~92 tools are covered without per-tool annotation. The HTTP verb maps to the tier: GET → read, POST/PUT/PATCH → write, DELETE → delete (unknown verbs fall back to the strictest). Permissions are read from the JWT `permissions` claim (Auth0 RBAC), the namespaced `CustomPermissionsClaim`, or space-delimited `scope` (same three sources as above). Bypassed when `Enabled=false` or `OAuth:NoAuth=true`. **The `ReadOnly`/`Destructive` tool attributes are advisory client hints; this is the actual enforcement — when adding a new call path, route it through `VitallyService.SendAsync` so it stays covered, and never call the Vitally API around it.**
+- Server-side RBAC backstop. `ToolAuthorizer.EnsureAuthorizedAsync(method, ct)` is awaited from **`VitallyService.SendAsync`** — the single point every Vitally call funnels through — so all 93 tools are covered without per-tool annotation. The HTTP verb maps to the tier: GET → read, POST/PUT/PATCH → write, DELETE → delete (unknown verbs fall back to the strictest). Permissions are read from the JWT `permissions` claim (Auth0 RBAC), the namespaced `CustomPermissionsClaim`, or space-delimited `scope` (same three sources as above). Bypassed when `Enabled=false` or `OAuth:NoAuth=true`. **The `ReadOnly`/`Destructive` tool attributes are advisory client hints; this is the actual enforcement — when adding a new call path, route it through `VitallyService.SendAsync` so it stays covered, and never call the Vitally API around it.**
+- **Per-caller discovery filtering.** All 93 tools carry `[Authorize(Policy = "vitally:read|write|delete")]` (56 read / 25 write / 12 delete). `mcpBuilder.AddAuthorizationFilters()` makes the SDK evaluate that attribute on each tool, so `tools/list` shows only the tools the caller may actually invoke and an unauthorised call is rejected before the handler runs. **It and `AddAuthorizationBuilder()` are registered unconditionally — never guarded on `OAuth:NoAuth`.** Once any tool carries `[Authorize]`, the SDK *fails closed*: it throws ("Authorization filter was not invoked for tools/call operation, but authorization metadata was found on the tool") so a guarded registration yields a dev server that can neither list nor call any tool. Dev mode stays unfiltered instead via `VitallyPermissionHandler`, which succeeds when `ToolAuthorizer.IsAuthorizationBypassedAsync()` reports RBAC disabled or `NoAuth`. `VitallyPermissionHandler` resolves those policies through `ToolAuthorizer.HasEffectivePermissionAsync`, so discovery and the `VitallyService.SendAsync` backstop cannot drift apart. This is **discovery filtering** — the security boundary remains `SendAsync`. Distinct from the deployment-wide `Authorization:ReadOnly` switch, which hides destructive tools from everyone.
+- A denial refused at this SDK authorisation checkpoint is audited separately: see `LogToolCallDenied` under `AuditOptions` below — `SendAsync`'s own `LogDenied` never fires for a tier mismatch, because the SDK rejects the call before `SendAsync` runs.
 
 `AuditOptions` (singleton, bound from `Audit:` section):
 - `Enabled` (default `true`), `IncludeReads` (default `false`).
 - `AuditLogger` is invoked from **`VitallyService.SendAsync`** (same choke point): `LogAction` after each upstream response and `LogDenied` on an RBAC denial. Records the authenticated user's stable subject id (`sub` claim, falling back to NameIdentifier, else `anonymous`), HTTP verb, resource path (query string stripped) and status code via structured logging — so the named properties become queryable dimensions in Application Insights / Log Analytics. **Log the `sub` (opaque, attributable Entra object id), never the email — keep personal data out of telemetry. Never log request/response bodies here either — they can contain customer PII (traits, transcripts).** This is the attribution mechanism while a single shared Vitally key is in use (per-user keys via the `secret_ref` claim remain a future option).
+- A separate call, `AuditLogger.LogToolCallDenied`, is invoked from `VitallyPermissionHandler` for a denial at the SDK's per-tool `[Authorize]` checkpoint (see the discovery-filtering note above) — it records the caller's subject id, the tool name and the required permission, never the email, request bodies or tool arguments. This exists because that checkpoint rejects out-of-tier calls before `VitallyService.SendAsync` runs, so `LogDenied` there would never see a tier mismatch.
 
 ### API key resolution (VitallyApiKeyProvider.cs)
 
@@ -318,7 +477,9 @@ To add support for a new Vitally resource:
 - **Field existence**: Only includes fields that actually exist on the resource — no null/undefined placeholders.
 - **Pagination**: Use the `from` parameter (not `cursor`) — this matches the Vitally API spec.
 - **JSON responses**: Tools return filtered JSON strings to reduce LLM context usage.
-- **MCP SDK**: Using `ModelContextProtocol` 1.3.0 GA plus `ModelContextProtocol.AspNetCore` 1.3.0 for HTTP hosting.
+- **MCP SDK**: Using `ModelContextProtocol` 2.2.0 plus `ModelContextProtocol.AspNetCore` 2.2.0 for HTTP hosting. Check `VitallyMcp.csproj` rather than trusting this line — Dependabot bumps the SDK and prose drifts.
+- **`tools/list` cache hints**: bound from `ToolsListCache:` (`Enabled`, `TimeToLive` default 5 min, `Scope` default `Private`) and serialised as `ttlMs` / `cacheScope` per MCP 2026-07-28. Scope must stay `Private` while per-caller filtering is active — a public cache would leak one tier's tool catalogue to another.
+- **Tool annotations**: every tool sets `ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. `ToolAnnotationCoverageTests` enforces this by reflection — all four must be explicitly set, and `ReadOnly == true` must imply `Destructive == false` (and vice versa) — so a new tool cannot ship unannotated.
 
 ## Testing
 
