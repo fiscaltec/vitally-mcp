@@ -109,6 +109,29 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
                 "the advertised scopes must match the builder's list exactly, with no duplicates");
     }
 
+    [Theory]
+    [InlineData("/.well-known/oauth-protected-resource")]
+    [InlineData("/.well-known/oauth-protected-resource/mcp")]
+    public async Task ProtectedResourceMetadata_OmitsUnsetOptionalFieldsRatherThanEmittingNull(string path)
+    {
+        // RFC 9728 §3.2: a metadata parameter that is not used is omitted. Serialising it as an
+        // explicit null is not the same thing, and strict clients reject the whole document for it
+        // — @modelcontextprotocol/client 2.0.0 (what MCP Inspector 2.3.0 depends on) types
+        // jwks_uri as a string and fails schema validation on a null, before any part of the OAuth
+        // flow is reached. That made this a second, earlier blocker than the issuer mismatch, and
+        // it is invisible to a test that only reads the properties it expects to be present.
+        using var client = _factory.CreateClient();
+
+        using var doc = JsonDocument.Parse(await client.GetStringAsync(path));
+
+        var nulls = doc.RootElement.EnumerateObject()
+            .Where(p => p.Value.ValueKind == JsonValueKind.Null)
+            .Select(p => p.Name)
+            .ToArray();
+
+        nulls.Should().BeEmpty("unused metadata parameters must be absent, not null");
+    }
+
     public class Factory : WebApplicationFactory<Program>
     {
         protected override IHost CreateHost(IHostBuilder builder)

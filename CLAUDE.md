@@ -197,57 +197,54 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - MCP server registered via `AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithToolsFromAssembly()`.
 - Publishes server-level usage guidance in the MCP `initialize` response via `McpServerOptions.ServerInstructions` (text in `VitallyServerInstructions.Text`): steers clients toward organisation-level data, the traits-vs-custom-objects distinction, the name/date-range filters, and the read-only/permission model.
 - OAuth proxy endpoints (only active when `OAuth:SharedClientId` is set):
-  - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata.
-  - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata pointing `registration_endpoint` at our DCR shim.
+  - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata, serialised with `McpJsonUtilities.DefaultOptions`. That is load-bearing, not incidental: the ASP.NET Core defaults write every unset optional as an explicit `null`, and RFC 9728 §3.2 requires an unused parameter to be *omitted* — strict clients reject the whole document over the difference.
+  - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata declaring **our own origin** as `issuer` (see the façade section below), pointing `authorization_endpoint` / `token_endpoint` / `registration_endpoint` at our own proxy endpoints, and advertising `authorization_response_iss_parameter_supported: true`. `userinfo_endpoint` and `jwks_uri` still point at Auth0, which issues the tokens.
   - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), stashes it keyed by `state`, and proxies to Auth0 with our own fixed callback.
-  - `GET /oauth/callback` — reverses the stash, redirects to the original client URI.
+  - `GET /oauth/callback` — reverses the stash, **replaces any upstream `iss` with our own origin**, and redirects to the original client URI.
   - `POST /oauth/token` — proxies code/refresh exchanges to Auth0, server-side-injecting `SharedClientSecret`.
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 - The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it.
 
 
-### Known limitation: strict RFC 8414 clients cannot complete the OAuth flow
+### The OAuth proxy is a complete authorisation-server façade
 
-The proxy serves RFC 8414 authorisation-server metadata **from our own origin** while declaring
-**Auth0's** issuer:
+From a client's point of view this server *is* the authorisation server: `/oauth/authorize`,
+`/oauth/token` and `/oauth/register` are all ours. So the RFC 8414 document declares **our own
+origin** as `issuer` (`PublicBaseUrl`, falling back to the request origin) — the same string
+`ProtectedResourceMetadataBuilder` publishes as `authorization_servers`. Auth0 still issues the
+tokens and `jwks_uri` / `userinfo_endpoint` still point there; the façade covers identity and
+discovery, not issuance.
 
-- served from `https://vitally.fiscaltec.com/.well-known/oauth-authorization-server`
-- declares `"issuer": "https://fiscal-it.uk.auth0.com/"`
+It previously declared **Auth0's** issuer while being served from our origin, which violates RFC 8414
+§3.3 (an anti-mix-up control: a metadata document can only ever speak for itself) and made strict
+clients — including **MCP Inspector** — abort before reaching DCR. Fixed 2026-08-21 (#90).
 
-RFC 8414 §3.3 requires the issuer to correspond to the URL the document was fetched from — an
-anti-mix-up control, so a metadata document can only ever speak for itself. The TypeScript MCP SDK
-enforces it and aborts:
+**Three pieces that must stay together.** Changing any one alone breaks the flow:
 
-```
-Issuer mismatch in authorization server metadata (RFC 8414 §3.3):
-expected "<our origin>/", received "https://fiscal-it.uk.auth0.com/"
-```
+| Piece | Why |
+|---|---|
+| `issuer` = our origin | RFC 8414 §3.3. Must equal `authorization_servers` in the RFC 9728 document byte for byte — the check is simple string equality, tolerating only a trailing slash *on the expected value*. |
+| `/oauth/callback` strips any upstream `iss` and appends our own | RFC 9207. **Mandatory, not defensive.** Clients compare a *present* `iss` against the metadata `issuer` even when support is not advertised — so an Auth0 `iss` forwarded through would now be a hard failure, and appending ours alongside would leave two values. |
+| `authorization_response_iss_parameter_supported: true` | Honest only because of the row above. Advertising it and then omitting `iss` reads as a stripped-parameter attack and the client aborts. |
 
-**So MCP Inspector cannot connect to this server — production included.** Verified against both a
-local container and a live staging deployment on 2026-08-12. Everything before that point works: the
-401 challenge, the `resource_metadata` pointer, the protected-resource document (parsed successfully)
-and the AS metadata fetch. It halts only at issuer validation, before DCR.
+**Verified 2026-08-21** against `@modelcontextprotocol/client` 2.0.0 — the package MCP Inspector 2.3.0
+actually depends on — driving a local container: the RFC 9728 document parses, `discoverAuthorizationServerMetadata`
+passes §3.3, **DCR is reached and returns the shared `client_id`** (it was never called before), and
+`validateAuthorizationResponseIssuer` accepts the `iss` we emit. A control assertion confirms the same
+function still rejects Auth0's issuer, so the passes are not a skipped check.
 
-**Why production works anyway:** Claude's clients do not enforce §3.3, so they take our endpoints and
-proceed. This is a latent problem rather than an outage — but the 2026-07-28 revision tightens OAuth,
-so a client that starts enforcing it would break every user at once.
+Two things were verified rather than assumed, both of which the design had flagged as open:
 
-**Why it is not a one-line fix.** Declaring our own origin as `issuer` satisfies §3.3 but collides
-with RFC 9207, where the client checks the `iss` returned on the authorization response — Auth0
-returns its own. Any fix must reconcile both, or stop proxying `/oauth/authorize` and `/oauth/token`,
-which would give up the DCR shim that exists to converge every client on one pre-registered app.
+- **No client validates the access token's `iss` against the metadata `issuer`.** The SDK's client
+  auth module never decodes a JWT or fetches JWKS — access tokens are opaque to it — so `jwks_uri`
+  pointing at Auth0 while we claim the issuer is safe. Our own `JwtBearer` validates against Auth0's
+  `Authority` internally and is unaffected either way.
+- **The published SDK 1.x does not enforce §3.3 at all**; the enforcement ships in the 2.x packages.
+  So this was latent for Claude Desktop / Claude Code and immediately fatal for anything on 2.x.
 
-The likely shape (designed, **not** validated): make the proxy a complete authorisation-server façade
-— declare our own origin as `issuer`, have `/oauth/callback` **inject** `iss` set to our origin
-(injecting unconditionally is more robust than rewriting, since whether Auth0 sends `iss` depends on
-tenant config), and advertise `authorization_response_iss_parameter_supported: true`. Check first
-whether any client validates an access token's `iss` against the metadata `issuer`; MCP clients treat
-access tokens as opaque, so this is probably safe, but verify rather than assume. Our own JwtBearer
-validates against Auth0's `Authority` internally and is unaffected either way.
-
-Fixing this would also make **MCP Inspector a usable test client**, which materially cheapens future
-validation work — the practical argument, rather than RFC pedantry.
+**If you touch this,** re-run that validation rather than reasoning about it — `npx @modelcontextprotocol/inspector`
+against a local container is now a working end-to-end client, which is the practical payoff.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 

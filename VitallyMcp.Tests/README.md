@@ -4,7 +4,7 @@ Automated test suite for the Vitally MCP server.
 
 ## Coverage
 
-**388 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
+**400 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
 test host), running fully in-process — no live API calls, no real Auth0
 tenant, no Key Vault.
 
@@ -26,7 +26,8 @@ tenant, no Key Vault.
 | `VitallyServiceTests` | Field/trait filtering, pagination, resource-specific defaults across every resource type, plus full coverage of `GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`, `GetRawAsync` (with URL-encoded query params), `PostRawAsync`, `DeleteRawAsync`. Includes HTTP-verb, path, and Basic-auth header verification via Moq's `Protected().Verify(...)`. Also asserts that the response body is surfaced in `HttpRequestException` on non-2xx responses (regression guard). |
 | `VitallyRateLimitHandlerTests` | 429 retry behaviour, `Retry-After`/`X-RateLimit-Reset` header parsing, low-remaining warnings. |
 | `OAuthOptionsTests` | `IsRedirectUriAllowed` — RFC 8252 loopback any-port acceptance, https-loopback rejection, allowlist matching with subdomain/path-segment spoof guards, validation normalisation. |
-| `OAuthProxyEndpointsTests` | Integration test (via `WebApplicationFactory<Program>`) for `/oauth/authorize` and `/oauth/register`: rejects disallowed `redirect_uri`, accepts loopback + allowlisted hosted callbacks, filters partially-disallowed registration requests. |
+| `OAuthProxyEndpointsTests` | Integration test (via `WebApplicationFactory<Program>`) for the proxy endpoints: rejects disallowed `redirect_uri`, accepts loopback + allowlisted hosted callbacks, filters partially-disallowed registration requests, refuses unsupported grants. Also pins the RFC 8414 façade — `issuer` equals the serving origin *and* the `authorization_servers` value in the protected-resource document (asserted against each other, so the two documents cannot drift apart while both still look right), `authorization_response_iss_parameter_supported` is advertised, and `/oauth/callback` emits exactly one `iss` naming us, replacing any upstream value. |
+| `OAuthProxyPublicOriginTests` | The production shape `OAuthProxyEndpointsTests` cannot reach: with `OAuth:PublicBaseUrl` set, the published identity must be that configured origin and not the request `Host`. Its sibling's assertions would pass even on a regression to Host-derived values, because there the two coincide. |
 | `Tools/AccountsToolsTests` | List / get / create / update / delete + status filter + traits + list-by-organisation |
 | `Tools/SummaryToolsTests` | `Get_organization_summary` — the read-only composite (org get-by-id with curated rollup traits, object-name resolution, two organisation-scoped instance searches) and its per-sub-call error isolation |
 | `Tools/OrganizationsToolsTests` | CRUD + traits |
@@ -47,7 +48,7 @@ tenant, no Key Vault.
 | `ToolAuthorizePolicyCoverageTests` | Every tool carries exactly one `[Authorize]` whose policy matches its annotations, plus the exact 56 / 25 / 12 read / write / delete distribution. Pairs with the count assertion so neither can pass vacuously. |
 | `AuthorizationFilterToolsListTests` | The load-bearing authorisation suite. Per-tier `tools/list` filtering (exact 56 / 81 / 93 partition, subset relations, and the two off-prefix tools by name), the no-permissions caller seeing nothing, NoAuth dev mode seeing all 93 unfiltered, a reader's write call being refused, and exactly one audit-deny record per refused call. Also pins that whitespace in a configured permission cannot desync discovery from enforcement. |
 | `VitallyPermissionHandlerTests` | The ASP.NET Core authorisation handler: succeeds when the caller holds the permission, does not when they lack it, and short-circuits to success when authorisation is bypassed (RBAC off or `NoAuth`) so local dev is never filtered to an empty list. |
-| `ResourceMetadataDiscoveryTests` | The 401 challenge carries exactly **one** `WWW-Authenticate` value with a `resource_metadata` pointer, adds `error="invalid_token"` when a token was presented, and keeps the status at exactly 401 — which `.github/workflows/deploy.yml` smoke-tests. Both well-known metadata paths serve, asserted with exact collection counts rather than `Contain`, since `ProtectedResourceMetadata` ships `BearerMethodsSupported` pre-populated and an append would silently duplicate it. |
+| `ResourceMetadataDiscoveryTests` | The 401 challenge carries exactly **one** `WWW-Authenticate` value with a `resource_metadata` pointer, adds `error="invalid_token"` when a token was presented, and keeps the status at exactly 401 — which `.github/workflows/deploy.yml` smoke-tests. Both well-known metadata paths serve, asserted with exact collection counts rather than `Contain`, since `ProtectedResourceMetadata` ships `BearerMethodsSupported` pre-populated and an append would silently duplicate it. Also asserts no property is serialised as `null`: RFC 9728 §3.2 requires an unused parameter to be omitted, and a strict client rejects the whole document over the difference — invisible to a test that only reads the properties it expects to find. |
 | `ToolsListCachingTests` | Asserts the serialised wire form of the cache hints — `ttlMs` as integer milliseconds and `cacheScope` as `"private"` — deliberately on the raw JSON rather than the SDK's CLR properties, so an SDK rename is caught here rather than by clients. |
 | `IntegrationTestCollection` | Not a test — the xUnit collection definition serialising every class that mutates process-wide environment variables. See the note above; membership is mandatory for such classes. |
 | `CapturingLogger` / `CapturingLoggerProvider` | Test helper capturing `ILogger` output so audit assertions can be made against what `AuditLogger` actually recorded. |
@@ -57,7 +58,7 @@ tenant, no Key Vault.
 - **xUnit** — test framework
 - **Moq** — `HttpClient` mocking (`Mock<HttpMessageHandler>` + `Protected()`)
 - **FluentAssertions** — readable assertions
-- **Microsoft.AspNetCore.Mvc.Testing** — in-process integration host for `OAuthProxyEndpointsTests` (uses `WebApplicationFactory<Program>`)
+- **Microsoft.AspNetCore.Mvc.Testing** — in-process integration host for `OAuthProxyEndpointsTests`, `OAuthProxyPublicOriginTests` and the other integration classes (uses `WebApplicationFactory<Program>`)
 - **Microsoft.Testing.Extensions.CodeCoverage** — code coverage (`--coverage`)
 - **Microsoft.Testing.Extensions.TrxReport** — TRX output for the CI test summary (`--report-trx`)
 
