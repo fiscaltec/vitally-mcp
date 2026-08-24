@@ -47,15 +47,25 @@ public static class StartupGuards
         {
             _ = await metadata.GetAsync(cts.Token);
         }
-        catch (Exception ex)
+        // Two specific clauses rather than one catch-all: UpstreamOidcMetadata funnels every failure
+        // mode — transport errors included — into InvalidOperationException, and the only other way
+        // out is the timeout above. Anything else would be a genuine bug, and letting it propagate
+        // uncaught still refuses the start, just without the added context.
+        catch (InvalidOperationException ex)
         {
-            throw new InvalidOperationException(
-                "The upstream OIDC discovery document could not be resolved, so the OAuth proxy cannot " +
-                "determine the provider's authorize, token, jwks and userinfo endpoints. Refusing to start " +
-                "rather than advertise endpoints that were never verified. Check that OAuth:Authority is the " +
-                "provider's issuer URL and that its /.well-known/openid-configuration is reachable from " +
-                $"this host. Underlying failure: {ex.Message}",
-                ex);
+            throw Unresolvable(ex);
+        }
+        catch (OperationCanceledException ex)
+        {
+            throw Unresolvable(ex);
         }
     }
+
+    private static InvalidOperationException Unresolvable(Exception cause) =>
+        new("The upstream OIDC discovery document could not be resolved, so the OAuth proxy cannot " +
+            "determine the provider's authorize, token, jwks and userinfo endpoints. Refusing to start " +
+            "rather than advertise endpoints that were never verified. Check that OAuth:Authority is the " +
+            "provider's issuer URL and that its /.well-known/openid-configuration is reachable from " +
+            $"this host. Underlying failure: {cause.Message}",
+            cause);
 }

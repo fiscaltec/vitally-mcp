@@ -7,8 +7,22 @@ using VitallyMcp;
 
 namespace VitallyMcp.Tests;
 
-public class StartupGuardsTests
+public sealed class StartupGuardsTests : IDisposable
 {
+    /// <summary>
+    /// Caches handed to resolvers, disposed with the class. <see cref="MemoryCache"/> is
+    /// <see cref="IDisposable"/> and CodeQL flags leaving one un-disposed.
+    /// </summary>
+    private readonly List<MemoryCache> _caches = [];
+
+    public void Dispose()
+    {
+        foreach (var cache in _caches)
+        {
+            cache.Dispose();
+        }
+    }
+
     [Fact]
     public void EnsureSafeAuthConfig_NoAuthWithKeyVault_Throws()
     {
@@ -45,17 +59,16 @@ public class StartupGuardsTests
     [Fact]
     public async Task EnsureUpstreamOidcEndpoints_DocumentMissingAnEndpoint_Throws()
     {
-        const string incomplete = """
-        { "issuer": "https://idp.example/v2.0", "authorization_endpoint": "https://idp.example/authorize" }
-        """;
-        using var handler = new StubOidcDiscovery.StubHandler(incomplete);
+        // Issuer intact so the document passes the issuer check and fails on the missing endpoint —
+        // otherwise this would assert the wrong rejection reason.
+        using var handler = new StubOidcDiscovery.StubHandler(StubOidcDiscovery.BuildDocument(omit: "userinfo_endpoint"));
 
         var act = async () => await StartupGuards.EnsureUpstreamOidcEndpointsAsync(
             BuildResolver(handler), proxyEnabled: true, timeout: TimeSpan.FromSeconds(5));
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithInnerException<InvalidOperationException>()
-            .WithMessage("*token_endpoint*");
+            .WithMessage("*userinfo_endpoint*");
     }
 
     [Fact]
@@ -86,16 +99,20 @@ public class StartupGuardsTests
         endpoints.TokenEndpoint.Should().Be(StubOidcDiscovery.TokenEndpoint);
     }
 
-    private static UpstreamOidcMetadata BuildResolver(HttpMessageHandler handler)
+    private UpstreamOidcMetadata BuildResolver(HttpMessageHandler handler)
     {
         var services = new ServiceCollection();
         services.AddHttpClient(UpstreamOidcMetadata.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => handler);
 
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        _caches.Add(cache);
+
         return new UpstreamOidcMetadata(
             services.BuildServiceProvider().GetRequiredService<IHttpClientFactory>(),
-            Options.Create(new OAuthOptions { Authority = "https://idp.example/tenant/v2.0" }),
-            new MemoryCache(new MemoryCacheOptions()),
+            // Must equal the stub document's issuer: the resolver checks the two against each other.
+            Options.Create(new OAuthOptions { Authority = StubOidcDiscovery.Issuer }),
+            cache,
             NullLogger<UpstreamOidcMetadata>.Instance);
     }
 }

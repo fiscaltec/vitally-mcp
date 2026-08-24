@@ -30,15 +30,10 @@ public class UpstreamOidcStartupFailFastTests
     [Fact]
     public void Host_RefusesToStartWhenTheDiscoveryDocumentOmitsAnEndpointTheProxyNeeds()
     {
-        const string missingUserInfo = """
-        {
-          "issuer": "https://login.example-idp.com/tenant-id/v2.0",
-          "authorization_endpoint": "https://login.example-idp.com/tenant-id/oauth2/v2.0/authorize",
-          "token_endpoint": "https://login.example-idp.com/tenant-id/oauth2/v2.0/token",
-          "jwks_uri": "https://login.example-idp.com/tenant-id/discovery/v2.0/keys"
-        }
-        """;
-        using var factory = new Factory(proxyEnabled: true, discovery: missingUserInfo);
+        // Issuer intact, so the document reaches the endpoint checks rather than being refused
+        // earlier for speaking for the wrong issuer.
+        using var factory = new Factory(
+            proxyEnabled: true, discovery: StubOidcDiscovery.BuildDocument(omit: "userinfo_endpoint"));
 
         var act = () => factory.CreateClient();
 
@@ -72,7 +67,7 @@ public class UpstreamOidcStartupFailFastTests
                 var settings = new Dictionary<string, string?>
                 {
                     ["OAuth:NoAuth"] = "true",
-                    ["OAuth:Authority"] = "https://example.auth0.com/",
+                    ["OAuth:Authority"] = StubOidcDiscovery.Issuer,
                     ["OAuth:Audience"] = "https://vitally.example.com",
                     ["Vitally:Region"] = "EU",
                     ["Vitally:DevelopmentApiKey"] = "sk_test_dummy"

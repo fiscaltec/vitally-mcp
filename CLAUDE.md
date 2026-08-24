@@ -289,6 +289,15 @@ concatenation that is safe, because OIDC Discovery §4 standardises it.
 The bottom two rows are why this is a correctness fix rather than tidying: they are published to every
 MCP client as fact, so a wrong value is advertised, not merely used.
 
+**The document must speak for `Authority`.** `issuer` in the fetched document is checked against
+`OAuth:Authority` before any endpoint is read (OIDC Discovery §4.3) — the same anti-mix-up control as
+the RFC 8414 §3.3 rule the façade section describes, and for the same reason: a metadata document can
+only ever speak for its own issuer. It is load-bearing rather than decorative, because the discovery
+client follows redirects; without the check a redirect could hand us another provider's endpoints,
+which we would cache and then republish to clients as *this* provider's. Trailing slashes are
+normalised on both sides and nothing else is — Auth0 issuers carry one and Entra's do not, so that
+much drift is tolerated and no more.
+
 **Fail-fast.** `StartupGuards.EnsureUpstreamOidcEndpointsAsync` resolves the document once after
 `builder.Build()` (15 s cap) and throws if it is unreachable or missing any of the four, so the
 container refuses to start rather than serve unverified endpoints. It is a no-op when
@@ -301,6 +310,21 @@ in every integration test.
 After startup the endpoints are cached for 12 h; a *failed refresh* falls back to the last resolved
 copy rather than failing the request, since startup already proved those values good. The fail-fast
 that matters is the one before the server accepts traffic.
+
+Two details of that fallback are easy to get wrong and are pinned by tests:
+
+- The stale copy is **re-cached** for `FailedRefreshRetryInterval` (1 min) before being returned.
+  Without that, a prolonged provider outage would put a fresh discovery attempt — and a wait of up to
+  the 10 s client timeout — in front of *every* proxy request once the TTL lapsed, turning a fallback
+  meant to absorb the outage into an amplifier of it.
+- The fallback is gated on **the caller's cancellation token**, not on the exception type. An
+  `HttpClient` timeout surfaces as `TaskCanceledException` — an `OperationCanceledException` — so
+  filtering that type out would have excluded a slow provider, which is precisely the case the
+  fallback exists for. Only a genuinely cancelled caller skips it, because there is then no one left
+  to serve.
+
+`UpstreamOidcMetadata` funnels every failure mode — transport errors included — into
+`InvalidOperationException`, so `StartupGuards` catches two specific types rather than a catch-all.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 

@@ -353,7 +353,9 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
                     // want to stand up a real OIDC provider for the test. NoAuth still permits
                     // the proxy when SharedClientId is set.
                     ["OAuth:NoAuth"] = "true",
-                    ["OAuth:Authority"] = "https://example.auth0.com/",
+                    // Must equal StubOidcDiscovery.Issuer — the resolver refuses a document that
+                    // speaks for a different issuer (OIDC Discovery §4.3).
+                    ["OAuth:Authority"] = StubOidcDiscovery.Issuer,
                     ["OAuth:Audience"] = "https://vitally.example.com",
                     ["OAuth:SharedClientId"] = "test-client-id",
                     ["OAuth:AllowedClientRedirectUris:0"] = "https://claude.ai/api/mcp/auth_callback",

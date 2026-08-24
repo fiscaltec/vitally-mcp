@@ -38,6 +38,10 @@ public sealed record UpstreamOidcEndpoints(
 /// startup via <see cref="StartupGuards.EnsureUpstreamOidcEndpointsAsync"/> rather than a lazy
 /// first-request resolve.
 /// </para>
+/// <para>
+/// Every failure mode surfaces as <see cref="InvalidOperationException"/> — transport errors
+/// included — so callers have one type to catch rather than a catch-all.
+/// </para>
 /// </remarks>
 public sealed class UpstreamOidcMetadata(
     IHttpClientFactory httpClientFactory,
@@ -61,6 +65,15 @@ public sealed class UpstreamOidcMetadata(
     public static readonly TimeSpan CacheDuration = TimeSpan.FromHours(12);
 
     /// <summary>
+    /// How long the last-known-good copy is re-cached after a failed refresh. Without this, a
+    /// prolonged provider outage would put a fresh discovery attempt — and a wait of up to the
+    /// client timeout — in front of *every* proxy request once the TTL lapsed, turning a fallback
+    /// meant to absorb the outage into an amplifier of it. Short enough that recovery is picked up
+    /// promptly, long enough that requests are served from memory meanwhile.
+    /// </summary>
+    public static readonly TimeSpan FailedRefreshRetryInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
     /// Last successfully resolved document, kept outside <see cref="IMemoryCache"/> so it survives
     /// the TTL. Serving it when a *refresh* fails is deliberate: startup already proved the provider
     /// reachable and its endpoints good, so a later blip should not take the proxy down with it. The
@@ -72,9 +85,10 @@ public sealed class UpstreamOidcMetadata(
     /// Returns the upstream endpoints, fetching and caching the discovery document on first use.
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// The document could not be fetched, is not JSON, or omits one of the four endpoints — and no
-    /// earlier resolution succeeded to fall back on.
+    /// The document could not be fetched, is not JSON, speaks for a different issuer, or omits one of
+    /// the four endpoints — and no earlier resolution succeeded to fall back on.
     /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public async Task<UpstreamOidcEndpoints> GetAsync(CancellationToken cancellationToken = default)
     {
         if (cache.TryGetValue<UpstreamOidcEndpoints>(CacheKey, out var cached) && cached is not null)
@@ -87,6 +101,31 @@ public sealed class UpstreamOidcMetadata(
         UpstreamOidcEndpoints endpoints;
         try
         {
+            endpoints = await FetchAsync(discoveryUrl, cancellationToken);
+        }
+        // Keyed on the caller's token rather than on the exception type. An HttpClient timeout
+        // surfaces as TaskCanceledException — an OperationCanceledException — so filtering the
+        // *type* out would have sent exactly the failure this fallback exists for straight to the
+        // caller. Only a genuinely cancelled caller skips the fallback, because there is then no
+        // one left to serve.
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && _lastKnownGood is not null)
+        {
+            logger.LogWarning(ex,
+                "Failed to refresh the OIDC discovery document from {DiscoveryUrl}; continuing with the last resolved endpoints for {RetryInterval}.",
+                discoveryUrl, FailedRefreshRetryInterval);
+            cache.Set(CacheKey, _lastKnownGood, FailedRefreshRetryInterval);
+            return _lastKnownGood;
+        }
+
+        _lastKnownGood = endpoints;
+        cache.Set(CacheKey, endpoints, CacheDuration);
+        return endpoints;
+    }
+
+    private async Task<UpstreamOidcEndpoints> FetchAsync(string discoveryUrl, CancellationToken cancellationToken)
+    {
+        try
+        {
             var client = httpClientFactory.CreateClient(HttpClientName);
             using var response = await client.GetAsync(discoveryUrl, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -97,19 +136,13 @@ public sealed class UpstreamOidcMetadata(
                     $"OIDC discovery document at '{discoveryUrl}' returned HTTP {(int)response.StatusCode}.");
             }
 
-            endpoints = Parse(body, discoveryUrl);
+            return Parse(body, discoveryUrl, options.Value.Authority);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && _lastKnownGood is not null)
+        catch (HttpRequestException ex)
         {
-            logger.LogWarning(ex,
-                "Failed to refresh the OIDC discovery document from {DiscoveryUrl}; continuing with the last resolved endpoints.",
-                discoveryUrl);
-            return _lastKnownGood;
+            throw new InvalidOperationException(
+                $"OIDC discovery document at '{discoveryUrl}' could not be fetched: {ex.Message}", ex);
         }
-
-        _lastKnownGood = endpoints;
-        cache.Set(CacheKey, endpoints, CacheDuration);
-        return endpoints;
     }
 
     /// <summary>
@@ -120,11 +153,15 @@ public sealed class UpstreamOidcMetadata(
         $"{(authority ?? string.Empty).TrimEnd('/')}/.well-known/openid-configuration";
 
     /// <summary>
-    /// Parses a discovery document into the four endpoints we need, rejecting anything incomplete.
+    /// Parses a discovery document into the four endpoints we need, rejecting anything incomplete or
+    /// speaking for an issuer other than <paramref name="expectedIssuer"/>.
     /// <paramref name="discoveryUrl"/> only appears in error messages, so a failure names the
     /// document that caused it.
     /// </summary>
-    public static UpstreamOidcEndpoints Parse(string json, string discoveryUrl)
+    /// <param name="json">Raw document body.</param>
+    /// <param name="discoveryUrl">Where it came from, for diagnostics.</param>
+    /// <param name="expectedIssuer">The configured <see cref="OAuthOptions.Authority"/>.</param>
+    public static UpstreamOidcEndpoints Parse(string json, string discoveryUrl, string? expectedIssuer)
     {
         JsonDocument doc;
         try
@@ -139,6 +176,8 @@ public sealed class UpstreamOidcMetadata(
 
         using (doc)
         {
+            RequireMatchingIssuer(doc.RootElement, discoveryUrl, expectedIssuer);
+
             return new UpstreamOidcEndpoints(
                 RequireEndpoint(doc.RootElement, "authorization_endpoint", discoveryUrl),
                 RequireEndpoint(doc.RootElement, "token_endpoint", discoveryUrl),
@@ -147,11 +186,43 @@ public sealed class UpstreamOidcMetadata(
         }
     }
 
-    private static string RequireEndpoint(JsonElement root, string name, string discoveryUrl)
+    /// <summary>
+    /// OIDC Discovery §4.3: the <c>issuer</c> in the document must match the issuer the document was
+    /// requested for. It is the same anti-mix-up control as RFC 8414 §3.3 — a metadata document can
+    /// only ever speak for itself — and it is what stops a redirect (the discovery client follows
+    /// them) from substituting another provider's endpoints, which we would then cache and
+    /// republish to clients as this provider's.
+    /// </summary>
+    private static void RequireMatchingIssuer(JsonElement root, string discoveryUrl, string? expectedIssuer)
     {
         if (root.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty(name, out var value)
+            || !root.TryGetProperty("issuer", out var value)
             || value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException(
+                $"OIDC discovery document at '{discoveryUrl}' has no string 'issuer', so it cannot be " +
+                "checked against OAuth:Authority. Refusing to trust its endpoints.");
+        }
+
+        // Trailing slashes are normalised on both sides and nothing else is: the comparison stays a
+        // literal string match per the spec. Auth0 issuers conventionally carry the slash and
+        // Entra's do not, so tolerating exactly that much absorbs configuration drift without
+        // weakening the control.
+        var published = value.GetString()!.Trim().TrimEnd('/');
+        var expected = (expectedIssuer ?? string.Empty).Trim().TrimEnd('/');
+
+        if (!string.Equals(published, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"OIDC discovery document at '{discoveryUrl}' declares issuer '{value.GetString()}', which " +
+                $"does not match OAuth:Authority ('{expectedIssuer}'). A metadata document can only speak " +
+                "for its own issuer (OIDC Discovery §4.3), so this one is refused rather than trusted.");
+        }
+    }
+
+    private static string RequireEndpoint(JsonElement root, string name, string discoveryUrl)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
         {
             throw new InvalidOperationException(
                 $"OIDC discovery document at '{discoveryUrl}' has no string '{name}'. The OAuth proxy " +

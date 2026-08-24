@@ -87,7 +87,8 @@ public class OAuthProxyPublicOriginTests : IClassFixture<OAuthProxyPublicOriginT
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["OAuth:NoAuth"] = "true",
-                    ["OAuth:Authority"] = "https://example.auth0.com/",
+                    // Must equal StubOidcDiscovery.Issuer — see the sibling factory.
+                    ["OAuth:Authority"] = StubOidcDiscovery.Issuer,
                     ["OAuth:Audience"] = PublicOrigin,
                     ["OAuth:PublicBaseUrl"] = PublicOrigin,
                     ["OAuth:SharedClientId"] = "test-client-id",
