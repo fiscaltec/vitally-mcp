@@ -254,8 +254,8 @@ az containerapp secret set -g "$RG" -n "$APP" \
   --secrets "oauth-shared-client-secret=<staging client secret>"
 
 az containerapp update -g "$RG" -n "$APP" --set-env-vars \
-  "OAuth__Audience=https://$FQDN" \
-  "OAuth__Resource=https://$FQDN" \
+  "OAuth__Audience=https://$FQDN/" \
+  "OAuth__Resource=https://$FQDN/" \
   "OAuth__PublicBaseUrl=https://$FQDN" \
   "OAuth__SharedClientId=<staging client id>" \
   "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"
@@ -327,6 +327,25 @@ This is expected, not a defect. Per-caller filtering is proven by
 / admin. **Do not disable `Authorization__ReadOnly` to make a tier difference appear** — it is the
 only control preventing a validation run from mutating real customer records, because there is one
 live Vitally tenant and no sandbox.
+
+### Note: an audience other than production's yields *zero* tools
+
+Distinct from the note above, and more alarming when it happens. The post-login Action
+`Vitally MCP claims` begins with
+
+```js
+if (event.resource_server?.identifier !== 'https://vitally.fiscaltec.com/') return;
+```
+
+so **no `permissions` claim is minted for any other audience** and `ToolAuthorizer` filters every
+tool out of `tools/list`. Any validation run using its own Resource Server — which is what section
+2.5 creates — will therefore show an empty tool list even though sign-in, the token exchange and
+`POST /mcp` all succeeded. Observed on 2026-08-22 while validating #90.
+
+It is not an authorisation defect; it is the discovery filter failing closed, which is correct. To
+confirm the rest of the path, set `Authorization__Enabled=false` and re-list — `ReadOnly=true` still
+hides the destructive tools, so expect 56. The alternative, widening the Action's audience guard,
+edits a production Action and is not worth it for a temporary API.
 
 ### Optional: validating the tier split against real Entra groups
 

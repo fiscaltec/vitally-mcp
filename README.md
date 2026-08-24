@@ -57,7 +57,7 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for the resolved API key. |
 | `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
 | `OAuth:Authority` | Yes | — | OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
-| `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. |
+| `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/`. Must match the provider's identifier exactly, trailing slash included — Auth0 compares it byte for byte and its identifiers are immutable once created. |
 | `OAuth:Resource` | No | — | Canonical resource identifier published in `/.well-known/oauth-protected-resource`. Falls back to `Audience` when blank; set explicitly when clients need the metadata `resource` to match the server's URL/origin (per RFC 9728 + RFC 8707 validators). |
 | `OAuth:PublicBaseUrl` | Recommended (prod) | — | Canonical public origin, e.g. `https://vitally.fiscaltec.com`. When set, the `/.well-known/*` metadata and the OAuth proxy callback are built from this value instead of the request `Host`, so a spoofed/forwarded `Host` can't redirect a client's `authorization_endpoint`/`token_endpoint` at an attacker. Leave empty in local dev. |
 | `Authorization:Enabled` | No | `true` | Server-side RBAC enforcement. When `true`, every tool call is checked against the caller's JWT permissions (the hard backstop behind the advisory `ReadOnly`/`Destructive` flags). Set `false` only for local dev. |
