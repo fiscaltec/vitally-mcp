@@ -254,8 +254,8 @@ az containerapp secret set -g "$RG" -n "$APP" \
   --secrets "oauth-shared-client-secret=<staging client secret>"
 
 az containerapp update -g "$RG" -n "$APP" --set-env-vars \
-  "OAuth__Audience=https://$FQDN" \
-  "OAuth__Resource=https://$FQDN" \
+  "OAuth__Audience=https://$FQDN/" \
+  "OAuth__Resource=https://$FQDN/" \
   "OAuth__PublicBaseUrl=https://$FQDN" \
   "OAuth__SharedClientId=<staging client id>" \
   "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"
@@ -327,6 +327,35 @@ This is expected, not a defect. Per-caller filtering is proven by
 / admin. **Do not disable `Authorization__ReadOnly` to make a tier difference appear** — it is the
 only control preventing a validation run from mutating real customer records, because there is one
 live Vitally tenant and no sandbox.
+
+### Note: a non-production audience gets no Auth0 `permissions` claim
+
+The post-login Action `Vitally MCP claims` begins with
+
+```js
+if (event.resource_server?.identifier !== 'https://vitally.fiscaltec.com/') return;
+```
+
+so **no `permissions` claim is minted for any audience except production's** — including the staging
+Resource Server that section 2.5 creates. What that causes depends on which resolution path is live,
+and the two outcomes look nothing alike:
+
+| Configuration | Result |
+|---|---|
+| `LiveGroupCheck=true` **and** the Graph grant from §2.3 in place — the staging config in §2.4 | Entitlement resolves from **live Entra group membership**, independently of the claim. A group member sees their tier's tools; the missing claim is invisible. Normal. |
+| `LiveGroupCheck` off (the code default), or the Graph lookup failing/ungranted | `ToolAuthorizer` falls back to the token claim, finds nothing, and filters **every** tool out of `tools/list`. |
+
+So an empty tool list here does **not** implicate the code under test. It means the live-group path
+is not working *and* the claim is absent — check the §2.3 Graph grant first, since a missing
+`GroupMember.Read.All` fails silently to exactly this state. Observed on 2026-08-22 while validating
+#90, on a run that had deliberately left `LiveGroupCheck` at its default.
+
+Read the inverse carefully too: **a populated tool list is not evidence the Action ran.** Under
+§2.4's configuration it only proves live Entra membership resolved.
+
+To isolate the rest of the path from authorisation entirely, set `Authorization__Enabled=false` and
+re-list — `ReadOnly=true` still hides the destructive tools, so expect 56. Do **not** widen the
+Action's audience guard instead: that edits a production Action for the sake of a temporary API.
 
 ### Optional: validating the tier split against real Entra groups
 

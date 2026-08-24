@@ -278,8 +278,8 @@ against a local container is now a working end-to-end client, which is the pract
 
 `OAuthOptions` (singleton, bound from `OAuth:` section):
 - `Authority` — OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
-- `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com`. Validated against the JWT `aud` claim.
-- `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance).
+- `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/` — **with the trailing slash**, because Auth0 identifiers are exact-match and production's carries one (verified against the live tenant, 2026-08-22). Validated against the JWT `aud` claim.
+- `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance) — the published client rejects the whole document on a mismatch, so this tracks `Audience` and carries the same trailing slash. `PublicBaseUrl` is the odd one out: it is an origin, so no trailing slash (and `Validate()` trims one anyway).
 - `SharedClientId` — pre-registered Auth0 native-app client_id that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active.
 - `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`.
 - `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
@@ -555,7 +555,7 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com`; post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable); post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
 | CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback); nightly `release.yml` cuts a semver tag + GitHub Release and deploys it; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
 
