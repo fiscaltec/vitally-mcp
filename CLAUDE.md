@@ -243,8 +243,26 @@ Two things were verified rather than assumed, both of which the design had flagg
 - **The published SDK 1.x does not enforce §3.3 at all**; the enforcement ships in the 2.x packages.
   So this was latent for Claude Desktop / Claude Code and immediately fatal for anything on 2.x.
 
+**Validated against the live Auth0 tenant on 2026-08-22**, which the local run could not cover. MCP
+Inspector 2.3.0 completed the whole flow against the server behind an HTTPS tunnel with
+`PublicBaseUrl` set: metadata 200, DCR `201`, real Auth0→Entra sign-in, `/oauth/callback` 302 carrying
+`iss=<our origin>` which the client *accepted*, `/oauth/token` 200, and authenticated `POST /mcp` 200.
+That is the acceptance test in #90, and it is past the point where the flow previously aborted.
+
 **If you touch this,** re-run that validation rather than reasoning about it — `npx @modelcontextprotocol/inspector`
 against a local container is now a working end-to-end client, which is the practical payoff.
+
+**Two traps when validating against a throwaway Auth0 audience** (both cost time on 2026-08-22):
+
+- **`tools/list` will be empty, and that is expected.** The post-login Action `Vitally MCP claims`
+  opens with `if (event.resource_server?.identifier !== 'https://vitally.fiscaltec.com/') return;`,
+  so no `permissions` claim is minted for any other audience and every tool is filtered out. It looks
+  exactly like an authorisation failure at the moment you are least able to dismiss it. Set
+  `Authorization:Enabled=false` to confirm the rest of the path, or accept the empty list as evidence
+  the RBAC discovery filter fails closed.
+- **Auth0 API identifiers are immutable and must equal the server origin** (the client throws if the
+  RFC 9728 `resource` does not match), so an ephemeral tunnel URL orphans one API per run. Use a
+  stable hostname, or budget for the cleanup.
 
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 
