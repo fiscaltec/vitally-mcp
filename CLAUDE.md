@@ -190,6 +190,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
   filtering and the `VitallyService.SendAsync` backstop share one resolution path.
 - `ToolsListCacheOptions.cs` binds the `ToolsListCache:` section for the `tools/list` cache hints.
 - `ProtectedResourceMetadataBuilder.cs` builds the RFC 9728 document served from both well-known paths.
+- `UpstreamOidcMetadata.cs` resolves the *upstream* provider's `authorization_endpoint`, `token_endpoint`, `jwks_uri` and `userinfo_endpoint` from its OIDC discovery document, cached in `IMemoryCache` (12 h). Registered singleton with its own named `HttpClient`. `StartupGuards.EnsureUpstreamOidcEndpointsAsync` resolves it once after `builder.Build()` and **refuses to start** if the document is unreachable or missing any of the four — see the discovery section below.
 - `VitallyApiKeyProvider` registered scoped.
 - `VitallyRateLimitHandler` registered transient and attached to the `HttpClient` used by `VitallyService`.
 - `JwtBearer` authentication added unless `OAuth:NoAuth=true`.
@@ -198,10 +199,10 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - Publishes server-level usage guidance in the MCP `initialize` response via `McpServerOptions.ServerInstructions` (text in `VitallyServerInstructions.Text`): steers clients toward organisation-level data, the traits-vs-custom-objects distinction, the name/date-range filters, and the read-only/permission model.
 - OAuth proxy endpoints (only active when `OAuth:SharedClientId` is set):
   - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata, serialised with `McpJsonUtilities.DefaultOptions`. That is load-bearing, not incidental: the ASP.NET Core defaults write every unset optional as an explicit `null`, and RFC 9728 §3.2 requires an unused parameter to be *omitted* — strict clients reject the whole document over the difference.
-  - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata declaring **our own origin** as `issuer` (see the façade section below), pointing `authorization_endpoint` / `token_endpoint` / `registration_endpoint` at our own proxy endpoints, and advertising `authorization_response_iss_parameter_supported: true`. `userinfo_endpoint` and `jwks_uri` still point at Auth0, which issues the tokens.
-  - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), stashes it keyed by `state`, and proxies to Auth0 with our own fixed callback.
+  - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata declaring **our own origin** as `issuer` (see the façade section below), pointing `authorization_endpoint` / `token_endpoint` / `registration_endpoint` at our own proxy endpoints, and advertising `authorization_response_iss_parameter_supported: true`. `userinfo_endpoint` and `jwks_uri` still point upstream — **read from the provider's discovery document**, not concatenated onto `Authority`.
+  - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), stashes it keyed by `state`, and proxies to the **discovered** upstream `authorization_endpoint` with our own fixed callback.
   - `GET /oauth/callback` — reverses the stash, **replaces any upstream `iss` with our own origin**, and redirects to the original client URI.
-  - `POST /oauth/token` — proxies code/refresh exchanges to Auth0, server-side-injecting `SharedClientSecret`.
+  - `POST /oauth/token` — proxies code/refresh exchanges to the **discovered** upstream `token_endpoint`, server-side-injecting `SharedClientSecret`.
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 - The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it.
@@ -264,6 +265,43 @@ against a local container is now a working end-to-end client, which is the pract
   RFC 9728 `resource` does not match), so an ephemeral tunnel URL orphans one API per run. Use a
   stable hostname, or budget for the cleanup.
 
+### Upstream endpoints come from OIDC discovery, not from `Authority`
+
+The façade above owns `/oauth/authorize`, `/oauth/token` and `/oauth/register`; those keep naming our
+own origin and are unaffected by anything here. This section is about the *other* half — the four
+**upstream** URLs the proxy needs, which used to be string-concatenated onto `OAuth:Authority` in
+Auth0's path shapes and are now read from `{Authority}/.well-known/openid-configuration`
+(`UpstreamOidcMetadata.cs`, #104).
+
+| Endpoint | Read by | Was |
+|---|---|---|
+| `authorization_endpoint` | `/oauth/authorize` redirect target | `{authority}/authorize` |
+| `token_endpoint` | `/oauth/token` forward target | `{authority}/oauth/token` |
+| `jwks_uri` | republished in our RFC 8414 document | `{authority}/.well-known/jwks.json` |
+| `userinfo_endpoint` | republished in our RFC 8414 document | `{authority}/userinfo` |
+
+**Choosing a different `Authority` cannot fix the old shapes**, which is the obvious first instinct
+and a dead end. Entra's issuer is `https://login.microsoftonline.com/{tid}/v2.0` while its endpoints
+hang off `https://login.microsoftonline.com/{tid}/oauth2/v2.0/` — no single prefix yields both — and
+its `userinfo_endpoint` is on `graph.microsoft.com` entirely. The discovery *path* is the one
+concatenation that is safe, because OIDC Discovery §4 standardises it.
+
+The bottom two rows are why this is a correctness fix rather than tidying: they are published to every
+MCP client as fact, so a wrong value is advertised, not merely used.
+
+**Fail-fast.** `StartupGuards.EnsureUpstreamOidcEndpointsAsync` resolves the document once after
+`builder.Build()` (15 s cap) and throws if it is unreachable or missing any of the four, so the
+container refuses to start rather than serve unverified endpoints. It is a no-op when
+`OAuth:SharedClientId` is unset — no proxy, nothing reads the document, no reason to depend on the
+provider at boot. `proxyEnabled` is taken from the **resolved** `IOptions<OAuthOptions>`, not from
+`oauthSection[...]` alongside `noAuth`: that composition-time read happens before
+`WebApplicationFactory` injects test configuration, so reading it raw would silently skip the guard
+in every integration test.
+
+After startup the endpoints are cached for 12 h; a *failed refresh* falls back to the last resolved
+copy rather than failing the request, since startup already proved those values good. The fail-fast
+that matters is the one before the server accepts traffic.
+
 ### Configuration (VitallyServerOptions.cs + OAuthOptions.cs)
 
 `VitallyServerOptions` (singleton, bound from `Vitally:` section):
@@ -277,7 +315,7 @@ against a local container is now a working end-to-end client, which is the pract
 - `MaxAutoPageFetches` — hard cap on page fetches per server-side filtered call (default 10; 100 items/page). Bounds fan-out against Vitally's 1000 req/min budget.
 
 `OAuthOptions` (singleton, bound from `OAuth:` section):
-- `Authority` — OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`.
+- `Authority` — the provider's OIDC **issuer** identifier, e.g. `https://fiscal-it.uk.auth0.com/` (Auth0) or `https://login.microsoftonline.com/{tenant-id}/v2.0` (Entra). It is *not* a prefix the endpoint URLs are built from: `{Authority}/.well-known/openid-configuration` is fetched and the endpoints come from that document. The trailing slash is whatever the provider's own issuer carries — Auth0's has one, Entra's does not.
 - `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/` — **with the trailing slash**, because Auth0 identifiers are exact-match and production's carries one (verified against the live tenant, 2026-08-22). Validated against the JWT `aud` claim.
 - `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance) — the published client rejects the whole document on a mismatch, so this tracks `Audience` and carries the same trailing slash. `PublicBaseUrl` is the odd one out: it is an origin, so no trailing slash (and `Validate()` trims one anyway).
 - `SharedClientId` — pre-registered Auth0 native-app client_id that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active.
@@ -531,6 +569,7 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 - `VitallyApiKeyProviderTests` — dev-fallback resolution (no SecretClient → returns `DevelopmentApiKey`; missing both → throws)
 - `VitallyServiceTests` — JSON field/trait filtering, pagination, resource-specific defaults, plus all six service methods (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`, `GetRawAsync`, `PostRawAsync`, `DeleteRawAsync`) including HTTP-verb / URL / auth-header verification via Moq protected verification
 - `VitallyRateLimitHandlerTests` — 429 retry behaviour, header parsing, low-remaining warnings
+- `UpstreamOidcMetadataTests` / `UpstreamOidcStartupFailFastTests` — the OIDC-discovery resolver (all four endpoints, cache reuse, last-known-good on a failed refresh, rejection of an incomplete or malformed document) and the startup fail-fast wired into `Program.cs`
 - `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
 
 **When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
