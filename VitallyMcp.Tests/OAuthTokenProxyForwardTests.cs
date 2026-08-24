@@ -41,8 +41,12 @@ public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardT
         (await response.Content.ReadAsStringAsync()).Should().Contain("test-access-token",
             "the upstream body is passed through to the caller unchanged");
 
-        _factory.Upstream.RequestedUrls.Should().ContainSingle()
-            .Which.Should().Be(StubOidcDiscovery.TokenEndpoint,
+        // Asserted across every request the fixture has seen, not as a single item: the factory is a
+        // class fixture, so the sibling test's forward lands in the same list and xUnit does not fix
+        // the order the two methods run in. `ContainSingle` passed locally and failed on CI purely on
+        // that ordering.
+        _factory.Upstream.RequestedUrls.Should().NotBeEmpty()
+            .And.AllBeEquivalentTo(StubOidcDiscovery.TokenEndpoint,
                 "the token endpoint comes from the discovery document, not from OAuth:Authority");
     }
 
@@ -62,6 +66,8 @@ public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardT
         });
         await client.PostAsync("/oauth/token", form);
 
+        // Tests within a class share the fixture and run sequentially, so the last recorded body is
+        // this test's own.
         var body = _factory.Upstream.RequestBodies.Last();
         body.Should().Contain(Uri.EscapeDataString("http://localhost/oauth/callback"));
         body.Should().NotContain(Uri.EscapeDataString("http://localhost:54321/callback"));
