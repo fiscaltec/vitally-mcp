@@ -159,7 +159,7 @@ When `OAuth:SharedClientId` is set the server runs an OAuth 2.0 proxy in front o
 | Endpoint | Purpose |
 |---|---|
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 protected-resource metadata — clients use it to discover the authorisation server. |
-| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — points `authorization_endpoint` and `token_endpoint` at the proxy and `registration_endpoint` at our DCR shim. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — declares this server's own origin as `issuer` and points `authorization_endpoint`, `token_endpoint` and `registration_endpoint` at the proxy. `jwks_uri` and `userinfo_endpoint` still point at Auth0, which issues the tokens. |
 | `GET /oauth/authorize` | Captures the client's `redirect_uri`, swaps it for our fixed `/oauth/callback`, and 302s the user upstream to Auth0. Validates the client `redirect_uri` against the loopback + allowlist rules before stashing. |
 | `GET /oauth/callback` | Receives the Auth0 redirect, looks up the original client `redirect_uri` from `state`, and 302s the user back to it with the code. |
 | `POST /oauth/token` | Forwards the code-exchange to Auth0 and injects `SharedClientSecret` so the shared app stays confidential without exposing the secret to MCP clients. |
@@ -212,16 +212,13 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - HTTPS is terminated at the platform ingress (Container Apps managed cert) — the server itself doesn't ship TLS.
 - The OAuth proxy validates every client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus the implicit RFC 8252 loopback rule). Without this check, an attacker could exfiltrate authorisation codes via the proxy's `/oauth/callback` reflector; with it, the proxy refuses anything that isn't a loopback URI or an explicitly-allowlisted hosted callback.
 
-### Known limitation: strict RFC 8414 clients
+### Standards conformance of the OAuth proxy
 
-The OAuth proxy serves authorisation-server metadata from this server's own origin while declaring
-Auth0's `issuer`. RFC 8414 §3.3 requires those to match, so a client enforcing it — including **MCP
-Inspector** — aborts before dynamic client registration and cannot connect. Claude Desktop and Claude
-Code do not enforce it, which is why they work.
-
-Everything up to that point is correct: the 401 challenge, the `resource_metadata` pointer and both
-metadata documents. Fixing it properly collides with RFC 9207 `iss` validation and is tracked
-separately; see the *Known limitation* section in `CLAUDE.md` for the analysis and the proposed shape.
+The proxy presents itself as a complete authorisation server: it declares its own origin as `issuer`
+(RFC 8414 §3.3), and `/oauth/callback` replaces any upstream `iss` with that same origin so the
+authorization response is consistent with the metadata (RFC 9207). Auth0 remains the token issuer.
+Strict clients — including **MCP Inspector** — complete the flow; see the *complete
+authorisation-server façade* section in `CLAUDE.md` for what was verified and how.
 
 ## Licence
 

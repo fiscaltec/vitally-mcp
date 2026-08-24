@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol;
 using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -286,18 +287,26 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 // server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
 // token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints for
 // everything except registration_endpoint.
+// Serialised with the SDK's own options rather than the ASP.NET Core defaults, because those
+// write every unset optional property as an explicit `null`. RFC 9728 §3.2 says an unused
+// metadata parameter is *omitted*, and strict clients enforce the difference: the published
+// @modelcontextprotocol/client schema types `jwks_uri` as a string and rejects the whole
+// document on a null, before any part of the OAuth flow is reached.
 var resourceMetadataHandler = (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
-    Results.Json(ProtectedResourceMetadataBuilder.Build(
-        oauth.Value,
-        GetServerBaseUrl(ctx, oauth.Value.PublicBaseUrl)));
+    Results.Json(
+        ProtectedResourceMetadataBuilder.Build(oauth.Value, GetServerBaseUrl(ctx, oauth.Value.PublicBaseUrl)),
+        McpJsonUtilities.DefaultOptions);
 
 app.MapGet(ProtectedResourceMetadataBuilder.MetadataPath, resourceMetadataHandler);
 app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetadataHandler);
 
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
-// Auth0 still issues tokens (its endpoints are what `authorization_endpoint`/`token_endpoint`
-// point at), but `registration_endpoint` points at our own /oauth/register that hands every
-// caller a pre-registered shared client_id (see POST /oauth/register below).
+// `issuer` names our *own* origin, not Auth0's. §3.3 requires the issuer to correspond to the URL
+// the document was fetched from (an anti-mix-up control), and from the client's point of view we
+// genuinely are the authorization server: authorize, token and register are all ours. Auth0 still
+// issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream. Declaring our
+// origin here is coupled to the `iss` injection in /oauth/callback below — see the façade section
+// in CLAUDE.md before changing either.
 app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
 {
     var o = oauth.Value;
@@ -310,7 +319,7 @@ app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions
     var ourBase = GetServerBaseUrl(ctx, o.PublicBaseUrl);
     return Results.Json(new
     {
-        issuer = authority + "/",
+        issuer = ourBase,
         authorization_endpoint = $"{ourBase}/oauth/authorize",
         token_endpoint = $"{ourBase}/oauth/token",
         userinfo_endpoint = $"{authority}/userinfo",
@@ -320,7 +329,11 @@ app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions
         response_types_supported = new[] { "code" },
         grant_types_supported = new[] { "authorization_code", "refresh_token" },
         token_endpoint_auth_methods_supported = new[] { "none" },
-        code_challenge_methods_supported = new[] { "S256" }
+        code_challenge_methods_supported = new[] { "S256" },
+        // RFC 9207. Honest only because /oauth/callback injects `iss` unconditionally — a client
+        // that sees this flag and then no `iss` on the authorization response treats the absence
+        // as a stripped-parameter attack and aborts, so the two must ship together.
+        authorization_response_iss_parameter_supported = true
     });
 });
 
@@ -379,7 +392,7 @@ app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, I
     return Results.Redirect(sb.ToString());
 });
 
-app.MapGet("/oauth/callback", (HttpContext ctx, IMemoryCache cache) =>
+app.MapGet("/oauth/callback", (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache) =>
 {
     var state = ctx.Request.Query["state"].ToString();
     if (string.IsNullOrWhiteSpace(state))
@@ -397,11 +410,25 @@ app.MapGet("/oauth/callback", (HttpContext ctx, IMemoryCache cache) =>
     var sb = new System.Text.StringBuilder(clientRedirectUri).Append(separator);
     foreach (var kv in ctx.Request.Query)
     {
+        // Drop any upstream `iss` — ours is appended below. Auth0 sends one naming itself when the
+        // tenant is configured for RFC 9207, and whether it does is tenant configuration we don't
+        // control. Forwarding it would contradict the issuer we publish; appending ours alongside
+        // would leave the client two values to choose between. Clients compare a *present* `iss`
+        // against the metadata issuer even when the parameter is not advertised, so both shapes
+        // fail rather than degrade.
+        // OrdinalIgnoreCase, not ==: IQueryCollection lookups are case-insensitive but enumeration
+        // yields keys as they were parsed, so an exact match would forward a differently-cased
+        // `ISS` alongside the one we append below.
+        if (string.Equals(kv.Key, "iss", StringComparison.OrdinalIgnoreCase)) continue;
         foreach (var v in kv.Value)
         {
             sb.Append(Uri.EscapeDataString(kv.Key)).Append('=').Append(Uri.EscapeDataString(v ?? string.Empty)).Append('&');
         }
     }
+    // RFC 9207 §2 — name ourselves as the issuer of this authorization response. Must match the
+    // `issuer` in our RFC 8414 document byte for byte: the comparison is simple string equality,
+    // with no scheme/host case folding, trailing-slash or percent-encoding normalisation applied.
+    sb.Append("iss=").Append(Uri.EscapeDataString(GetServerBaseUrl(ctx, oauth.Value.PublicBaseUrl)));
     return Results.Redirect(sb.ToString().TrimEnd('&'));
 });
 
