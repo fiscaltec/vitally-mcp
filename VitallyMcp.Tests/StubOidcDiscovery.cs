@@ -38,7 +38,13 @@ public static class StubOidcDiscovery
     /// </summary>
     /// <param name="issuer">Issuer to declare; defaults to <see cref="Issuer"/>.</param>
     /// <param name="omit">Name of a top-level property to leave out entirely.</param>
-    public static string BuildDocument(string? issuer = null, string? omit = null)
+    /// <param name="overrideName">Name of a property to replace the value of, in place.</param>
+    /// <param name="overrideValue">Replacement value for <paramref name="overrideName"/>.</param>
+    public static string BuildDocument(
+        string? issuer = null,
+        string? omit = null,
+        string? overrideName = null,
+        string? overrideValue = null)
     {
         var properties = new List<(string Name, string Value)>
         {
@@ -51,6 +57,7 @@ public static class StubOidcDiscovery
 
         var body = string.Join(",\n  ", properties
             .Where(p => p.Name != omit)
+            .Select(p => p.Name == overrideName ? (p.Name, Value: overrideValue ?? string.Empty) : p)
             .Select(p => $"\"{p.Name}\": \"{p.Value}\""));
 
         return $"{{\n  {body},\n  \"response_types_supported\": [\"code\"]\n}}";

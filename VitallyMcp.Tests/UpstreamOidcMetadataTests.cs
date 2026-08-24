@@ -319,6 +319,29 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
         act.Should().Throw<InvalidOperationException>().WithMessage("*authorization_endpoint*");
     }
 
+    [Theory]
+    [InlineData("authorization_endpoint")]
+    [InlineData("token_endpoint")]
+    [InlineData("jwks_uri")]
+    [InlineData("userinfo_endpoint")]
+    public void Parse_RejectsAnEndpointCarryingAUriFragment(string endpointName)
+    {
+        // An absolute https URI can still carry a fragment, and the consequence is silent rather than
+        // loud: /oauth/authorize appends `?response_type=…` to the authorization endpoint, and
+        // everything after a '#' is fragment — so the whole query, callback included, would be
+        // trapped client-side and never reach the provider. RFC 6749 §3.1 forbids it, and
+        // OAuthOptions.IsRedirectUriAllowed already rejects fragments at the other end of this flow.
+        var document = StubOidcDiscovery.BuildDocument(
+            overrideName: endpointName,
+            overrideValue: "https://login.example-idp.com/endpoint#fragment");
+
+        var act = () => UpstreamOidcMetadata.Parse(document, DiscoveryUrl, StubOidcDiscovery.Issuer);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*{endpointName}*")
+            .And.Message.Should().Contain("fragment");
+    }
+
     /// <summary>
     /// Builds a resolver over a stub handler. Returns the cache too so a test can share it between
     /// instances or expire it by hand.

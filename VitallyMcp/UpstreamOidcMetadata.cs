@@ -236,6 +236,20 @@ public sealed class UpstreamOidcMetadata(
                 $"OIDC discovery document at '{discoveryUrl}' gives '{name}' as '{url}', which is not an absolute https URI.");
         }
 
+        // RFC 6749 §3.1/§3.2 — an endpoint URI must not carry a fragment. Silently destructive rather
+        // than merely invalid: /oauth/authorize appends `?response_type=…` to the authorization
+        // endpoint, and appending after a fragment traps the whole query — the callback included —
+        // on the client side of the '#', so none of it ever reaches the provider. On the other two,
+        // the fragment would be republished to clients as part of an unusable endpoint.
+        // OAuthOptions.IsRedirectUriAllowed rejects fragments at the other end of the same flow for
+        // the same reason.
+        if (!string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidOperationException(
+                $"OIDC discovery document at '{discoveryUrl}' gives '{name}' as '{url}', which contains a " +
+                "URI fragment. OAuth endpoint URIs must not (RFC 6749 §3.1).");
+        }
+
         return url;
     }
 }
