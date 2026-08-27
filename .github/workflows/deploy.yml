@@ -54,6 +54,7 @@ jobs:
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
       CONTAINER_APP: ${{ vars.CONTAINER_APP }}
       IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+      PUBLIC_ORIGIN: https://vitally.fiscaltec.com
       HEALTH_URL: https://vitally.fiscaltec.com/health
       MCP_URL: https://vitally.fiscaltec.com/mcp
     steps:
@@ -181,6 +182,20 @@ jobs:
             [ "$i" -lt 6 ] && sleep 10
           done
           [ "$mcp_code" = "401" ] || { echo "::error::/mcp unauthenticated not 401 after retries (last: ${mcp_code:-000}, expected 401)"; exit 1; }
+
+      # The step above proves the app is live and the Auth0 gate is enforced. It cannot tell whether
+      # the OAuth metadata documents are correct: a wrong `issuer`, a broken
+      # `issuer` <-> `authorization_servers` pairing, a bad `jwks_uri`, an `/oauth/authorize` pointed
+      # at the wrong upstream, a dropped `iss` flag or a null-serialised optional all leave /health at
+      # 200 and the 401 challenge intact while breaking every MCP client at its next
+      # re-authentication. That gap made the rollback below read as assurance it did not provide
+      # (#110). A separate step, not an extension of the one above, so the health/401 assertions stay
+      # untouched — `failure()` on the rollback step is job-scoped, so this still triggers it.
+      - name: Verify OAuth metadata documents (RFC 8414 / RFC 9728)
+        # Invoked through `bash` rather than relying on the executable bit. The repo is authored on
+        # Windows with core.filemode=false, so a future edit can silently drop the mode and this step
+        # would fail with "Permission denied" on a deploy rather than in review.
+        run: bash .github/scripts/verify-oauth-metadata.sh "$PUBLIC_ORIGIN"
 
       - name: Roll back on failure
         if: ${{ failure() && env.PREV_IMAGE != '' }}
