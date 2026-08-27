@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace VitallyMcp.Tests;
@@ -86,7 +87,8 @@ public class OAuthProxyPublicOriginTests : IClassFixture<OAuthProxyPublicOriginT
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["OAuth:NoAuth"] = "true",
-                    ["OAuth:Authority"] = "https://example.auth0.com/",
+                    // Must equal StubOidcDiscovery.Issuer — see the sibling factory.
+                    ["OAuth:Authority"] = StubOidcDiscovery.Issuer,
                     ["OAuth:Audience"] = PublicOrigin,
                     ["OAuth:PublicBaseUrl"] = PublicOrigin,
                     ["OAuth:SharedClientId"] = "test-client-id",
@@ -94,6 +96,8 @@ public class OAuthProxyPublicOriginTests : IClassFixture<OAuthProxyPublicOriginT
                     ["Vitally:DevelopmentApiKey"] = "sk_test_dummy"
                 });
             });
+            // See the sibling factory: startup resolves the upstream endpoints from discovery.
+            builder.ConfigureServices(services => services.UseStubDiscovery());
             return base.CreateHost(builder);
         }
     }

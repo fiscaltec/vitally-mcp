@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace VitallyMcp.Tests;
@@ -61,10 +62,60 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         var query = $"?response_type=code&client_id=test&state=abc123&redirect_uri={Uri.EscapeDataString(redirectUri)}";
         var response = await client.GetAsync("/oauth/authorize" + query);
 
-        // Accepted requests are 302-redirected to the upstream Auth0 /authorize.
+        // Accepted requests are 302-redirected to the upstream authorization endpoint — the one the
+        // provider publishes in its discovery document, not one assembled from OAuth:Authority.
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.ToString().Should().StartWith("https://example.auth0.com/authorize?");
+        response.Headers.Location!.ToString().Should().StartWith(StubOidcDiscovery.AuthorizationEndpoint + "?");
+    }
+
+    [Fact]
+    public async Task Authorize_SendsTheUserToTheDiscoveredAuthorizationEndpoint()
+    {
+        // The stub's authorization_endpoint sits on a different host and path from OAuth:Authority,
+        // so this fails if anyone reinstates the `{authority}/authorize` concatenation.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code&client_id=test&state=discovery&redirect_uri="
+            + Uri.EscapeDataString("http://localhost:54321/callback"));
+
+        var location = response.Headers.Location!.ToString();
+        location.Should().StartWith(StubOidcDiscovery.AuthorizationEndpoint + "?");
+        location.Should().NotContain("example.auth0.com");
+        // The proxy's own callback still has to survive the rewrite, or the code never comes back.
+        location.Should().Contain(Uri.EscapeDataString("http://localhost/oauth/callback"));
+    }
+
+    [Fact]
+    public async Task AuthorizationServerMetadata_PublishesTheDiscoveredJwksAndUserInfoEndpoints()
+    {
+        // These two are the reason this is a correctness fix and not just tidying: they are handed
+        // to every MCP client as fact. `userinfo_endpoint` is on a host that no choice of
+        // OAuth:Authority could ever produce.
+        using var client = _factory.CreateClient();
+
+        using var doc = JsonDocument.Parse(await client.GetStringAsync("/.well-known/oauth-authorization-server"));
+
+        doc.RootElement.GetProperty("jwks_uri").GetString().Should().Be(StubOidcDiscovery.JwksUri);
+        doc.RootElement.GetProperty("userinfo_endpoint").GetString().Should().Be(StubOidcDiscovery.UserInfoEndpoint);
+    }
+
+    [Fact]
+    public async Task AuthorizationServerMetadata_StillNamesOurOwnOriginForTheEndpointsWeFront()
+    {
+        // Guards the discovery change against over-reach. authorize, token and register are the
+        // façade's own — pointing any of them upstream would break DCR and the `iss` contract.
+        using var client = _factory.CreateClient();
+
+        using var doc = JsonDocument.Parse(await client.GetStringAsync("/.well-known/oauth-authorization-server"));
+
+        doc.RootElement.GetProperty("authorization_endpoint").GetString().Should().Be("http://localhost/oauth/authorize");
+        doc.RootElement.GetProperty("token_endpoint").GetString().Should().Be("http://localhost/oauth/token");
+        doc.RootElement.GetProperty("registration_endpoint").GetString().Should().Be("http://localhost/oauth/register");
     }
 
     [Fact]
@@ -302,7 +353,9 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
                     // want to stand up a real OIDC provider for the test. NoAuth still permits
                     // the proxy when SharedClientId is set.
                     ["OAuth:NoAuth"] = "true",
-                    ["OAuth:Authority"] = "https://example.auth0.com/",
+                    // Must equal StubOidcDiscovery.Issuer — the resolver refuses a document that
+                    // speaks for a different issuer (OIDC Discovery §4.3).
+                    ["OAuth:Authority"] = StubOidcDiscovery.Issuer,
                     ["OAuth:Audience"] = "https://vitally.example.com",
                     ["OAuth:SharedClientId"] = "test-client-id",
                     ["OAuth:AllowedClientRedirectUris:0"] = "https://claude.ai/api/mcp/auth_callback",
@@ -310,6 +363,10 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
                     ["Vitally:DevelopmentApiKey"] = "sk_test_dummy"
                 });
             });
+            // The proxy resolves the upstream endpoints from the provider's discovery document at
+            // startup and refuses to boot without it, so a stub is mandatory here rather than a
+            // convenience — without one the host would try to reach example.auth0.com.
+            builder.ConfigureServices(services => services.UseStubDiscovery());
             return base.CreateHost(builder);
         }
     }

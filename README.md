@@ -56,7 +56,7 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Vitally:DefaultSecretRef` | No | `vitally-shared` | Key Vault secret name holding the Vitally API key. |
 | `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for the resolved API key. |
 | `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
-| `OAuth:Authority` | Yes | — | OAuth/OIDC issuer URL with trailing slash, e.g. `https://fiscal-it.uk.auth0.com/`. |
+| `OAuth:Authority` | Yes | — | The provider's OIDC **issuer** identifier, e.g. `https://fiscal-it.uk.auth0.com/`. The proxy's upstream endpoints are read from `{Authority}/.well-known/openid-configuration`, not built by appending paths to this value. |
 | `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/`. Must match the provider's identifier exactly, trailing slash included — Auth0 compares it byte for byte and its identifiers are immutable once created. |
 | `OAuth:Resource` | No | — | Canonical resource identifier published in `/.well-known/oauth-protected-resource`. Falls back to `Audience` when blank; set explicitly when clients need the metadata `resource` to match the server's URL/origin (per RFC 9728 + RFC 8707 validators). |
 | `OAuth:PublicBaseUrl` | Recommended (prod) | — | Canonical public origin, e.g. `https://vitally.fiscaltec.com`. When set, the `/.well-known/*` metadata and the OAuth proxy callback are built from this value instead of the request `Host`, so a spoofed/forwarded `Host` can't redirect a client's `authorization_endpoint`/`token_endpoint` at an attacker. Leave empty in local dev. |
@@ -128,6 +128,7 @@ FISCAL's deployment uses Azure Container Apps + Azure Key Vault + Auth0 (which f
 VitallyMcp/
 ├── Program.cs                       # ASP.NET Core host, JwtBearer auth, MapMcp
 ├── OAuthOptions.cs                  # Authority + Audience + Resource + NoAuth dev flag
+├── UpstreamOidcMetadata.cs          # Upstream endpoints from the provider's OIDC discovery document
 ├── VitallyServerOptions.cs          # Region, KeyVaultUri, secret config
 ├── VitallyApiKeyProvider.cs         # Fetches the API key from Key Vault (cached)
 ├── VitallyService.cs                # HTTP client + client-side JSON filtering
@@ -159,10 +160,10 @@ When `OAuth:SharedClientId` is set the server runs an OAuth 2.0 proxy in front o
 | Endpoint | Purpose |
 |---|---|
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 protected-resource metadata — clients use it to discover the authorisation server. |
-| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — declares this server's own origin as `issuer` and points `authorization_endpoint`, `token_endpoint` and `registration_endpoint` at the proxy. `jwks_uri` and `userinfo_endpoint` still point at Auth0, which issues the tokens. |
-| `GET /oauth/authorize` | Captures the client's `redirect_uri`, swaps it for our fixed `/oauth/callback`, and 302s the user upstream to Auth0. Validates the client `redirect_uri` against the loopback + allowlist rules before stashing. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — declares this server's own origin as `issuer` and points `authorization_endpoint`, `token_endpoint` and `registration_endpoint` at the proxy. `jwks_uri` and `userinfo_endpoint` still point upstream, read from the provider's OIDC discovery document. |
+| `GET /oauth/authorize` | Captures the client's `redirect_uri`, swaps it for our fixed `/oauth/callback`, and 302s the user to the upstream `authorization_endpoint` named in the provider's discovery document. Validates the client `redirect_uri` against the loopback + allowlist rules before stashing. |
 | `GET /oauth/callback` | Receives the Auth0 redirect, looks up the original client `redirect_uri` from `state`, and 302s the user back to it with the code. |
-| `POST /oauth/token` | Forwards the code-exchange to Auth0 and injects `SharedClientSecret` so the shared app stays confidential without exposing the secret to MCP clients. |
+| `POST /oauth/token` | Forwards the code-exchange to the upstream `token_endpoint` from the discovery document and injects `SharedClientSecret` so the shared app stays confidential without exposing the secret to MCP clients. |
 | `POST /oauth/register` | RFC 7591 Dynamic Client Registration shim — always returns `SharedClientId`, regardless of what the caller requests, so every MCP client converges on a single first-party Auth0 app. Echoes back only `redirect_uris` that the allowlist accepts. |
 
 This setup exists because MCP clients implement RFC 7591 (DCR) and RFC 8252 (loopback redirect with ephemeral ports), but Auth0 third-party DCR clients trigger a per-session API consent screen and don't natively accept arbitrary loopback ports. The proxy collapses everything onto one pre-registered "first-party" Auth0 app, skipping the consent and accepting any loopback port (Claude Code, VS Code, Cursor, MCP Inspector all rotate ports between sessions). To support hosted MCP clients (e.g. Claude.ai), add their callback URL to `OAuth:AllowedClientRedirectUris`.

@@ -27,6 +27,9 @@ tenant, no Key Vault.
 | `VitallyRateLimitHandlerTests` | 429 retry behaviour, `Retry-After`/`X-RateLimit-Reset` header parsing, low-remaining warnings. |
 | `OAuthOptionsTests` | `IsRedirectUriAllowed` — RFC 8252 loopback any-port acceptance, https-loopback rejection, allowlist matching with subdomain/path-segment spoof guards, validation normalisation. |
 | `OAuthProxyEndpointsTests` | Integration test (via `WebApplicationFactory<Program>`) for the proxy endpoints: rejects disallowed `redirect_uri`, accepts loopback + allowlisted hosted callbacks, filters partially-disallowed registration requests, refuses unsupported grants. Also pins the RFC 8414 façade — `issuer` equals the serving origin *and* the `authorization_servers` value in the protected-resource document (asserted against each other, so the two documents cannot drift apart while both still look right), `authorization_response_iss_parameter_supported` is advertised, and `/oauth/callback` emits exactly one `iss` naming us, replacing any upstream value. |
+| `UpstreamOidcMetadataTests` | The resolver that replaced the Auth0-shaped URL concatenation: all four endpoints read from a stubbed discovery document, the standard well-known path constructed beneath the issuer, cache reuse (including across resolver instances), a failed resolve not being cached, last-known-good served when a *refresh* fails, and rejection of a document that is malformed, not an object, missing any of the four, or gives one as a relative/plaintext URL. The stub's `issuer` matches the configured `Authority` (the resolver checks the two per OIDC Discovery §4.3) while its endpoints are deliberately unrelated to it — different hosts, `userinfo_endpoint` on a third — so no assertion can pass by concatenation. Also covers the issuer check itself: a document naming another issuer is refused, a one-character trailing-slash difference is not. |
+| `OAuthTokenProxyForwardTests` | Where `/oauth/token` actually forwards to. Stubs the *default* `HttpClient` (`Options.DefaultName` — the one `factory.CreateClient()` resolves) and asserts the posted URI is the discovered `token_endpoint` and that the client's loopback `redirect_uri` was replaced with our own callback. Exists because the sibling proxy tests only reach the unsupported-grant guard, which returns before any upstream call — so reverting the forward to `{authority}/oauth/token` would otherwise leave the suite green. |
+| `UpstreamOidcStartupFailFastTests` | That the fail-fast is actually *wired into* Program.cs — the easy half to lose, since the guard sits between `builder.Build()` and `app.Run()`. Drives the real composition root: the host refuses to start when discovery is unreachable or incomplete, and starts fine without discovery when `OAuth:SharedClientId` is unset. |
 | `OAuthProxyPublicOriginTests` | The production shape `OAuthProxyEndpointsTests` cannot reach: with `OAuth:PublicBaseUrl` set, the published identity must be that configured origin and not the request `Host`. Its sibling's assertions would pass even on a regression to Host-derived values, because there the two coincide. |
 | `Tools/AccountsToolsTests` | List / get / create / update / delete + status filter + traits + list-by-organisation |
 | `Tools/SummaryToolsTests` | `Get_organization_summary` — the read-only composite (org get-by-id with curated rollup traits, object-name resolution, two organisation-scoped instance searches) and its per-sub-call error isolation |
@@ -51,6 +54,7 @@ tenant, no Key Vault.
 | `ResourceMetadataDiscoveryTests` | The 401 challenge carries exactly **one** `WWW-Authenticate` value with a `resource_metadata` pointer, adds `error="invalid_token"` when a token was presented, and keeps the status at exactly 401 — which `.github/workflows/deploy.yml` smoke-tests. Both well-known metadata paths serve, asserted with exact collection counts rather than `Contain`, since `ProtectedResourceMetadata` ships `BearerMethodsSupported` pre-populated and an append would silently duplicate it. Also asserts no property is serialised as `null`: RFC 9728 §3.2 requires an unused parameter to be omitted, and a strict client rejects the whole document over the difference — invisible to a test that only reads the properties it expects to find. |
 | `ToolsListCachingTests` | Asserts the serialised wire form of the cache hints — `ttlMs` as integer milliseconds and `cacheScope` as `"private"` — deliberately on the raw JSON rather than the SDK's CLR properties, so an SDK rename is caught here rather than by clients. |
 | `IntegrationTestCollection` | Not a test — the xUnit collection definition serialising every class that mutates process-wide environment variables. See the note above; membership is mandatory for such classes. |
+| `StubOidcDiscovery` | Not a test — the canned upstream discovery document plus the stub/failing/fail-on-refresh handlers, and the `UseStubDiscovery()` extension every integration factory with `OAuth:SharedClientId` set now needs (startup resolves discovery and refuses to boot without it). |
 | `CapturingLogger` / `CapturingLoggerProvider` | Test helper capturing `ILogger` output so audit assertions can be made against what `AuditLogger` actually recorded. |
 
 ## Framework & dependencies
@@ -120,6 +124,19 @@ that doesn't fit an existing one; don't refactor existing helpers.
 configuration (`OAuth:NoAuth=true`, dummy `DevelopmentApiKey`, fake
 `Authority`/`Audience`/`SharedClientId`), and exercise the endpoint via
 the returned `HttpClient`.
+
+If the factory sets `OAuth:SharedClientId`, it **must** also call
+`services.UseStubDiscovery()` from `builder.ConfigureServices(...)`. Startup
+resolves the upstream OIDC discovery document and refuses to boot without it,
+so a factory that omits the stub will try to reach the fake `Authority` host
+and fail during `CreateClient()`.
+
+Note that configuration injected this way is **not** visible to the raw
+`builder.Configuration[...]` reads at the top of `Program.cs` — it arrives
+later. Anything a test needs to influence has to be read from the resolved
+`IOptions<T>` after `builder.Build()` (as the discovery guard does) or, failing
+that, set via an environment variable and the serialised
+`IntegrationTestCollection`.
 
 ## Adding tests
 

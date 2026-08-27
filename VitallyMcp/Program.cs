@@ -75,6 +75,12 @@ builder.Services.AddHttpClient<VitallyService>()
 var oauthSection = builder.Configuration.GetSection(OAuthOptions.SectionName);
 var noAuth = oauthSection.GetValue<bool>("NoAuth");
 
+// Upstream endpoint resolution. Singleton so the last-known-good fallback outlives the cache TTL;
+// its own named HttpClient so the discovery fetch cannot inherit another client's handlers, and so
+// tests can substitute a stub handler for it alone.
+builder.Services.AddHttpClient(UpstreamOidcMetadata.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<UpstreamOidcMetadata>();
+
 // Fail fast on an unauthenticated production-looking config (NoAuth + Key Vault).
 StartupGuards.EnsureSafeAuthConfig(noAuth, vitallySection["KeyVaultUri"]);
 
@@ -257,8 +263,21 @@ var app = builder.Build();
 // Fail-fast: force resolution of bound + PostConfigured options now so misconfiguration
 // throws at startup rather than at first request.
 _ = app.Services.GetRequiredService<IOptions<VitallyServerOptions>>().Value;
-_ = app.Services.GetRequiredService<IOptions<OAuthOptions>>().Value;
+var oauthOptions = app.Services.GetRequiredService<IOptions<OAuthOptions>>().Value;
 _ = app.Services.GetRequiredService<IOptions<ToolAuthorizationOptions>>().Value;
+
+// Same fail-fast intent, one step further out: prove the upstream provider actually publishes the
+// four endpoints the proxy needs before serving anything. Blocking here is the point — two of them
+// go into a metadata document clients trust. See StartupGuards for why it is fatal.
+//
+// `SharedClientId` is read from the resolved options rather than from `oauthSection` alongside
+// `noAuth` above, and the difference is load-bearing: that composition-time read happens before
+// WebApplicationFactory injects its configuration, so a raw read here would report the proxy
+// disabled in every integration test and quietly skip the guard the tests exist to pin.
+await StartupGuards.EnsureUpstreamOidcEndpointsAsync(
+    app.Services.GetRequiredService<UpstreamOidcMetadata>(),
+    proxyEnabled: !string.IsNullOrWhiteSpace(oauthOptions.SharedClientId),
+    timeout: TimeSpan.FromSeconds(15));
 
 app.UseForwardedHeaders();
 
@@ -304,10 +323,11 @@ app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetad
 // `issuer` names our *own* origin, not Auth0's. §3.3 requires the issuer to correspond to the URL
 // the document was fetched from (an anti-mix-up control), and from the client's point of view we
 // genuinely are the authorization server: authorize, token and register are all ours. Auth0 still
-// issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream. Declaring our
-// origin here is coupled to the `iss` injection in /oauth/callback below — see the façade section
-// in CLAUDE.md before changing either.
-app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions<OAuthOptions> oauth) =>
+// issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream — and why they
+// are read from the provider's own discovery document rather than assembled from Authority, which
+// only ever produced Auth0-shaped paths. Declaring our origin here is coupled to the `iss` injection
+// in /oauth/callback below — see the façade section in CLAUDE.md before changing either.
+app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IOptions<OAuthOptions> oauth, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
     if (string.IsNullOrWhiteSpace(o.SharedClientId))
@@ -315,15 +335,15 @@ app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions
         // No proxy configured — return a 404 so clients fall back to the upstream AS metadata.
         return Results.NotFound();
     }
-    var authority = (o.Authority ?? string.Empty).TrimEnd('/');
+    var endpoints = await upstream.GetAsync(ctx.RequestAborted);
     var ourBase = GetServerBaseUrl(ctx, o.PublicBaseUrl);
     return Results.Json(new
     {
         issuer = ourBase,
         authorization_endpoint = $"{ourBase}/oauth/authorize",
         token_endpoint = $"{ourBase}/oauth/token",
-        userinfo_endpoint = $"{authority}/userinfo",
-        jwks_uri = $"{authority}/.well-known/jwks.json",
+        userinfo_endpoint = endpoints.UserInfoEndpoint,
+        jwks_uri = endpoints.JwksUri,
         registration_endpoint = $"{ourBase}/oauth/register",
         scopes_supported = new[] { "openid", "profile", "email", "offline_access", "mcp.access" },
         response_types_supported = new[] { "code" },
@@ -343,7 +363,7 @@ app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IOptions
 // at /oauth/callback look the original up and redirect there. This sidesteps Auth0's lack
 // of RFC 8252 loopback wildcard support and lets random localhost ports + claude.ai's
 // hosted callback URL coexist with one Auth0 app.
-app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache) =>
+app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
     if (string.IsNullOrWhiteSpace(o.SharedClientId))
@@ -374,8 +394,11 @@ app.MapGet("/oauth/authorize", (HttpContext ctx, IOptions<OAuthOptions> oauth, I
     cache.Set($"oauth-proxy:state:{state}", clientRedirectUri, TimeSpan.FromMinutes(10));
 
     var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
-    var authority = (o.Authority ?? string.Empty).TrimEnd('/');
-    var sb = new System.Text.StringBuilder($"{authority}/authorize?");
+    var endpoints = await upstream.GetAsync(ctx.RequestAborted);
+    // The provider is free to publish an authorization_endpoint that already carries a query
+    // (nothing in OIDC Discovery forbids it), so pick the separator rather than assuming '?'.
+    var separator = endpoints.AuthorizationEndpoint.Contains('?') ? '&' : '?';
+    var sb = new System.Text.StringBuilder(endpoints.AuthorizationEndpoint).Append(separator);
     foreach (var kv in query)
     {
         if (kv.Key == "redirect_uri") continue;
@@ -432,10 +455,9 @@ app.MapGet("/oauth/callback", (HttpContext ctx, IOptions<OAuthOptions> oauth, IM
     return Results.Redirect(sb.ToString().TrimEnd('&'));
 });
 
-app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IHttpClientFactory factory) =>
+app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IHttpClientFactory factory, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
-    var authority = (o.Authority ?? string.Empty).TrimEnd('/');
     var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
 
     var form = await ctx.Request.ReadFormAsync();
@@ -491,10 +513,11 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
         pairs.Add(new KeyValuePair<string, string>("client_id", o.SharedClientId));
     }
 
+    var endpoints = await upstream.GetAsync(ctx.RequestAborted);
     var client = factory.CreateClient();
-    var upstream = await client.PostAsync($"{authority}/oauth/token", new FormUrlEncodedContent(pairs));
-    var body = await upstream.Content.ReadAsStringAsync();
-    return Results.Content(body, upstream.Content.Headers.ContentType?.MediaType ?? "application/json", System.Text.Encoding.UTF8, (int)upstream.StatusCode);
+    using var upstreamResponse = await client.PostAsync(endpoints.TokenEndpoint, new FormUrlEncodedContent(pairs), ctx.RequestAborted);
+    var body = await upstreamResponse.Content.ReadAsStringAsync(ctx.RequestAborted);
+    return Results.Content(body, upstreamResponse.Content.Headers.ContentType?.MediaType ?? "application/json", System.Text.Encoding.UTF8, (int)upstreamResponse.StatusCode);
 });
 
 // RFC 7591 — Dynamic Client Registration intercept. We always return the same pre-registered
