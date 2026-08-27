@@ -37,8 +37,13 @@ fail() {
 # Fetch a document, retrying because a freshly-swapped revision can take a moment to serve on the
 # public FQDN. curl emits "000" as the http_code on a connection failure; `|| true` stops `set -e`
 # aborting the loop so the retry can happen. No sleep after the final attempt.
+#
+# A 200 carrying a non-JSON body is retried too, not failed on the spot. An ingress or edge can answer
+# 200 with an HTML error or a truncated body while a revision is still swapping in, and this script can
+# revert a deploy — so a momentary bad body must not be mistaken for a metadata regression. Retrying
+# costs seconds; a spurious rollback of a good deploy costs a lot more.
 fetch_json() {
-  local url="$1" out="$2" code=""
+  local url="$1" out="$2" code="" reason=""
   local i
   for i in $(seq 1 "$ATTEMPTS"); do
     code=$(curl -s -o "$out" -w "%{http_code}" --max-time 20 "$url" || true)
@@ -46,13 +51,14 @@ fetch_json() {
       if jq -e . "$out" >/dev/null 2>&1; then
         return 0
       fi
-      fail "$url returned 200 but the body is not valid JSON"
-      return 1
+      reason="200 but the body is not valid JSON"
+    else
+      reason="HTTP ${code:-000}"
     fi
-    echo "  GET $url -> ${code:-000} (attempt $i/$ATTEMPTS)"
+    echo "  GET $url -> $reason (attempt $i/$ATTEMPTS)"
     if [ "$i" -lt "$ATTEMPTS" ]; then sleep "$SLEEP_SECONDS"; fi
   done
-  fail "$url did not return 200 after $ATTEMPTS attempts (last: ${code:-000})"
+  fail "$url did not return a usable JSON document after $ATTEMPTS attempts (last: $reason)"
   return 1
 }
 
