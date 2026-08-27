@@ -205,7 +205,7 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
   - `POST /oauth/token` — proxies code/refresh exchanges to the **discovered** upstream `token_endpoint`, server-side-injecting `SharedClientSecret`.
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
-- The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it.
+- The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it. That smoke **also** pins the RFC 8414/9728 documents (`.github/scripts/verify-oauth-metadata.sh`): the `issuer`, its byte-for-byte equality with `authorization_servers`, the advertised `iss` flag, the façade endpoints naming our origin, `jwks_uri`/`userinfo_endpoint` being absolute https without a fragment, and no null-serialised optionals. Those are deploy-gating contracts now, not only test-suite ones.
 
 
 ### The OAuth proxy is a complete authorisation-server façade
@@ -619,8 +619,40 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
 | Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable); post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
-| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it **only when the repo variable `AUTO_DEPLOY` is set to `true`** — see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
+| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it **only when the repo variable `AUTO_DEPLOY` is set to `true`** — see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
+
+### The deploy smoke covers the OAuth metadata, not just liveness
+
+`.github/scripts/verify-oauth-metadata.sh <origin>` is run by `deploy.yml` after the revision is live
+and before the rollback step, so a failure reverts the revision.
+
+It exists because `/health` == 200 and unauthenticated `/mcp` == 401 — the original smoke — both stay
+green while the metadata documents are wrong. A wrong `issuer`, a broken
+`issuer` ↔ `authorization_servers` pairing, a bad `jwks_uri`, an `/oauth/authorize` pointed at the
+wrong upstream, a dropped `iss` flag, or a null-serialised optional each break every MCP client at its
+next re-authentication *and deploy green*. The rollback therefore used to read as assurance it did not
+provide (#110).
+
+**Run it by hand against any origin** — that is the point of it being a script rather than inline YAML:
+
+```bash
+bash .github/scripts/verify-oauth-metadata.sh https://vitally.fiscaltec.com
+bash .github/scripts/verify-oauth-metadata.sh http://localhost:5099   # a local run, for testing it
+```
+
+Two things about it that are deliberate and shouldn't be "tidied":
+
+- **No normalisation anywhere.** Trailing slashes and case are compared literally, because that is
+  what clients do — a check that tolerated a difference would pass configurations clients reject.
+- **It is invoked through `bash`**, not by its executable bit. The repo is authored on Windows with
+  `core.filemode=false`, so an edit can silently drop the mode; relying on it would surface as
+  "Permission denied" during a deploy rather than in review.
+
+Verified when written by running it both ways round: it **passes** against a local server built from
+`main`, and **fails with 6 problems** against the then-current production revision (which predated
+#100) — including `jwks_uri: null` in the RFC 9728 document, the exact defect that makes the published
+`@modelcontextprotocol/client` reject the whole document.
 
 ### Freezing deploys without freezing releases
 
