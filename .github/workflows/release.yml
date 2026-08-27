@@ -2,8 +2,8 @@ name: Release
 
 # Nightly release train: if main changed since the last tag, compute the next semver from
 # conventional commits, create the tag + a GitHub Release (the changelog), and — only when the
-# repository variable AUTO_DEPLOY is exactly "true" — deploy it via the reusable deploy workflow,
-# which self-rolls-back on a failed smoke test.
+# repository variable AUTO_DEPLOY has the value true (lowercase, no quotes) — deploy it via the
+# reusable deploy workflow, which self-rolls-back on a failed smoke test.
 #
 # Versioning and deploying are deliberately on separate switches. Freezing deploys by disabling this
 # whole workflow (`gh workflow disable release.yml`) also stops tagging and Releases, so the changelog
