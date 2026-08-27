@@ -619,7 +619,31 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
 | Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable); post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
-| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback); nightly `release.yml` cuts a semver tag + GitHub Release and deploys it; OIDC, no long-lived secrets in GitHub |
+| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it **only when the repo variable `AUTO_DEPLOY` is set to `true`** — see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
+
+### Freezing deploys without freezing releases
+
+`release.yml` cuts the tag and Release, then calls `deploy.yml` — but the deploy job is gated on the
+repository variable `AUTO_DEPLOY`, whose value must be exactly `true` — lowercase, with no quotes
+around it (`gh variable set AUTO_DEPLOY --body true`; a value of `"true"` that includes the quote
+characters does not match). **An unset variable does not deploy**: a production deploy should require
+an explicit opt-in rather than inherit one from a missing value.
+
+**To freeze deploys, set `AUTO_DEPLOY=false` and leave the workflow enabled.** Do *not* reach for
+`gh workflow disable release.yml` — that is the whole train, so it silently stops semver tagging and
+GitHub Releases too, and the changelog record pauses along with the deploys. That is exactly what
+happened on 2026-08-26 (to hold the queued OAuth work back from an unattended 02:00 UTC deploy) and it
+is the reason this switch exists (#111).
+
+When a tag is cut but not shipped, the `deploy-skipped` job emits a run annotation naming the tag and
+the `gh workflow run deploy.yml -f ref=<tag>` command to ship it manually. That annotation is the only
+thing distinguishing a deliberate freeze from a train with nothing to release, so don't remove it — a
+frozen train otherwise looks identical to an idle one, which is how a freeze outlives its purpose.
+
+An **attended** deploy is always available via `deploy.yml`'s own `workflow_dispatch`, regardless of
+`AUTO_DEPLOY`. That is the intended route while a freeze is in place, and it is what the #102 migration
+needs: #108 is gated on its predecessors being *deployed*, not merely merged, so a blanket freeze would
+deadlock it.
 
 Infrastructure-as-code is in this repo at `infra/terraform/` — the table above documents the runtime contract for what `deploy.yml` expects. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code.
