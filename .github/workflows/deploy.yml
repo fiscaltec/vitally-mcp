@@ -105,12 +105,21 @@ jobs:
             echo "::error::Target '$TARGET' is missing variable(s):$missing -- set them on the '$TARGET' GitHub environment (or repo-level if shared by every target)."
             exit 1
           fi
-          # No normalisation: PUBLIC_ORIGIN is concatenated into the smoke URLs and handed to
-          # verify-oauth-metadata.sh, which compares the published `issuer` to it literally.
+          # Must be scheme + host ONLY. No normalisation is applied, deliberately: PUBLIC_ORIGIN is
+          # concatenated into the smoke URLs and handed to verify-oauth-metadata.sh, which compares
+          # the published `issuer` to it literally. A path is the realistic mistake rather than a
+          # theoretical one -- this repo's docs are full of `https://<host>/mcp` URLs, and pasting one
+          # here would build `.../mcp/health`, fail every assertion below and roll back a healthy
+          # deploy. Rejecting `/`, `?` and `#` in the authority also subsumes the trailing slash.
           case "$PUBLIC_ORIGIN" in
-            https://*/) echo "::error::PUBLIC_ORIGIN must not end in a slash (got '$PUBLIC_ORIGIN')"; exit 1 ;;
-            https://*) ;;
+            https://*) origin_host="${PUBLIC_ORIGIN#https://}" ;;
             *) echo "::error::PUBLIC_ORIGIN must be an absolute https origin (got '$PUBLIC_ORIGIN')"; exit 1 ;;
+          esac
+          case "$origin_host" in
+            "" | */* | *\?* | *"#"*)
+              echo "::error::PUBLIC_ORIGIN must be scheme and host only -- no path, query, fragment or trailing slash (got '$PUBLIC_ORIGIN')"
+              exit 1
+              ;;
           esac
           echo "Target '$TARGET': app=$CONTAINER_APP origin=$PUBLIC_ORIGIN"
         env:

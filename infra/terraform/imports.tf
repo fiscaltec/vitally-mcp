@@ -72,9 +72,13 @@ import {
   id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-prod-ca-uksouth"
 }
 # Only valid while staging is spun up — it is an on-demand app (see containerapps-staging.tf).
+# Unlike the blocks above, this one interpolates its name rather than hardcoding it. Those adopt
+# fixed production resources, whereas staging's name is a variable precisely because it is recreated
+# on demand — so a parallel spin-up under another name would otherwise adopt the wrong app into
+# `azurerm_container_app.staging` and show up as a rename.
 import {
   to = azurerm_container_app.staging
-  id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-staging-ca-uksouth"
+  id = "${local.rg_id}/providers/Microsoft.App/containerApps/${var.staging_app_name}"
 }
 import {
   to = azurerm_container_app_job.scanner
