@@ -619,7 +619,7 @@ The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
 | Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable); post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
-| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it **only when the repo variable `AUTO_DEPLOY` is set to `true`** — see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
+| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
 
 ### The deploy smoke covers the OAuth metadata, not just liveness
@@ -641,7 +641,16 @@ bash .github/scripts/verify-oauth-metadata.sh https://vitally.fiscaltec.com
 bash .github/scripts/verify-oauth-metadata.sh http://localhost:5099   # a local run, for testing it
 ```
 
-Two things about it that are deliberate and shouldn't be "tidied":
+**The whole assertion set retries, not just the fetches.** Container Apps reports a new revision
+`Provisioned`/`Healthy` *before* ingress finishes shifting traffic, so a check that runs immediately
+can be answered by the **old** revision — a valid 200, a valid document, the previous configuration.
+Asserting once turned that race into a rollback of a healthy deploy on 2026-08-28 (revision 21 came up
+Healthy and was reverted 23 seconds later). `/health` and the 401 cannot catch the race in either
+direction, because both pass on whichever revision answers; this is the first check able to tell them
+apart, so it is the one that has to wait for the swap. Failures are collected and emitted as
+annotations only after the final attempt.
+
+Three things about it that are deliberate and shouldn't be "tidied":
 
 - **No normalisation anywhere.** Trailing slashes and case are compared literally, because that is
   what clients do — a check that tolerated a difference would pass configurations clients reject.
@@ -654,28 +663,43 @@ Verified when written by running it both ways round: it **passes** against a loc
 #100) — including `jwks_uri: null` in the RFC 9728 document, the exact defect that makes the published
 `@modelcontextprotocol/client` reject the whole document.
 
-### Freezing deploys without freezing releases
+### Freezing deploys
 
-`release.yml` cuts the tag and Release, then calls `deploy.yml` — but the deploy job is gated on the
-repository variable `AUTO_DEPLOY`, whose value must be exactly `true` — lowercase, with no quotes
-around it (`gh variable set AUTO_DEPLOY --body true`; a value of `"true"` that includes the quote
-characters does not match). **An unset variable does not deploy**: a production deploy should require
-an explicit opt-in rather than inherit one from a missing value.
+**`gh workflow disable release.yml`** (re-enable with `gh workflow enable release.yml`). That is the
+whole mechanism. It stops tagging, releasing and deploying together, which is the coherent unit: a
+freeze must not be able to leave a GitHub Release behind for something that never shipped.
 
-**To freeze deploys, set `AUTO_DEPLOY=false` and leave the workflow enabled.** Do *not* reach for
-`gh workflow disable release.yml` — that is the whole train, so it silently stops semver tagging and
-GitHub Releases too, and the changelog record pauses along with the deploys. That is exactly what
-happened on 2026-08-26 (to hold the queued OAuth work back from an unattended 02:00 UTC deploy) and it
-is the reason this switch exists (#111).
+An **attended** deploy stays available throughout via `deploy.yml`'s own `workflow_dispatch`, which is
+a separate workflow and unaffected by the freeze:
 
-When a tag is cut but not shipped, the `deploy-skipped` job emits a run annotation naming the tag and
-the `gh workflow run deploy.yml -f ref=<tag>` command to ship it manually. That annotation is the only
-thing distinguishing a deliberate freeze from a train with nothing to release, so don't remove it — a
-frozen train otherwise looks identical to an idle one, which is how a freeze outlives its purpose.
+```powershell
+gh workflow run deploy.yml --ref <tag-or-sha> -f ref=<tag-or-sha> -f image_tag=<tag>
+```
 
-An **attended** deploy is always available via `deploy.yml`'s own `workflow_dispatch`, regardless of
-`AUTO_DEPLOY`. That is the intended route while a freeze is in place, and it is what the #102 migration
-needs: #108 is gated on its predecessors being *deployed*, not merely merged, so a blanket freeze would
-deadlock it.
+That is the intended route during a freeze, and #108 needs it — the Entra cutover is gated on its
+predecessors being *deployed*, not merely merged, so a freeze that blocked every deploy would deadlock
+it.
+
+**Nothing is lost by pausing.** The commits stay on `main`; whenever the train next runs it cuts one
+tag and `--generate-notes` builds the changelog from everything since the previous tag. The only thing
+forgone is intermediate version numbers for versions that never existed anywhere.
+
+**Do not reintroduce an `AUTO_DEPLOY`-style variable.** #111 added one so tagging could continue during
+a freeze, on the premise that freezing discarded changelog history. That premise was wrong, and the one
+night it ran produced `v4.2.2` — a Release marked "Latest", deployed nowhere. Reverted in #115. If a
+future change makes "release without deploying" look useful again, re-read this paragraph first: the
+requirement it was serving did not exist.
+
+**A `deploy` job showing as `skipped` in a release run is normal** and is not a freeze. The job is
+gated on `new_tag != ''`, so a night with no new conventional commits produces no tag and nothing to
+ship. Most historical runs look like this; the deploys that did fire (18, 19 and 22 August 2026)
+appear as `deploy / Build, import to ACR, roll Container App`.
+
+**Automatic deploys do not appear in `deploy.yml`'s run list.** When `release.yml` calls it via
+`uses:`, the job runs *inside the caller's run* — `gh run list --workflow=deploy.yml` shows only
+manual `workflow_dispatch` runs, which makes the automation look untested when it is not. A second
+tell: the release train passes `image_tag: <semver>`, whereas a manual dispatch defaults to
+`sha-<short-sha>`, so the deployed image name says which path shipped it
+(`az containerapp show ... --query properties.template.containers[0].image`).
 
 Infrastructure-as-code is in this repo at `infra/terraform/` — the table above documents the runtime contract for what `deploy.yml` expects. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code.
