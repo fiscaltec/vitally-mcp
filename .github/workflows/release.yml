@@ -1,19 +1,18 @@
 name: Release
 
 # Nightly release train: if main changed since the last tag, compute the next semver from
-# conventional commits, create the tag + a GitHub Release (the changelog), and — only when the
-# repository variable AUTO_DEPLOY has the value true (lowercase, no quotes) — deploy it via the
-# reusable deploy workflow, which self-rolls-back on a failed smoke test.
+# conventional commits, create the tag + a GitHub Release (the changelog), and deploy it via the
+# reusable deploy workflow. Fully automatic; the deploy self-rolls-back on a failed smoke test.
 #
-# Versioning and deploying are deliberately on separate switches. Freezing deploys by disabling this
-# whole workflow (`gh workflow disable release.yml`) also stops tagging and Releases, so the changelog
-# record silently pauses too — that happened on 2026-08-26 and is what #111 fixed. To freeze deploys,
-# set AUTO_DEPLOY=false and leave the workflow enabled.
+# TO FREEZE DEPLOYS: `gh workflow disable release.yml`; to lift it, `gh workflow enable release.yml`.
+# That stops tagging, releasing and deploying together, which is the coherent unit — a freeze must not
+# be able to leave a Release behind for something that never shipped.
 #
-# AUTO_DEPLOY defaults to off: an unset variable does NOT deploy. Production deploys should require an
-# explicit opt-in rather than inheriting one from a missing value. The deploy-skipped job below emits a
-# run annotation whenever a tag was cut but not shipped, so an unintentionally long freeze is visible
-# in the run log rather than looking like nothing happened.
+# Nothing is lost by pausing: the commits stay on main, and whenever the train next runs it tags once
+# and `--generate-notes` builds the changelog from everything since the previous tag. #111 briefly
+# added an AUTO_DEPLOY variable to keep tagging during a freeze, on the mistaken premise that a freeze
+# discarded changelog history. It does not — and the one night that ran produced v4.2.2: a Release
+# marked "Latest" that had been deployed nowhere. Reverted in #115; don't reintroduce it.
 on:
   schedule:
     - cron: "0 2 * * *" # 02:00 UTC nightly
@@ -58,9 +57,7 @@ jobs:
 
   deploy:
     needs: release
-    # `vars` is available in a job-level `if`, so the gate costs nothing at runtime. Compared against
-    # the literal string 'true' — an unset variable is the empty string and therefore does not deploy.
-    if: ${{ needs.release.outputs.new_tag != '' && vars.AUTO_DEPLOY == 'true' }}
+    if: ${{ needs.release.outputs.new_tag != '' }}
     permissions:
       id-token: write # OIDC for azure/login in the called deploy
       contents: read
@@ -73,24 +70,3 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-  # A reusable-workflow job (`uses:`) cannot carry extra steps, so the "why didn't it deploy?" notice
-  # has to be its own job. Without it a frozen train looks identical to a train with nothing to ship:
-  # the deploy job is simply absent from the run, which is exactly how a freeze outlives its purpose.
-  deploy-skipped:
-    name: Deploy skipped (AUTO_DEPLOY not enabled)
-    needs: release
-    if: ${{ needs.release.outputs.new_tag != '' && vars.AUTO_DEPLOY != 'true' }}
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Explain why nothing was deployed
-        # Both values go through env rather than being interpolated into the script. Repository
-        # variables are maintainer-set so the risk is slight, but `${{ }}` inside `run:` is a script
-        # injection shape and there is no reason to write one.
-        env:
-          NEW_TAG: ${{ needs.release.outputs.new_tag }}
-          AUTO_DEPLOY: ${{ vars.AUTO_DEPLOY }}
-        run: |
-          set -euo pipefail
-          echo "::notice title=Deploy skipped::Tagged ${NEW_TAG} and published the Release, but did not deploy - repository variable AUTO_DEPLOY is '${AUTO_DEPLOY:-<unset>}' and must be exactly 'true'. To ship this tag now: gh workflow run deploy.yml -f ref=${NEW_TAG}"
