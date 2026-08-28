@@ -72,6 +72,40 @@ variable "entra_group_admin" {
   default = "70b48a20-d4b1-47dc-a132-21bc99272a86"
 }
 
+# ---- Staging target (#112) ----
+# Everything the staging Container App does NOT share with production. The rest — region, vault,
+# managed identity, shared Auth0 client, tier group ids — is deliberately the same, so a staging
+# failure points at what changed rather than at the environment.
+variable "staging_app_name" {
+  type        = string
+  description = "Staging Container App name. Deliberately outside the name_prefix convention: it is a second app inside the production RG and Container Apps Environment, not a second environment."
+  default     = "vitally-staging-ca-uksouth"
+}
+
+variable "staging_image_tag" {
+  type        = string
+  description = "Container image tag deployed to the staging Container App. Moves independently of production's."
+  default     = "sha-3c40e0e"
+}
+
+variable "staging_oauth_authority" {
+  type        = string
+  description = "Upstream OIDC issuer for staging. Auth0 today (a like-for-like baseline against production); becomes the Entra issuer first at #108, while production stays on Auth0."
+  default     = "https://fiscal-it.uk.auth0.com/"
+}
+
+variable "staging_oauth_audience" {
+  type        = string
+  description = "Auth0 Resource Server identifier for staging, WITH the trailing slash. Must equal the staging origin: it is published as the RFC 9728 `resource`, and MCP clients reject the whole metadata document when that does not match the server they fetched it from."
+  default     = "https://vitally-staging.fiscaltec.com/"
+}
+
+variable "staging_public_base_url" {
+  type        = string
+  description = "Canonical public origin for staging — no trailing slash (it is an origin, and Validate() trims one anyway)."
+  default     = "https://vitally-staging.fiscaltec.com"
+}
+
 # ---- Secrets (DO NOT hardcode/commit — supply via TF_VAR_* or an untracked tfvars) ----
 variable "oauth_shared_client_secret" {
   type        = string

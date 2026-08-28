@@ -72,6 +72,10 @@ import {
   id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-prod-ca-uksouth"
 }
 import {
+  to = azurerm_container_app.staging
+  id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-staging-ca-uksouth"
+}
+import {
   to = azurerm_container_app_job.scanner
   id = "${local.rg_id}/providers/Microsoft.App/jobs/vitally-prod-secscan-uksouth"
 }

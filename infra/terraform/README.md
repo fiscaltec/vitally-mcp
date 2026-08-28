@@ -17,7 +17,8 @@ and DR-able.
 | `keyvault.tf` | secret vault (private), CMK vault (firewalled) + RSA key, KV private endpoint, diag |
 | `acr.tf` | ACR (Premium, CMK, private) + private endpoint + diag |
 | `monitoring.tf` | Log Analytics + Application Insights |
-| `containerapps.tf` | Container Apps env, app, and the secret-expiry scanner Job (`scan/run.py`) |
+| `containerapps.tf` | Container Apps env, production app, and the secret-expiry scanner Job (`scan/run.py`) |
+| `containerapps-staging.tf` | Staging app (#112) — second app in the *same* env; pre-production target for IdP changes |
 | `imports.tf` | import blocks for adoption (comment out after import) |
 
 ## Prerequisites
@@ -48,10 +49,15 @@ role assignments (`az role assignment list --scope <id> --query "[].id"`), diagn
 DNS vnet-links / NAT associations (composite IDs).
 
 ## Known limitations (reconcile manually / accept drift)
-- **Managed TLS certificate** — the `vitally.fiscaltec.com` custom domain uses a *free managed* cert,
-  which azurerm cannot create. It's bound out-of-band (`az containerapp hostname bind --validation-method TXT`).
-  The `custom_domain` block in `containerapps.tf` is commented; either keep binding it manually and
-  `ignore_changes`, or switch to a BYO cert via `azurerm_container_app_environment_certificate`.
+- **Managed TLS certificates** — both the `vitally.fiscaltec.com` and `vitally-staging.fiscaltec.com`
+  custom domains use *free managed* certs, which azurerm cannot create. They're bound out-of-band
+  (`az containerapp hostname add` then `az containerapp hostname bind`). The `custom_domain` blocks in
+  `containerapps.tf` / `containerapps-staging.tf` are commented; either keep binding them manually and
+  `ignore_changes`, or switch to BYO certs via `azurerm_container_app_environment_certificate`.
+- **DNS** — `fiscaltec.com` is on Cloudflare, not Azure DNS, so no zone is managed here. Each custom
+  domain needs an **un-proxied** (DNS-only) `CNAME` to the app's default FQDN plus an
+  `asuid.<subdomain>` `TXT` carrying the environment's `customDomainVerificationId`. Proxying the
+  CNAME breaks managed-certificate issuance.
 - **`vitally-shared` secret value** — the Vitally API key is *not* managed here (would land in state).
   Manage it with `az keyvault secret set` and keep its 180-day expiry; the scanner Job alerts before expiry.
 - **CMK key management** — the dedicated CMK vault is firewalled; managing the key via Terraform needs the
@@ -59,11 +65,20 @@ DNS vnet-links / NAT associations (composite IDs).
 - **Diagnostic-setting block syntax** and **container `cpu`/`memory`** may need minor tweaks to match the
   exact azurerm version / live values — `terraform plan` will surface these.
 
-## Not yet done (#10 part b — CI/CD)
-The OIDC deploy pipeline (`.github/workflows/deploy.yml`) is scaffolded but unwired: it needs a GitHub
-federated credential, repo variables/secrets, and a `production` environment. The registry keeps
-`network_rule_bypass_option = "AzureServices"`, so ACR Tasks (`az acr build`) still work with public
-access off. Wiring this is the natural next step.
+## CI/CD (wired)
+`.github/workflows/deploy.yml` deploys to one of two targets, named by GitHub **environment**:
+`production` (default, and where the nightly release train ships) or `staging`. Each target needs
+three things, all captured here: a federated credential on the managed identity whose subject is
+`repo:fiscaltec/vitally-mcp:environment:<target>` (`identity.tf`), `Contributor` on that target's
+Container App (`identity.tf`), and `CONTAINER_APP` + `PUBLIC_ORIGIN` as **environment-scoped** GitHub
+variables. `ACR_NAME` / `RESOURCE_GROUP` / `IMAGE_NAME` are shared and stay repo-level.
+
+The workflow itself holds no per-target literals, so adding a target means an environment plus a
+federated credential and no YAML change. It fails before building if any of those variables is
+missing, rather than mid-deploy.
+
+The registry keeps `network_rule_bypass_option = "AzureServices"`, so ACR Tasks (`az acr build`) still
+work with public access off.
 
 ## Related
 - `docs/runbooks/vitally-private-networking.md` — the VNet/private-endpoint migration
