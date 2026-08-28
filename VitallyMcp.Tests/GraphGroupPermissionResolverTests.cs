@@ -70,6 +70,13 @@ public class GraphGroupPermissionResolverTests : IDisposable
     private sealed class RecordingHandler(ISet<string> memberGroupIds, HttpStatusCode status = HttpStatusCode.OK)
         : HttpMessageHandler
     {
+        /// <summary>
+        /// Invoked on every request, before the response is produced. Lets a test make the Graph call
+        /// itself consume time — which is the only way to reach the case where a lookup begins inside
+        /// the stale window and finishes outside it.
+        /// </summary>
+        public Action? OnRequest { get; set; }
+
         private readonly List<HttpResponseMessage> _responses = [];
         public List<string> RequestedUris { get; } = [];
 
@@ -87,6 +94,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
         {
             var uri = request.RequestUri!.ToString();
             RequestedUris.Add(uri);
+            OnRequest?.Invoke();
 
             var response = Status != HttpStatusCode.OK
                 ? new HttpResponseMessage(Status) { Content = new StringContent("{\"error\":\"boom\"}") }
@@ -347,6 +355,28 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         handler.RequestedUris.Count.Should().BeGreaterThan(callsAfterFirst,
             "retaining a stale copy must not extend the fresh cache window");
+    }
+
+    [Fact]
+    public async Task DoesNotServeStale_WhenTheFailingLookupItselfCarriesTheEntryOutOfTheWindow()
+    {
+        // The stale decision must be made as of the moment the lookup *failed*, not the moment it
+        // started. A Graph timeout can burn the whole client timeout, so a call that begins inside the
+        // window can finish outside it, and reading the clock once up front would serve a copy that
+        // is by then out of bounds — and under-report its age in the warning.
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { AdminGroup });
+        var resolver = Build(handler, timeProvider: clock, staleSeconds: 600);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+
+        clock.Advance(TimeSpan.FromSeconds(595));      // still inside the 600s window...
+        handler.Status = HttpStatusCode.GatewayTimeout;
+        handler.OnRequest = () => clock.Advance(TimeSpan.FromSeconds(10)); // ...but not once it fails
+
+        var served = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        served.Should().BeNull("the window is enforced as of failure time, not as of when the call began");
     }
 
     [Fact]

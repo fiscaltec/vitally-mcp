@@ -94,6 +94,12 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             var permissions = MapGroupsToPermissions(memberOf);
             // Retained for whichever window is longer, since the entry now serves both roles.
             var retentionSeconds = Math.Max(1, Math.Max(_options.LiveGroupCacheSeconds, _options.LiveGroupStaleSeconds));
+            // ResolvedAt is deliberately the pre-call `now`, NOT the time the call returned. It is a
+            // lower bound on when this answer was true, so every age computed from it is >= the real
+            // age. Re-reading the clock here would make the entry look *fresher* than it is and
+            // silently extend the fresh window by the call duration — delaying revocation
+            // propagation, which is the whole reason the live check exists. Erring old is the safe
+            // direction; erring young is not.
             _cache.Set(cacheKey, new ResolvedPermissions(permissions, now), TimeSpan.FromSeconds(retentionSeconds));
             return permissions;
         }
@@ -110,8 +116,14 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             // outage does not revoke someone whose membership was confirmed minutes ago; only when
             // there is no usable copy does the authorizer fall through to the token claim (which is
             // empty post-cutover, hence #106). Never cache the failure itself.
+            // Read the clock again: `now` predates the attempt, and a Graph timeout can burn the
+            // whole client timeout before arriving here. Both the decision and the reported age must
+            // be as of failure time, or a lookup that began inside the window could be served after
+            // it had left it — and the warning would under-report how stale the answer is.
+            var failedAt = _timeProvider.GetUtcNow();
+
             if (lastKnownGood is not null && _options.LiveGroupStaleSeconds > 0
-                && IsWithin(lastKnownGood, now, _options.LiveGroupStaleSeconds))
+                && IsWithin(lastKnownGood, failedAt, _options.LiveGroupStaleSeconds))
             {
                 // One warning, not two: an outage should read as a single line per call. Subject id
                 // only — never the caller's email, per the audit rules.
@@ -119,7 +131,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
                     ex,
                     "Live group permission lookup failed for {UserObjectId}; serving the last known-good permission set, stale by {StaleSeconds}s (limit {StaleLimitSeconds}s).",
                     userObjectId,
-                    (long)(now - lastKnownGood.ResolvedAt).TotalSeconds,
+                    (long)(failedAt - lastKnownGood.ResolvedAt).TotalSeconds,
                     _options.LiveGroupStaleSeconds);
                 return lastKnownGood.Permissions;
             }
