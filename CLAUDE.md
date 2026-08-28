@@ -145,6 +145,88 @@ and these checks green: `Analyze (csharp)`, `Validate PR title`, `Build and test
 net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring from
 `mergeStateStatus`, which reports `BLOCKED` for unresolved threads and pending checks too.
 
+**That ruleset is not the whole gate.** It says nothing about Copilot, and reading "0 approvals
+required" as "nothing else to wait for" is exactly what merged #117 with three unreviewed commits —
+see the next section before merging anything.
+
+### Copilot review & merge gate
+
+Copilot reviews every PR automatically, **asynchronously**, and its reviews are always `COMMENTED` —
+never `APPROVED`. So it can never satisfy an approval-count rule, and the ruleset above is blind to
+it. Two consequences, both of which have cost real time in this repo and its siblings:
+
+- **`mergeStateStatus: CLEAN` does NOT mean Copilot has finished.** It reflects the ruleset only.
+  `searledan/rosetechnologies.co.uk` records its own version of this: PR #24 merged 15 seconds before
+  Copilot's second review posted two valid comments. Here, **#117 merged with Copilot having reviewed
+  only the first pushed commit** — the two fixes Copilot itself asked for went in unseen, while
+  `CLEAN` held the whole time because the threads had been resolved.
+- **A push does not reliably start a re-review.** The automatic request fires when the PR is
+  *opened*. After pushing review fixes you must **re-request explicitly**, or you will wait for a
+  review that is never coming and read the silence as approval.
+
+**The merge sequence — a loop, not a one-shot:**
+
+1. Open the PR; let the checks and the first Copilot pass run.
+2. Each round:
+   1. **Wait for Copilot to finish reviewing the _current head_.** Done only when it is **not** in
+      requested reviewers **AND** its latest review's `commit_id` **equals the head SHA**. A stale
+      review of an earlier commit does not count, and timestamps cannot be lined up against the head
+      commit — compare the SHA.
+      ```bash
+      n=<PR>; head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
+      gh pr view "$n" --json reviewRequests \
+        --jq '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null'   # false = not pending
+      gh api "repos/fiscaltec/vitally-mcp/pulls/$n/reviews" \
+        --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id'
+      ```
+      ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
+      request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
+      anything. Both conditions, always.
+   2. A clean pass says *"reviewed N of N files … generated no new comments"* and adds no threads.
+   3. Work every open thread: fix and reply, or reply with the reasoning — then **resolve** it.
+   4. **If you pushed code in (3), re-request and go back to (1):**
+      ```bash
+      gh api repos/fiscaltec/vitally-mcp/pulls/$n/requested_reviewers \
+        -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+      ```
+      **`gh pr edit --add-reviewer` silently no-ops on the Copilot bot** — use the REST endpoint.
+      `requested_reviewers` reading empty seconds later is **not** failure (see the warning above);
+      check the timeline (`.event == "review_requested"`) if in doubt. Reply-only rounds need no
+      re-request.
+3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
+   branch current, Copilot's latest review on the current head, zero unresolved threads.
+
+**Mind the two spellings of the bot's login — both are correct, don't "align" them.** The suffix
+tracks *which API answered*, not which field you read. **REST** (`gh api …/pulls/N/reviews`,
+`…/requested_reviewers`) uses `copilot-pull-request-reviewer[bot]`; **GraphQL** — and
+`gh pr view --json`, which is GraphQL underneath — reports `copilot-pull-request-reviewer` without it.
+
+⚠️ **Never `--auto` merge a human PR.** It fires the instant CI passes and beats a pending review.
+`--auto` is for Dependabot only, which carries no human review.
+
+**This is enforced mechanically, not just documented.** `.claude/hooks/pre-merge-copilot-gate.sh` is a
+`PreToolUse` hook (registered in `.claude/settings.json` under the `Bash` matcher with
+`if: "Bash(gh pr merge*)"`) that **denies** `gh pr merge` unless Copilot is not a requested reviewer,
+its latest review's `commit_id` equals the head, and unresolved threads are zero. It exempts
+Dependabot and **fails closed** — including if `jq`/`sed`/`awk` are missing or broken, so a damaged
+toolchain cannot wave a merge through. Ported from `searledan/dansearle.co.uk`; it needs no
+adaptation, resolving owner/repo at runtime.
+
+Caveats worth knowing before trusting it:
+
+- It guards **only Claude Code's own tool calls** — a merge from the GitHub UI is unaffected.
+- A newly added hook needs `/hooks` opened once (or a restart) to activate.
+- **Run `gh pr merge` as a standalone command — no pipes, no `;`, no `&&`.** The hook resolves the PR
+  by counting non-flag positional tokens after the subcommand, so a chained form turns every
+  following word into a candidate and the gate denies as ambiguous.
+- The `if` filter matches the command text, so *any* Bash call containing `gh pr merge` is gated —
+  including a test harness. Testing the hook means invoking it from a script file rather than inline.
+  Over-matching is the safe direction; don't loosen it.
+
+Verified on porting (2026-08-28) by running the hook against real PRs: it allows #118, whose Copilot
+review was on the merged head, and **denies #117** — *"Copilot's latest review (6808805…) is not on
+the current head (58afb2b…)"* — which is the mistake that prompted the port.
+
 **Forms** — `.github/ISSUE_TEMPLATE/` provides seven, one per type label except `ux`: `bug.yml`,
 `feature.yml`, `tech-debt.yml`, `security.yml`, `ops.yml`, `documentation.yml`, `content.yml`.
 Filenames match the label they preset, and the shared four match the sibling repos. Each form

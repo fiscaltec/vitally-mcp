@@ -63,6 +63,14 @@
           {
             "type": "command",
             "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE 'git push[^|;]*--force\\b[^|;]*\\b(origin\\s+)?(main|master)\\b'; then echo 'BLOCKED: Force-push to main is never allowed.'; exit 1; fi"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-merge-copilot-gate.sh\"",
+            "if": "Bash(gh pr merge*)",
+            "shell": "bash",
+            "timeout": 30,
+            "statusMessage": "Checking Copilot merge gate…"
           }
         ]
       },
