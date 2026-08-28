@@ -722,15 +722,25 @@ The managed TLS certificate and the hostname binding go with the app and are re-
 `az containerapp hostname` commands above — that plus the app itself is the entire spin-up, because
 the CAE, identity, ACR and Key Vault are all shared and never leave.
 
-#### The shared managed identity is a known weakness
+#### One managed identity serves both targets — an accepted risk, not an open defect
 
 `vitally-prod-id-uksouth` serves both targets and holds `Contributor` on the production Container App,
 so a federated credential for `environment:staging` mints a token that **can roll production**. The
-per-app role assignments give no protection, because one identity holds both. Recorded rather than
-fixed; the fix is a `vitally-staging-id-uksouth` with its own `AcrPull`, `Key Vault Secrets User`,
-Graph `GroupMember.Read.All` and an app-scoped `Contributor` — the Graph grant needs admin consent,
-which is the only friction. This matters more under the on-demand model, not less: the identity is
-persistent scaffolding, so getting it right once pays on every spin-up.
+per-app role assignments give no protection, because one identity holds both — do not read them as a
+boundary.
+
+**Accepted deliberately on 2026-08-28**, on this basis: neither the `production` nor the `staging`
+GitHub environment has protection rules or a deployment branch policy (verified, not assumed), and
+`deploy.yml` is `workflow_dispatch`-able against production directly. So anyone who can trigger a
+staging deploy can already trigger a production one, and the shared identity grants no privilege they
+did not already hold. Don't "fix" this on sight — it was priced and taken.
+
+**What would change the answer:** the moment `production` gains a protection rule that `staging` does
+not — required reviewers, or a deployment branch policy — the shared identity becomes a way around
+that gate, and it stops being an accepted risk. Revisit it then, and also if staging starts routinely
+deploying unreviewed refs. The remedy is a `vitally-staging-id-uksouth` with its own `AcrPull`,
+`Key Vault Secrets User`, Graph `GroupMember.Read.All` and an app-scoped `Contributor`; the Graph
+grant needs admin consent, which is the only real friction.
 
 #### Why there is no separate dev environment
 
