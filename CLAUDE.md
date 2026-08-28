@@ -262,8 +262,11 @@ against a local container is now a working end-to-end client, which is the pract
   `Authorization:Enabled=false` to confirm the rest of the path, or accept the empty list as evidence
   the RBAC discovery filter fails closed.
 - **Auth0 API identifiers are immutable and must equal the server origin** (the client throws if the
-  RFC 9728 `resource` does not match), so an ephemeral tunnel URL orphans one API per run. Use a
-  stable hostname, or budget for the cleanup.
+  RFC 9728 `resource` does not match), so an ephemeral tunnel URL orphans one API per run. This is
+  what the staging environment now exists to avoid — validate identity-provider changes against
+  `https://vitally-staging.fiscaltec.com`, whose hostname is stable and whose Resource Server already
+  matches it. Reach for a tunnel only for something staging genuinely cannot cover, and budget for the
+  cleanup if you do.
 
 ### Upstream endpoints come from OIDC discovery, not from `Authority`
 
@@ -609,18 +612,149 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 
 ## Deployment
 
-The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with Auth0 federating to Microsoft Entra for FISCAL employee sign-in), and the container image hosted in Azure Container Registry. `.github/workflows/deploy.yml` builds the image in ACR (via GitHub OIDC, no long-lived credentials) and rolls the Container App to the new revision. It is currently **manual-trigger only** (`workflow_dispatch`) until the target infrastructure is provisioned in the separate Terraform repo, at which point the `push` trigger can be enabled. It expects repo variables `ACR_NAME` / `RESOURCE_GROUP` / `CONTAINER_APP` / `IMAGE_NAME` and secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`.
+The deployment shape is **Azure Container Apps + Azure Key Vault + Auth0** (with Auth0 federating to Microsoft Entra for FISCAL employee sign-in), and the container image hosted in Azure Container Registry. `.github/workflows/deploy.yml` builds the image, imports it into the private ACR (via GitHub OIDC, no long-lived credentials) and rolls a Container App to the new revision.
+
+**It deploys to one of two targets, and the target is a GitHub *environment* name:** `production`
+(the default, and what the nightly release train ships to) or `staging` — see the staging section
+below. Everything that differs between targets is an environment-scoped GitHub variable
+(`CONTAINER_APP`, `PUBLIC_ORIGIN`), so the workflow contains no per-target literals and the smoke
+test, metadata verification and rollback are shared rather than duplicated per target and left to
+drift. Shared values (`ACR_NAME` / `RESOURCE_GROUP` / `IMAGE_NAME`) stay repo-level, as do the secrets
+`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`. A first step fails the run *before*
+anything is built if any of those is missing, or if `PUBLIC_ORIGIN` is not a slash-free absolute https
+origin — unset, every smoke assertion below would be made against a relative path, fail, and roll back
+a deploy that was in fact fine.
+
+Each target needs its **own federated credential** on the managed identity, subject
+`repo:fiscaltec/vitally-mcp:environment:<target>`, plus `Contributor` on that target's Container App.
+The subject is an exact string match, so a target with no credential fails at `azure/login` rather
+than deploying somewhere unintended.
 
 | Component | Resource | Notes |
 |---|---|---|
-| Hosting | Azure Container Apps (consumption plan) | Scale-to-zero; HTTPS-native ingress; managed cert on `vitally.fiscaltec.com` |
+| Hosting (production) | Azure Container Apps `vitally-prod-ca-uksouth` (consumption plan) | `minReplicas: 1` (one warm replica); HTTPS-native ingress; managed cert on `vitally.fiscaltec.com` |
+| Hosting (staging) | Azure Container Apps `vitally-staging-ca-uksouth`, **same** RG and CAE | Scale-to-zero (`minReplicas: 0`); managed cert on `vitally-staging.fiscaltec.com`; the pre-production target for identity changes — see below |
 | Secrets | Azure Key Vault | `vitally-shared` is the default secret name; managed identity has `Key Vault Secrets User` |
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Resource Server identifier `https://vitally.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable); post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Two Resource Servers, one per origin: `https://vitally.fiscaltec.com/` and `https://vitally-staging.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable). **One** shared client (`Vitally MCP`) carrying both origins' `/oauth/callback`, so both targets use the same `SharedClientId` / `SharedClientSecret`. Post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
 | CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
+
+### Staging (`vitally-staging-ca-uksouth`) — an on-demand pre-production target
+
+**Staging is created when it is needed and torn down when the work is done.** It is not a standing
+environment, and `az containerapp list` showing only `vitally-prod-ca-uksouth` is a normal state, not
+a fault — that is exactly what #112 was raised for. Decided 2026-08-28, after evaluating and rejecting
+a separate dev environment (see the topology note at the end of this section).
+
+**Deploy to it:**
+
+```powershell
+gh workflow run deploy.yml -f target=staging -f ref=<branch-tag-or-sha>
+```
+
+`https://vitally-staging.fiscaltec.com` — a second Container App in the *same* resource group and the
+*same* Container Apps Environment as production, not a second environment. That is what makes it
+cheap: the CAE is VNet-injected, so a new app inside it reaches Key Vault and ACR over the existing
+private endpoints with no additional networking, and it reuses the same user-assigned managed
+identity, so `AcrPull`, `Key Vault Secrets User` and the Graph `GroupMember.Read.All` grant already
+cover it.
+
+**Why it exists.** Authentication has the largest blast radius in this system, so the Entra migration
+(#102 / #108) is validated here before production. The alternatives were rejected: a local server
+behind an ephemeral HTTPS tunnel orphans one identity-provider app registration per run — identifier
+URIs are immutable and must equal the server origin — which cost two sessions during #90; and
+validating straight against production is the failure mode a staging-first design exists to prevent.
+**The hostname being stable is the load-bearing property, not a convenience:** it is what lets one app
+registration be reused across a multi-run validation.
+
+**What it shares with production, deliberately:** the CAE, the managed identity, the ACR, the Key
+Vault *and its `vitally-shared` secret*, the `sg-vitally-*` tier group ids, and the single Auth0
+client. Sharing is the point — a staging environment that differs in more than the thing under test
+cannot tell you whether a failure is the change or the environment.
+
+**What diverges:** `OAuth__Audience` / `OAuth__Resource` (`https://vitally-staging.fiscaltec.com/`,
+its own Auth0 Resource Server), `OAuth__PublicBaseUrl`, `minReplicas: 0`, and — at #108 —
+`OAuth__Authority`, which staging flips to Entra first while production stays on Auth0.
+
+**Two divergences that will cost you time if you meet them cold:**
+
+- **A staging token carries no `permissions` claim.** The post-login Action's guard is
+  `if (event.resource_server?.identifier !== 'https://vitally.fiscaltec.com/') return;`, so it mints
+  nothing for the staging audience. That is harmless today because `Authorization:LiveGroupCheck` is
+  `true` on both targets and entitlement comes from Graph `transitiveMembers` — but it does mean
+  staging has **no claim-based fallback tier**: a Graph failure denies on staging where production
+  would still degrade to the claim. Do **not** "fix" this by widening the Action's guard. The Action
+  and its claim disappear at cutover, so the work would be thrown away, and the divergence is in the
+  safe direction.
+- **There is one Vitally tenant and its API keys are global.** Staging reads the *production*
+  `vitally-shared` secret, so its write and delete tools mutate real customer data — there is no
+  sandbox to point it at. `Authorization:ReadOnly=true` is deliberately **not** set, because #108's
+  acceptance test needs the write tools visible to prove a reader is denied one. So staging is
+  read-only by convention, not by configuration.
+
+**The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
+DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from
+`vitally-staging` to the app's default FQDN, plus an `asuid.vitally-staging` `TXT` carrying the CAE's
+`customDomainVerificationId`. Proxying the CNAME breaks managed-certificate issuance. Then
+`az containerapp hostname add`, followed by
+`az containerapp hostname bind --validation-method CNAME`.
+
+#### What must survive a teardown
+
+Tearing down the **Container App** is the whole teardown. Everything below is persistent scaffolding
+that makes the next spin-up cheap, and deleting any of it is what turns a recreate back into the
+multi-session exercise #112 was raised to end:
+
+| Keep | Why |
+|---|---|
+| The Cloudflare `CNAME` + `asuid.vitally-staging` `TXT` | Costs nothing while the app is gone. The `CNAME` target is deterministic (`<app-name>.<CAE default domain>`), so it keeps pointing at the right place after a recreate under the same name |
+| The Auth0 Resource Server `https://vitally-staging.fiscaltec.com/` | **Identifiers are immutable.** Deleting and recreating it per run is precisely the orphaning cost the stable hostname exists to avoid |
+| The staging `/oauth/callback` on the shared Auth0 client | Same reason, and it is inert while no app answers there |
+| The Entra staging redirect URI (#107) | Same reason |
+| The `staging` GitHub environment + its `CONTAINER_APP` / `PUBLIC_ORIGIN` variables | The workflow reads them; recreating them by hand invites a typo into the origin, which the preflight check would catch but only after a wasted run |
+| The federated credential and role assignments | See the identity note below |
+| `containerapps-staging.tf` | The recreate recipe. Keep it in step with the live app rather than deleting it when the app goes |
+
+The managed TLS certificate and the hostname binding go with the app and are re-created by the two
+`az containerapp hostname` commands above — that plus the app itself is the entire spin-up, because
+the CAE, identity, ACR and Key Vault are all shared and never leave.
+
+#### One managed identity serves both targets — an accepted risk, not an open defect
+
+`vitally-prod-id-uksouth` serves both targets and holds `Contributor` on the production Container App,
+so a federated credential for `environment:staging` mints a token that **can roll production**. The
+per-app role assignments give no protection, because one identity holds both — do not read them as a
+boundary.
+
+**Accepted deliberately on 2026-08-28**, on this basis: neither the `production` nor the `staging`
+GitHub environment has protection rules or a deployment branch policy (verified, not assumed), and
+`deploy.yml` is `workflow_dispatch`-able against production directly. So anyone who can trigger a
+staging deploy can already trigger a production one, and the shared identity grants no privilege they
+did not already hold. Don't "fix" this on sight — it was priced and taken.
+
+**What would change the answer:** the moment `production` gains a protection rule that `staging` does
+not — required reviewers, or a deployment branch policy — the shared identity becomes a way around
+that gate, and it stops being an accepted risk. Revisit it then, and also if staging starts routinely
+deploying unreviewed refs. The remedy is a `vitally-staging-id-uksouth` with its own `AcrPull`,
+`Key Vault Secrets User`, Graph `GroupMember.Read.All` and an app-scoped `Contributor`; the Graph
+grant needs admin consent, which is the only real friction.
+
+#### Why there is no separate dev environment
+
+Evaluated on 2026-08-28 and deliberately not done. A `global` / `prod` / `dev` split is the right end
+state and the `global` tier already exists implicitly — the Premium ACR with CMK, the CMK vault, the
+Auth0 tenant and DNS are all genuinely shared but carry `prod` names. The cheap version, if it is ever
+picked up, is **not** full duplication: the VNet is `10.80.0.0/23` with only `10.80.0.0-.127`
+allocated, so a second `/27` app subnet and its own CAE drop in with no re-addressing, one NAT gateway
+serves multiple subnets in the same VNet, and both CAEs resolve the same private endpoints through the
+shared DNS zone links. That closes the one gap the shared model cannot: **CAE-level and platform
+changes cannot be rehearsed before production sees them.**
+
+What no topology fixes: there is one Vitally tenant and its API keys are global, so any staging or dev
+environment reads real customer data.
 
 ### The deploy smoke covers the OAuth metadata, not just liveness
 
@@ -634,10 +768,12 @@ wrong upstream, a dropped `iss` flag, or a null-serialised optional each break e
 next re-authentication *and deploy green*. The rollback therefore used to read as assurance it did not
 provide (#110).
 
-**Run it by hand against any origin** — that is the point of it being a script rather than inline YAML:
+**Run it by hand against any origin** — that is the point of it being a script rather than inline
+YAML, and it is also how the same assertions cover staging with no second copy to keep in step:
 
 ```bash
 bash .github/scripts/verify-oauth-metadata.sh https://vitally.fiscaltec.com
+bash .github/scripts/verify-oauth-metadata.sh https://vitally-staging.fiscaltec.com
 bash .github/scripts/verify-oauth-metadata.sh http://localhost:5099   # a local run, for testing it
 ```
 

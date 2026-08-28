@@ -1,15 +1,36 @@
 name: Deploy
 
-# Production deploy. The ACR has public network access disabled, so the image cannot be built/pushed
-# to it from a GitHub-hosted runner. Instead we build + push to a private GHCR package, then
-# `az acr import` (server-side, works with public access disabled) pulls it into the private ACR, and
-# `az containerapp update` rolls the app. OIDC auth as the user-assigned managed identity (federated
-# credential subject repo:fiscaltec/vitally-mcp:environment:production). Callable manually
+# Deploys the image to one of the Container Apps targets in `vitally-prod-rg-uksouth`: `production`
+# (the default, and what the release train ships to) or `staging`. The ACR has public network access
+# disabled, so the image cannot be built/pushed to it from a GitHub-hosted runner. Instead we build +
+# push to a private GHCR package, then `az acr import` (server-side, works with public access
+# disabled) pulls it into the private ACR, and `az containerapp update` rolls the app. OIDC auth as
+# the user-assigned managed identity (federated credential subject
+# repo:fiscaltec/vitally-mcp:environment:<target> -- one per target). Callable manually
 # (workflow_dispatch) or by the release train (workflow_call). On a failed health/smoke check it rolls
 # the Container App back to the previous image.
+#
+# THE TARGET IS A GITHUB ENVIRONMENT NAME, and everything that differs between targets is an
+# environment-scoped variable (CONTAINER_APP, PUBLIC_ORIGIN) rather than a literal in this file, so
+# the smoke test, the metadata verification and the rollback are shared by every target instead of
+# being duplicated per target and left to drift. Adding a target is a GitHub environment plus a
+# federated credential, with no change here.
+#
+# `staging` exists for the Entra migration (#102/#112): authentication has the largest blast radius in
+# this system, so IdP changes are validated on staging first. Its hostname is deliberately stable --
+# identity-provider identifiers are immutable and must equal the server origin, so an ephemeral one
+# orphans an app registration per run.
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Deployment target (GitHub environment)"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
       ref:
         description: "Git ref (branch/tag/SHA) to deploy"
         required: false
@@ -20,6 +41,13 @@ on:
         type: string
   workflow_call:
     inputs:
+      target:
+        # `type: choice` is workflow_dispatch-only, so callers get a plain string. The default keeps
+        # the release train's existing call site (which passes no target) shipping to production.
+        description: "Deployment target (GitHub environment)"
+        required: false
+        default: production
+        type: string
       ref:
         description: "Git ref (branch/tag/SHA) to deploy"
         required: false
@@ -37,7 +65,9 @@ on:
         required: true
 
 concurrency:
-  group: deploy-production
+  # Per target: a staging deploy must not queue behind a production one, and two deploys to the same
+  # target must still serialise -- they race on one Container App's revisions.
+  group: deploy-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
@@ -48,16 +78,53 @@ jobs:
       contents: read
       packages: write # push to GHCR
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.target }}
     env:
+      # ACR_NAME / RESOURCE_GROUP / IMAGE_NAME are shared by every target and stay repo-level.
+      # CONTAINER_APP and PUBLIC_ORIGIN are set per environment; both targets set them explicitly so
+      # neither silently inherits the other's. The URLs are built from PUBLIC_ORIGIN in the steps --
+      # one `env:` entry cannot reference a sibling.
       ACR_NAME: ${{ vars.ACR_NAME }}
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
       CONTAINER_APP: ${{ vars.CONTAINER_APP }}
       IMAGE_NAME: ${{ vars.IMAGE_NAME }}
-      PUBLIC_ORIGIN: https://vitally.fiscaltec.com
-      HEALTH_URL: https://vitally.fiscaltec.com/health
-      MCP_URL: https://vitally.fiscaltec.com/mcp
+      PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
     steps:
+      # Runs before anything is built, imported or rolled, so a misconfigured target cannot leave a
+      # half-deployed app or a rollback to reason about. PUBLIC_ORIGIN earns the check on its own:
+      # it used to be a hardcoded production URL, and unset it would make every smoke assertion below
+      # run against a relative path, fail, and roll back a deploy that was in fact fine.
+      - name: Check the target's configuration is complete
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in ACR_NAME RESOURCE_GROUP CONTAINER_APP IMAGE_NAME PUBLIC_ORIGIN; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Target '$TARGET' is missing variable(s):$missing -- set them on the '$TARGET' GitHub environment (or repo-level if shared by every target)."
+            exit 1
+          fi
+          # Must be scheme + host ONLY. No normalisation is applied, deliberately: PUBLIC_ORIGIN is
+          # concatenated into the smoke URLs and handed to verify-oauth-metadata.sh, which compares
+          # the published `issuer` to it literally. A path is the realistic mistake rather than a
+          # theoretical one -- this repo's docs are full of `https://<host>/mcp` URLs, and pasting one
+          # here would build `.../mcp/health`, fail every assertion below and roll back a healthy
+          # deploy. Rejecting `/`, `?` and `#` in the authority also subsumes the trailing slash.
+          case "$PUBLIC_ORIGIN" in
+            https://*) origin_host="${PUBLIC_ORIGIN#https://}" ;;
+            *) echo "::error::PUBLIC_ORIGIN must be an absolute https origin (got '$PUBLIC_ORIGIN')"; exit 1 ;;
+          esac
+          case "$origin_host" in
+            "" | */* | *\?* | *"#"*)
+              echo "::error::PUBLIC_ORIGIN must be scheme and host only -- no path, query, fragment or trailing slash (got '$PUBLIC_ORIGIN')"
+              exit 1
+              ;;
+          esac
+          echo "Target '$TARGET': app=$CONTAINER_APP origin=$PUBLIC_ORIGIN"
+        env:
+          TARGET: ${{ inputs.target }}
+
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
@@ -162,12 +229,12 @@ jobs:
           fi
           # Smoke (with retries): a freshly-swapped single-revision app may take a short while to
           # start serving on the public FQDN, so retry before failing (and triggering a rollback).
-          # /health must be 200; unauthenticated /mcp must be 401 (app live + Auth0 gate enforced).
+          # /health must be 200; unauthenticated /mcp must be 401 (app live + OAuth gate enforced).
           # curl already emits "000" as the http_code on a connection failure; `|| true` just stops
           # set -e aborting the loop so we can retry. No sleep after the final attempt.
           health_code=""
           for i in $(seq 1 6); do
-            health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$HEALTH_URL" || true)
+            health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$PUBLIC_ORIGIN/health" || true)
             echo "/health -> ${health_code:-000} (attempt $i)"
             [ "$health_code" = "200" ] && break
             [ "$i" -lt 6 ] && sleep 10
@@ -175,7 +242,7 @@ jobs:
           [ "$health_code" = "200" ] || { echo "::error::/health not 200 after retries (last: ${health_code:-000})"; exit 1; }
           mcp_code=""
           for i in $(seq 1 6); do
-            mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "$MCP_URL" \
+            mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "$PUBLIC_ORIGIN/mcp" \
               -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' || true)
             echo "/mcp (unauthenticated) -> ${mcp_code:-000} (attempt $i)"
             [ "$mcp_code" = "401" ] && break

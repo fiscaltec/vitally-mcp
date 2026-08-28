@@ -32,8 +32,12 @@ resource "azurerm_role_assignment" "mi_cmk_crypto" {
 # separate Entra-scoped config.
 
 # CI/CD (GitHub Actions OIDC): GitHub authenticates as this identity to deploy. The federated
-# credential subject matches the deploy workflow's `environment: production` job, so only that
-# environment can mint a token. Audience is the value azure/login requests by default.
+# credential subject matches the deploy workflow's `environment:` job, so only that environment can
+# mint a token. Audience is the value azure/login requests by default.
+#
+# ONE CREDENTIAL PER TARGET, and that is the whole reason deploy.yml keys off a GitHub environment
+# name: the subject is an exact string match, so a deploy to a target with no credential here fails
+# at azure/login rather than deploying somewhere unintended.
 resource "azurerm_federated_identity_credential" "github_actions_prod" {
   name                = "github-actions-prod-env"
   resource_group_name = data.azurerm_resource_group.rg.name
@@ -41,6 +45,15 @@ resource "azurerm_federated_identity_credential" "github_actions_prod" {
   audience            = ["api://AzureADTokenExchange"]
   issuer              = "https://token.actions.githubusercontent.com"
   subject             = "repo:fiscaltec/vitally-mcp:environment:production"
+}
+
+resource "azurerm_federated_identity_credential" "github_actions_staging" {
+  name                = "github-actions-staging-env"
+  resource_group_name = data.azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.app.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = "https://token.actions.githubusercontent.com"
+  subject             = "repo:fiscaltec/vitally-mcp:environment:staging"
 }
 
 # Deploy: `az acr import` the built image into the private ACR. AcrPush does NOT include the
@@ -54,6 +67,14 @@ resource "azurerm_role_assignment" "mi_acr_contributor" {
 # Deploy: roll the Container App to the new revision (`az containerapp update`).
 resource "azurerm_role_assignment" "mi_ca_contributor" {
   scope                = azurerm_container_app.app.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.app.principal_id
+}
+
+# Deploy: the same, for staging. Scoped to the app rather than the resource group so a deploy to one
+# target cannot roll the other.
+resource "azurerm_role_assignment" "mi_ca_staging_contributor" {
+  scope                = azurerm_container_app.staging.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_user_assigned_identity.app.principal_id
 }
