@@ -71,6 +71,7 @@ import {
   to = azurerm_container_app.app
   id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-prod-ca-uksouth"
 }
+# Only valid while staging is spun up — it is an on-demand app (see containerapps-staging.tf).
 import {
   to = azurerm_container_app.staging
   id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-staging-ca-uksouth"

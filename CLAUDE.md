@@ -642,7 +642,12 @@ than deploying somewhere unintended.
 | CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
 
-### Staging (`vitally-staging-ca-uksouth`) — the pre-production target for identity changes
+### Staging (`vitally-staging-ca-uksouth`) — an on-demand pre-production target
+
+**Staging is created when it is needed and torn down when the work is done.** It is not a standing
+environment, and `az containerapp list` showing only `vitally-prod-ca-uksouth` is a normal state, not
+a fault — that is exactly what #112 was raised for. Decided 2026-08-28, after evaluating and rejecting
+a separate dev environment (see the topology note at the end of this section).
 
 **Deploy to it:**
 
@@ -696,6 +701,50 @@ DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `C
 `customDomainVerificationId`. Proxying the CNAME breaks managed-certificate issuance. Then
 `az containerapp hostname add`, followed by
 `az containerapp hostname bind --validation-method CNAME`.
+
+#### What must survive a teardown
+
+Tearing down the **Container App** is the whole teardown. Everything below is persistent scaffolding
+that makes the next spin-up cheap, and deleting any of it is what turns a recreate back into the
+multi-session exercise #112 was raised to end:
+
+| Keep | Why |
+|---|---|
+| The Cloudflare `CNAME` + `asuid.vitally-staging` `TXT` | Costs nothing while the app is gone. The `CNAME` target is deterministic (`<app-name>.<CAE default domain>`), so it keeps pointing at the right place after a recreate under the same name |
+| The Auth0 Resource Server `https://vitally-staging.fiscaltec.com/` | **Identifiers are immutable.** Deleting and recreating it per run is precisely the orphaning cost the stable hostname exists to avoid |
+| The staging `/oauth/callback` on the shared Auth0 client | Same reason, and it is inert while no app answers there |
+| The Entra staging redirect URI (#107) | Same reason |
+| The `staging` GitHub environment + its `CONTAINER_APP` / `PUBLIC_ORIGIN` variables | The workflow reads them; recreating them by hand invites a typo into the origin, which the preflight check would catch but only after a wasted run |
+| The federated credential and role assignments | See the identity note below |
+| `containerapps-staging.tf` | The recreate recipe. Keep it in step with the live app rather than deleting it when the app goes |
+
+The managed TLS certificate and the hostname binding go with the app and are re-created by the two
+`az containerapp hostname` commands above — that plus the app itself is the entire spin-up, because
+the CAE, identity, ACR and Key Vault are all shared and never leave.
+
+#### The shared managed identity is a known weakness
+
+`vitally-prod-id-uksouth` serves both targets and holds `Contributor` on the production Container App,
+so a federated credential for `environment:staging` mints a token that **can roll production**. The
+per-app role assignments give no protection, because one identity holds both. Recorded rather than
+fixed; the fix is a `vitally-staging-id-uksouth` with its own `AcrPull`, `Key Vault Secrets User`,
+Graph `GroupMember.Read.All` and an app-scoped `Contributor` — the Graph grant needs admin consent,
+which is the only friction. This matters more under the on-demand model, not less: the identity is
+persistent scaffolding, so getting it right once pays on every spin-up.
+
+#### Why there is no separate dev environment
+
+Evaluated on 2026-08-28 and deliberately not done. A `global` / `prod` / `dev` split is the right end
+state and the `global` tier already exists implicitly — the Premium ACR with CMK, the CMK vault, the
+Auth0 tenant and DNS are all genuinely shared but carry `prod` names. The cheap version, if it is ever
+picked up, is **not** full duplication: the VNet is `10.80.0.0/23` with only `10.80.0.0-.127`
+allocated, so a second `/27` app subnet and its own CAE drop in with no re-addressing, one NAT gateway
+serves multiple subnets in the same VNet, and both CAEs resolve the same private endpoints through the
+shared DNS zone links. That closes the one gap the shared model cannot: **CAE-level and platform
+changes cannot be rehearsed before production sees them.**
+
+What no topology fixes: there is one Vitally tenant and its API keys are global, so any staging or dev
+environment reads real customer data.
 
 ### The deploy smoke covers the OAuth metadata, not just liveness
 

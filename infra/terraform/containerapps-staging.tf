@@ -1,4 +1,12 @@
-# Staging Container App — the pre-production target for identity-provider changes (#112).
+# Staging Container App — the on-demand pre-production target for identity-provider changes (#112).
+#
+# LIFECYCLE. Staging is spun up when it is needed and torn down when the work is done (decided
+# 2026-08-28), so this resource frequently describes something that does not currently exist — that
+# is the intended state, not drift to reconcile. Its import block in imports.tf therefore only
+# applies while the app is live; comment it out otherwise. Everything else staging needs (the CAE,
+# managed identity, ACR, Key Vault, DNS records, Auth0 Resource Server, GitHub environment and the
+# federated credential) is persistent scaffolding that deliberately survives a teardown — see the
+# teardown table in CLAUDE.md before deleting any of it.
 #
 # WHY IT EXISTS. Authentication has the largest blast radius in this system, so the Entra migration
 # (#102) is validated here before production. The alternatives were both rejected: a local server
