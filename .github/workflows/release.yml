@@ -4,9 +4,9 @@ name: Release
 # conventional commits, create the tag + a GitHub Release (the changelog), and deploy it via the
 # reusable deploy workflow. Fully automatic; the deploy self-rolls-back on a failed smoke test.
 #
-# TO FREEZE DEPLOYS: `gh workflow disable release.yml` (re-enable with `gh workflow enable`). That
-# stops tagging, releasing and deploying together, which is the coherent unit — a freeze must not be
-# able to leave a Release behind for something that never shipped.
+# TO FREEZE DEPLOYS: `gh workflow disable release.yml`; to lift it, `gh workflow enable release.yml`.
+# That stops tagging, releasing and deploying together, which is the coherent unit — a freeze must not
+# be able to leave a Release behind for something that never shipped.
 #
 # Nothing is lost by pausing: the commits stay on main, and whenever the train next runs it tags once
 # and `--generate-notes` builds the changelog from everything since the previous tag. #111 briefly
