@@ -14,11 +14,24 @@ namespace VitallyMcp;
 /// id, so membership via a nested (department) group counts, not just direct membership. Checking
 /// from the group side needs only <c>GroupMember.Read.All</c>; the alternative
 /// <c>POST /users/{id}/checkMemberGroups</c> additionally requires a user-read permission
-/// (User.ReadBasic.All), which we deliberately avoid. Results are cached per user for
-/// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/>.
+/// (User.ReadBasic.All), which we deliberately avoid.
 ///
 /// Requires the managed identity to hold the Graph application permission <c>GroupMember.Read.All</c>.
-/// On any failure the method returns <c>null</c> so the authorizer falls back to the token claim.
+///
+/// <para><b>One cache entry, two windows.</b> Each successful lookup is stored with the time it was
+/// resolved, and its age is compared against two thresholds:
+/// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/> decides whether it can be served
+/// without asking Graph at all, and <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>
+/// decides whether it may still be served as a <i>fallback</i> after a Graph call has failed. Only
+/// when neither applies does the method return <c>null</c>, leaving the authorizer to fall through to
+/// the token claim.</para>
+///
+/// <para>The two thresholds are kept deliberately separate. Retaining a copy for an hour must not
+/// stretch the live check's own cache from a minute to an hour — that would stop revocations
+/// propagating, which is the entire reason the live check exists. Age is measured with an injected
+/// <see cref="TimeProvider"/> rather than by cache expiry, both because the decision needs the age
+/// itself for the warning log and because <see cref="IMemoryCache"/> expiry cannot be wound forward
+/// in a test.</para>
 /// </summary>
 public class GraphGroupPermissionResolver : IGroupPermissionResolver
 {
@@ -30,20 +43,26 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
     private readonly IMemoryCache _cache;
     private readonly ToolAuthorizationOptions _options;
     private readonly ILogger<GraphGroupPermissionResolver> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public GraphGroupPermissionResolver(
         HttpClient httpClient,
         TokenCredential credential,
         IMemoryCache cache,
         IOptions<ToolAuthorizationOptions> options,
-        ILogger<GraphGroupPermissionResolver> logger)
+        ILogger<GraphGroupPermissionResolver> logger,
+        TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient;
         _credential = credential;
         _cache = cache;
         _options = options.Value;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <summary>A successful lookup plus when it was resolved, so its age drives both windows.</summary>
+    private sealed record ResolvedPermissions(IReadOnlySet<string> Permissions, DateTimeOffset ResolvedAt);
 
     public async Task<IReadOnlySet<string>?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
     {
@@ -52,10 +71,15 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             return null;
         }
 
+        // The entry is keyed per user. That is load-bearing rather than tidy: it is what stops one
+        // caller's retained tier ever being served to another during an outage.
         var cacheKey = $"live-perms::{userObjectId}";
-        if (_cache.TryGetValue<IReadOnlySet<string>>(cacheKey, out var cached) && cached is not null)
+        _cache.TryGetValue<ResolvedPermissions>(cacheKey, out var lastKnownGood);
+        var now = _timeProvider.GetUtcNow();
+
+        if (lastKnownGood is not null && IsWithin(lastKnownGood, now, _options.LiveGroupCacheSeconds))
         {
-            return cached;
+            return lastKnownGood.Permissions;
         }
 
         var groupIds = _options.ConfiguredGroupIds.ToArray();
@@ -68,7 +92,15 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         {
             var memberOf = await ResolveMemberGroupsAsync(userObjectId, groupIds, cancellationToken);
             var permissions = MapGroupsToPermissions(memberOf);
-            _cache.Set(cacheKey, permissions, TimeSpan.FromSeconds(_options.LiveGroupCacheSeconds));
+            // Retained for whichever window is longer, since the entry now serves both roles.
+            var retentionSeconds = Math.Max(1, Math.Max(_options.LiveGroupCacheSeconds, _options.LiveGroupStaleSeconds));
+            // ResolvedAt is deliberately the pre-call `now`, NOT the time the call returned. It is a
+            // lower bound on when this answer was true, so every age computed from it is >= the real
+            // age. Re-reading the clock here would make the entry look *fresher* than it is and
+            // silently extend the fresh window by the call duration — delaying revocation
+            // propagation, which is the whole reason the live check exists. Erring old is the safe
+            // direction; erring young is not.
+            _cache.Set(cacheKey, new ResolvedPermissions(permissions, now), TimeSpan.FromSeconds(retentionSeconds));
             return permissions;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -80,12 +112,38 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         }
         catch (Exception ex)
         {
-            // Fail-degraded: log and signal the authorizer to fall back to the token claim, so a
-            // Graph outage doesn't lock everyone out. Don't cache the failure.
+            // Fail-degraded, in two steps. Prefer this caller's last known-good tier, so a Graph
+            // outage does not revoke someone whose membership was confirmed minutes ago; only when
+            // there is no usable copy does the authorizer fall through to the token claim (which is
+            // empty post-cutover, hence #106). Never cache the failure itself.
+            // Read the clock again: `now` predates the attempt, and a Graph timeout can burn the
+            // whole client timeout before arriving here. Both the decision and the reported age must
+            // be as of failure time, or a lookup that began inside the window could be served after
+            // it had left it — and the warning would under-report how stale the answer is.
+            var failedAt = _timeProvider.GetUtcNow();
+
+            if (lastKnownGood is not null && _options.LiveGroupStaleSeconds > 0
+                && IsWithin(lastKnownGood, failedAt, _options.LiveGroupStaleSeconds))
+            {
+                // One warning, not two: an outage should read as a single line per call. Subject id
+                // only — never the caller's email, per the audit rules.
+                _logger.LogWarning(
+                    ex,
+                    "Live group permission lookup failed for {UserObjectId}; serving the last known-good permission set, stale by {StaleSeconds}s (limit {StaleLimitSeconds}s).",
+                    userObjectId,
+                    (long)(failedAt - lastKnownGood.ResolvedAt).TotalSeconds,
+                    _options.LiveGroupStaleSeconds);
+                return lastKnownGood.Permissions;
+            }
+
             _logger.LogWarning(ex, "Live group permission lookup failed for {UserObjectId}; falling back to token claim.", userObjectId);
             return null;
         }
     }
+
+    // A window of 0 means "off" rather than "expires instantly", so it is never treated as a hit.
+    private static bool IsWithin(ResolvedPermissions entry, DateTimeOffset now, int windowSeconds) =>
+        windowSeconds > 0 && (now - entry.ResolvedAt).TotalSeconds <= windowSeconds;
 
     // Determine which of the configured groups the user belongs to, checking from the group side
     // (list a group's transitive members filtered to this user id). transitiveMembers expands

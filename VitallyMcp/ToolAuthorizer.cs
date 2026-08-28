@@ -14,8 +14,17 @@ namespace VitallyMcp;
 /// Permission resolution order:
 ///   1. If <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> is on, the caller's <b>live</b>
 ///      Entra group membership (via <see cref="IGroupPermissionResolver"/>) — so group changes
-///      take effect within the cache window regardless of token age.
-///   2. Otherwise (or if the live lookup is unavailable) the token's permission claim / scope.
+///      take effect within the cache window regardless of token age. The resolver answers from its
+///      own fresh cache, and on a Graph failure from that caller's last known-good set for up to
+///      <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>.
+///   2. Otherwise — the live check is off, no object id could be determined, or the resolver has
+///      nothing usable at all — the token's permission claim / scope.
+///
+/// So the effective tiers are: fresh Graph → stale Graph → token claim → deny. The claim tier is the
+/// Auth0 post-login Action's <c>permissions</c> claim, which still authorises correctly today; it
+/// becomes permanently empty at the Entra cutover, and removing it there is #108's job. Until then
+/// the tier below the stale cache is a working fallback, not a formality — which is why the stale
+/// cache was added beneath it rather than in place of it.
 /// </summary>
 public class ToolAuthorizer
 {
@@ -87,7 +96,9 @@ public class ToolAuthorizer
                     // Authoritative when the live lookup succeeds (empty set => deny).
                     return live.Contains(required);
                 }
-                // live == null => lookup unavailable; fall through to the token claim.
+                // live == null => the resolver had neither a fresh nor a usable stale result,
+                // so fall through to the token claim. Not merely "Graph was slow": the stale window
+                // has already been considered and declined by this point.
             }
         }
 

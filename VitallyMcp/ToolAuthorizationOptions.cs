@@ -51,14 +51,36 @@ public class ToolAuthorizationOptions
     /// When true, permissions are resolved from the caller's <b>live</b> Entra group membership
     /// (via Microsoft Graph, cached for <see cref="LiveGroupCacheSeconds"/>) rather than trusting
     /// the frozen token claim — so group changes (grants and especially revocations) take effect
-    /// within the cache window regardless of token age. The token claim remains the automatic
-    /// fallback if the Graph lookup fails (fail-degraded, not fail-open: an empty claim still denies).
-    /// Requires the server's managed identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
+    /// within the cache window regardless of token age.
+    ///
+    /// On a Graph failure the resolution degrades in two steps rather than one: the caller's last
+    /// known-good permission set is served for up to <see cref="LiveGroupStaleSeconds"/>, and only
+    /// when there is no such copy does it fall through to the token claim. Never fail-open — an
+    /// empty set and an empty claim both deny. Requires the server's managed identity to hold
+    /// Microsoft Graph <c>GroupMember.Read.All</c>.
     /// </summary>
     public bool LiveGroupCheck { get; set; }
 
     /// <summary>TTL (seconds) for the per-user live group-membership cache. Default 60.</summary>
     public int LiveGroupCacheSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// How long (seconds) a successful live lookup stays usable as a <b>fallback</b> after it stops
+    /// being fresh, so a Microsoft Graph outage degrades to the caller's last known-good tier instead
+    /// of denying them. Default 3600; <b>0 disables stale serving</b> entirely.
+    ///
+    /// This exists because Graph becomes the sole source of entitlement once Auth0 is retired
+    /// (#102/#106), at which point the token-claim fall-through is always empty and a Graph outage
+    /// would deny every user. Bounded staleness is the trade being made: a revoked user could retain
+    /// access for up to this window, but only while Graph is unavailable — a better failure mode than
+    /// a total outage, and strictly tighter than the 8-hour frozen token claim the architecture
+    /// tolerated before the live check existed.
+    ///
+    /// Distinct from <see cref="LiveGroupCacheSeconds"/> on purpose: that one governs how long a
+    /// result is served <i>without asking Graph</i>, and lengthening it would slow revocation
+    /// propagation. This one is only ever consulted when a Graph call has actually failed.
+    /// </summary>
+    public int LiveGroupStaleSeconds { get; set; } = 3600;
 
     /// <summary>Entra security-group object id whose members get the read tier (<c>vitally:read</c>).</summary>
     public string ReaderGroupId { get; set; } = string.Empty;
@@ -106,6 +128,12 @@ public class ToolAuthorizationOptions
             if (LiveGroupCacheSeconds < 0)
             {
                 throw new InvalidOperationException("Authorization:LiveGroupCacheSeconds cannot be negative.");
+            }
+            if (LiveGroupStaleSeconds < 0)
+            {
+                throw new InvalidOperationException(
+                    "Authorization:LiveGroupStaleSeconds cannot be negative. Use 0 to disable serving a stale "
+                    + "permission set when the Microsoft Graph lookup fails.");
             }
         }
 
