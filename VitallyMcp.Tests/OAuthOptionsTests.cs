@@ -216,13 +216,20 @@ public class OAuthOptionsTests
 
     [Theory]
     [InlineData("vitally.fiscaltec.com")]                 // no scheme
-    [InlineData("/mcp")]                                  // relative
+    [InlineData("/mcp")]                                  // relative — and `file:///mcp` on Linux, see below
+    [InlineData("file:///etc/passwd")]                    // absolute, wrong scheme
+    [InlineData("urn:example:vitally")]                   // absolute, but not an http resource
     [InlineData("https://vitally.fiscaltec.com/#frag")]    // fragment — RFC 8707 §2 forbids it
     public void Validate_MalformedResource_Throws(string resource)
     {
         // PublishedResourceIdentifier is no longer only published: it is what an incoming RFC 8707
         // `resource` is validated against, so a value that cannot be parsed rejects *every* request
         // carrying the parameter. That has to surface at boot, not at the first sign-in.
+        //
+        // The scheme is checked, not merely absoluteness, because `Uri.TryCreate("/mcp", Absolute)`
+        // *succeeds* on Unix — as `file:///mcp` — and fails on Windows. CI on ubuntu caught exactly
+        // that after this passed locally, and production runs Linux containers, so an absoluteness
+        // check alone would have been inert where it matters most.
         var options = new OAuthOptions
         {
             Authority = "https://example.auth0.com/",

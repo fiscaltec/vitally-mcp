@@ -375,11 +375,17 @@ neither `Resource` nor `Audience` configured — only possible under `NoAuth` �
 compare against and every value is accepted.
 
 **A malformed identifier fails at boot**, not at the first sign-in. `OAuth:Resource` (or `Audience`
-standing in for it) must be an absolute URI with no fragment or `OAuthOptions.Validate()` throws —
-because it is no longer only *published*: an unparseable value would refuse every request carrying
+standing in for it) must be an absolute **http(s)** URI with no fragment or `OAuthOptions.Validate()`
+throws — because it is no longer only *published*: an unparseable value would refuse every request carrying
 `resource`, an authentication outage discovered at sign-in time. An Entra-style client-ID GUID is a
 perfectly good `aud` but not a resource identifier, and lands here whenever `Resource` is left unset;
 set `Resource` to the server origin in that case.
+
+The **scheme** is checked, not merely absoluteness, and that is not fussiness:
+`Uri.TryCreate("/mcp", UriKind.Absolute)` *succeeds* on Unix — as `file:///mcp` — and fails on
+Windows. An absoluteness-only check therefore passes locally and is inert on the Linux containers
+this runs on; CI on `ubuntu-latest` caught exactly that in #122. `http` is allowed alongside `https`
+so loopback development still works.
 
 **It is still forwarded, deliberately.** Dropping or substituting it is the Auth0-breaking half of
 #105 and moved to the cutover (#108): with Auth0 live, removing the parameter removes the audience

@@ -139,13 +139,19 @@ public class OAuthOptions
         // discovered at the first sign-in rather than at boot. An Entra-style client-ID GUID is
         // a perfectly good `aud` but not a resource identifier, and lands here when `Resource`
         // is left unset; set `Resource` to the server origin in that case.
+        //
+        // The scheme is checked, not just absoluteness: Uri.TryCreate("/mcp", Absolute) succeeds on
+        // Unix as file:///mcp and fails on Windows, so an absoluteness-only check would be inert on
+        // the Linux containers this actually runs on (CI caught it). http is allowed alongside https
+        // for loopback development; production carries an https origin.
         var publishedResource = PublishedResourceIdentifier;
         if (!string.IsNullOrWhiteSpace(publishedResource)
             && (!Uri.TryCreate(publishedResource, UriKind.Absolute, out var resourceUri)
+                || (resourceUri.Scheme != Uri.UriSchemeHttps && resourceUri.Scheme != Uri.UriSchemeHttp)
                 || !string.IsNullOrEmpty(resourceUri.Fragment)))
         {
             throw new InvalidOperationException(
-                $"OAuth:Resource (or OAuth:Audience, which stands in for it when Resource is empty) must be an absolute URI with no fragment (got '{publishedResource}').");
+                $"OAuth:Resource (or OAuth:Audience, which stands in for it when Resource is empty) must be an absolute http(s) URI with no fragment (got '{publishedResource}').");
         }
 
         if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
