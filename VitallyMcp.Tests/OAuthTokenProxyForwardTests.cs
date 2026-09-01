@@ -119,6 +119,27 @@ public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardT
         _factory.Upstream.RequestBodies.Should().NotContain(b => b.Contains("evil.example.com"));
     }
 
+    [Fact]
+    public async Task Token_RejectsWhenOnlyOneOfSeveralResourcesMatches()
+    {
+        // Same repeated-parameter case on the form body. Built from a list rather than a dictionary
+        // precisely so the key can repeat — a dictionary cannot express this request.
+        using var client = _factory.CreateClient();
+
+        using var form = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("grant_type", "authorization_code"),
+            new KeyValuePair<string, string>("code", "test-code"),
+            new KeyValuePair<string, string>("resource", "https://vitally.example.com/"),
+            new KeyValuePair<string, string>("resource", "https://evil.example.com/")
+        });
+        var response = await client.PostAsync("/oauth/token", form);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("invalid_target");
+        _factory.Upstream.RequestBodies.Should().NotContain(b => b.Contains("evil.example.com"));
+    }
+
     public class Factory : WebApplicationFactory<Program>
     {
         /// <summary>Stands in for the upstream token endpoint; records what the proxy sent it.</summary>

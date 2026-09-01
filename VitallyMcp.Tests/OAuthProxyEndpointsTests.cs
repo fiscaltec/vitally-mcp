@@ -188,6 +188,27 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
     }
 
     [Fact]
+    public async Task Authorize_RejectsWhenOnlyOneOfSeveralResourcesMatches()
+    {
+        // RFC 8707 lets `resource` repeat. Checking only the first value would let a caller pair a
+        // matching indicator with one we never published and have both relayed, which is the very
+        // thing this validation exists to stop.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code&client_id=test&state=res-repeated"
+            + "&redirect_uri=" + Uri.EscapeDataString("http://localhost:54321/callback")
+            + "&resource=" + Uri.EscapeDataString("https://vitally.example.com/")
+            + "&resource=" + Uri.EscapeDataString("https://evil.example.com/"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("invalid_target");
+    }
+
+    [Fact]
     public async Task Register_RejectsWhenAllRedirectUrisDisallowed()
     {
         using var client = _factory.CreateClient();
