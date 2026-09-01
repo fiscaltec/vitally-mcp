@@ -214,6 +214,44 @@ public class OAuthOptionsTests
             .WithMessage("*https*");
     }
 
+    [Theory]
+    [InlineData("vitally.fiscaltec.com")]                 // no scheme
+    [InlineData("/mcp")]                                  // relative
+    [InlineData("https://vitally.fiscaltec.com/#frag")]    // fragment — RFC 8707 §2 forbids it
+    public void Validate_MalformedResource_Throws(string resource)
+    {
+        // PublishedResourceIdentifier is no longer only published: it is what an incoming RFC 8707
+        // `resource` is validated against, so a value that cannot be parsed rejects *every* request
+        // carrying the parameter. That has to surface at boot, not at the first sign-in.
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "https://api.example.com",
+            Resource = resource
+        };
+
+        var act = () => options.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*OAuth:Resource*");
+    }
+
+    [Fact]
+    public void Validate_MalformedAudienceStandingInForTheResource_Throws()
+    {
+        // With Resource unset, Audience is what gets published and validated against — so the same
+        // check has to reach it. An Entra-style client-ID GUID would land here: it is a fine
+        // `aud` value but not a resource identifier, and it must not be published as one.
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "11111111-2222-3333-4444-555555555555"
+        };
+
+        var act = () => options.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*OAuth:Resource*");
+    }
+
     [Fact]
     public void Validate_NormalisesTrailingSlashes()
     {

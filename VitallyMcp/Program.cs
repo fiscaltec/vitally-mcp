@@ -399,8 +399,11 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
     // still forwarded verbatim below, because dropping it is what would break Auth0 today.
     // Terminating it at this façade belongs to the Entra cutover (#105 part B / #108), which is
     // where Entra's exact-match rule against a non-slashed identifierUri starts to matter.
-    // Indexer lookups on IQueryCollection are case-insensitive, so a differently-cased spelling
-    // is checked here too even though only the exact `resource` reaches the provider as one.
+    // Indexer lookups on IQueryCollection are case-insensitive, so an oddly-cased `RESOURCE` is
+    // validated here too — and refused if it does not match. The forwarding loop below preserves
+    // the caller's key casing, so such a pair does travel upstream as-is; a conformant provider
+    // ignores it, because RFC 6749 defines parameter names as lowercase literals. #123 tracks
+    // stripping them rather than relying on that.
     if (query.ContainsKey("resource")
         && query["resource"].Any(value => !o.IsResourceIndicatorAllowed(value ?? string.Empty)))
     {

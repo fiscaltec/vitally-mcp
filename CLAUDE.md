@@ -374,6 +374,13 @@ trailing-slash form, so the two forms have to name one resource. Nothing else is
 neither `Resource` nor `Audience` configured — only possible under `NoAuth` — there is nothing to
 compare against and every value is accepted.
 
+**A malformed identifier fails at boot**, not at the first sign-in. `OAuth:Resource` (or `Audience`
+standing in for it) must be an absolute URI with no fragment or `OAuthOptions.Validate()` throws —
+because it is no longer only *published*: an unparseable value would refuse every request carrying
+`resource`, an authentication outage discovered at sign-in time. An Entra-style client-ID GUID is a
+perfectly good `aud` but not a resource identifier, and lands here whenever `Resource` is left unset;
+set `Resource` to the server origin in that case.
+
 **It is still forwarded, deliberately.** Dropping or substituting it is the Auth0-breaking half of
 #105 and moved to the cutover (#108): with Auth0 live, removing the parameter removes the audience
 binding and `aud` stops matching `OAuth:Audience` for **every** user. So the tenant still needs the

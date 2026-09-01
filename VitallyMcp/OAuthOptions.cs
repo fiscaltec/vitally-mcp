@@ -133,6 +133,21 @@ public class OAuthOptions
             throw new InvalidOperationException("OAuth:Audience is required when OAuth:NoAuth is false.");
         }
 
+        // PublishedResourceIdentifier is published as the RFC 9728 `resource` *and* is what an
+        // incoming RFC 8707 `resource` parameter is validated against, so a value that cannot be
+        // parsed would reject every request carrying the parameter — an authentication outage
+        // discovered at the first sign-in rather than at boot. An Entra-style client-ID GUID is
+        // a perfectly good `aud` but not a resource identifier, and lands here when `Resource`
+        // is left unset; set `Resource` to the server origin in that case.
+        var publishedResource = PublishedResourceIdentifier;
+        if (!string.IsNullOrWhiteSpace(publishedResource)
+            && (!Uri.TryCreate(publishedResource, UriKind.Absolute, out var resourceUri)
+                || !string.IsNullOrEmpty(resourceUri.Fragment)))
+        {
+            throw new InvalidOperationException(
+                $"OAuth:Resource (or OAuth:Audience, which stands in for it when Resource is empty) must be an absolute URI with no fragment (got '{publishedResource}').");
+        }
+
         if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
         {
             throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
