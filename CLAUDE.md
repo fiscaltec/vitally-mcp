@@ -179,6 +179,15 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       gh api "repos/fiscaltec/vitally-mcp/pulls/$n/reviews" \
         --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id'
       ```
+
+      ⚠️ **Take the head SHA from `git rev-parse HEAD`, not from `gh pr view --json headRefOid`,
+      in the seconds after a push.** The GraphQL field lags: on #122 it still reported the previous
+      commit right after a push, so the comparison matched Copilot's *old* review and the gate read
+      as passing. Two consequences, and the second is the expensive one: re-requesting in that
+      window gets a review of the previous commit (that happened on #122 too — a review arrived four
+      minutes after the request, on the superseded SHA), so **wait until the API reports the new head
+      before re-requesting**, then compare against `git rev-parse`.
+
       ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
       request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
       anything. Both conditions, always.
