@@ -229,6 +229,7 @@ public class OAuthOptionsTests
     [InlineData("https://vitally.fiscaltec.com/", "https://vitally.fiscaltec.com")]   // client dropped the slash
     [InlineData("https://vitally.fiscaltec.com", "https://vitally.fiscaltec.com/")]   // client added one
     [InlineData("https://vitally.fiscaltec.com/mcp", "https://vitally.fiscaltec.com/mcp")]
+    [InlineData("https://vitally.fiscaltec.com/mcp", "https://vitally.fiscaltec.com/mcp/")]  // exactly one slash
     [InlineData("https://VITALLY.fiscaltec.com/", "https://vitally.fiscaltec.com/")]  // host is case-insensitive
     [InlineData("https://vitally.fiscaltec.com/", "HTTPS://vitally.fiscaltec.com/")]  // so is scheme
     public void IsResourceIndicatorAllowed_MatchesThePublishedIdentifier(string published, string requested)
@@ -246,6 +247,7 @@ public class OAuthOptionsTests
     [InlineData("https://evil.example.com/")]
     [InlineData("https://vitally.fiscaltec.com.evil.com/")]     // suffix spoof
     [InlineData("https://vitally.fiscaltec.com/mcp/other")]
+    [InlineData("https://vitally.fiscaltec.com/mcp//")]        // two slashes is a different path, not the same name
     [InlineData("https://vitally.fiscaltec.com:8443/mcp")]      // different port
     [InlineData("http://vitally.fiscaltec.com/mcp")]            // different scheme
     [InlineData("https://vitally.fiscaltec.com/MCP")]           // path is case-sensitive (RFC 3986 6.2.2.1)

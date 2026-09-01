@@ -305,9 +305,17 @@ public class OAuthOptions
         return string.Equals(requested.Scheme, expected.Scheme, StringComparison.OrdinalIgnoreCase)
             && string.Equals(requested.Host, expected.Host, StringComparison.OrdinalIgnoreCase)
             && requested.Port == expected.Port
-            && string.Equals(requested.AbsolutePath.TrimEnd('/'), expected.AbsolutePath.TrimEnd('/'), StringComparison.Ordinal)
+            && string.Equals(WithoutOneTrailingSlash(requested.AbsolutePath), WithoutOneTrailingSlash(expected.AbsolutePath), StringComparison.Ordinal)
             && string.Equals(requested.Query, expected.Query, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Drops at most one trailing slash. Deliberately not <c>TrimEnd('/')</c>: the tolerance exists
+    /// because Entra and Claude Code disagree by exactly one slash, and <c>/mcp//</c> is a different
+    /// path per RFC 3986 rather than another spelling of the same resource.
+    /// </summary>
+    private static string WithoutOneTrailingSlash(string path) =>
+        path.EndsWith('/') ? path[..^1] : path;
     private static bool IsLoopbackHost(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
         // Covers the full IPv4 127.0.0.0/8 loopback range plus IPv6 ::1.
