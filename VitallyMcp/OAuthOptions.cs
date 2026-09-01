@@ -35,6 +35,15 @@ public class OAuthOptions
     public bool NoAuth { get; set; }
 
     /// <summary>
+    /// The canonical resource identifier this server actually publishes: <see cref="Resource"/>,
+    /// falling back to <see cref="Audience"/>. Both the RFC 9728 document and
+    /// <see cref="IsResourceIndicatorAllowed"/> read it, so the value clients are told to send is
+    /// by construction the value their <c>resource</c> parameter is validated against.
+    /// </summary>
+    public string PublishedResourceIdentifier =>
+        (string.IsNullOrWhiteSpace(Resource) ? Audience : Resource)?.Trim() ?? string.Empty;
+
+    /// <summary>
     /// Canonical public origin of this server (scheme + host, no trailing path), e.g.
     /// <c>https://vitally.fiscaltec.com</c>. When set, the <c>/.well-known/*</c> metadata documents
     /// and the OAuth proxy's own callback URL are built from this value instead of the request's
@@ -236,6 +245,69 @@ public class OAuthOptions
         });
     }
 
+
+    /// <summary>
+    /// Returns true if <paramref name="resource"/> names the resource this server publishes, so an
+    /// RFC 8707 <c>resource</c> parameter may be honoured. The parameter is an audience-binding
+    /// control: whatever the caller sends here is what the token's <c>aud</c> ends up naming, so a
+    /// value we never published must be refused rather than passed on or quietly dropped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Compared component-wise rather than as one string, per RFC 3986 §6.2.2: scheme and host are
+    /// case-insensitive, path and query are not. A single trailing slash is tolerated on either
+    /// side — and that tolerance is load-bearing, not cosmetic. Entra refuses to register an
+    /// <c>identifierUris</c> value ending in a slash, while Claude Code normalises a bare-host
+    /// resource *to* the trailing-slash form, so the two forms have to be treated as one name.
+    /// Nothing else is normalised: a differing port, scheme or path is a different resource.
+    /// </para>
+    /// <para>
+    /// With no identifier configured at all — neither <see cref="Resource"/> nor
+    /// <see cref="Audience"/>, which <see cref="Validate"/> only permits when <see cref="NoAuth"/>
+    /// is true — there is nothing to compare against and no audience binding to protect, so every
+    /// value is accepted. Production always has <see cref="Audience"/>.
+    /// </para>
+    /// </remarks>
+    public bool IsResourceIndicatorAllowed(string resource)
+    {
+        var published = PublishedResourceIdentifier;
+        if (string.IsNullOrWhiteSpace(published))
+        {
+            return true;
+        }
+
+        // A present-but-empty `resource` binds nothing, so it is malformed rather than absent —
+        // callers must only reach here when the parameter was actually sent.
+        if (string.IsNullOrWhiteSpace(resource))
+        {
+            return false;
+        }
+
+        // As in IsRedirectUriAllowed: Uri.TryCreate tolerates padding, the comparisons below would
+        // not, so reject it outright rather than silently normalising a client's malformed input.
+        if (resource.Length != resource.Trim().Length)
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(resource, UriKind.Absolute, out var requested)
+            || !Uri.TryCreate(published, UriKind.Absolute, out var expected))
+        {
+            return false;
+        }
+
+        // RFC 8707 §2 — a resource indicator must not carry a fragment.
+        if (!string.IsNullOrEmpty(requested.Fragment))
+        {
+            return false;
+        }
+
+        return string.Equals(requested.Scheme, expected.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(requested.Host, expected.Host, StringComparison.OrdinalIgnoreCase)
+            && requested.Port == expected.Port
+            && string.Equals(requested.AbsolutePath.TrimEnd('/'), expected.AbsolutePath.TrimEnd('/'), StringComparison.Ordinal)
+            && string.Equals(requested.Query, expected.Query, StringComparison.Ordinal);
+    }
     private static bool IsLoopbackHost(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
         // Covers the full IPv4 127.0.0.0/8 loopback range plus IPv6 ::1.

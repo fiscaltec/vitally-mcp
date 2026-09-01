@@ -25,7 +25,7 @@ public static class ProtectedResourceMetadataBuilder
 
         return new ProtectedResourceMetadata
         {
-            Resource = string.IsNullOrWhiteSpace(oauth.Resource) ? oauth.Audience : oauth.Resource,
+            Resource = oauth.PublishedResourceIdentifier,
             // Collection-expression assignment (not the nested `= { ... }` initialiser syntax) is
             // deliberate: BearerMethodsSupported already defaults to a pre-populated ["header"]
             // list on this SDK type, so `= { "header" }` would append and leave a duplicate entry.

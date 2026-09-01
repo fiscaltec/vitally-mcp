@@ -391,6 +391,26 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
         return Results.BadRequest(new { error = "invalid_request", error_description = "redirect_uri is not allowed" });
     }
 
+    // RFC 8707. `resource` is what binds the audience of the token that comes back: this proxy
+    // sends no `audience` parameter anywhere, and the Auth0 tenant's Resource Parameter
+    // Compatibility Profile consumes `resource` locally to that end. It arrived here
+    // unvalidated — so a client could ask to be bound to an audience this server never
+    // published, and we would relay the request. Refuse the mismatch instead; the value is
+    // still forwarded verbatim below, because dropping it is what would break Auth0 today.
+    // Terminating it at this façade belongs to the Entra cutover (#105 part B / #108), which is
+    // where Entra's exact-match rule against a non-slashed identifierUri starts to matter.
+    // Indexer lookups on IQueryCollection are case-insensitive, so a differently-cased spelling
+    // is checked here too even though only the exact `resource` reaches the provider as one.
+    if (query.ContainsKey("resource")
+        && query["resource"].Any(value => !o.IsResourceIndicatorAllowed(value ?? string.Empty)))
+    {
+        return Results.BadRequest(new
+        {
+            error = "invalid_target",
+            error_description = "The resource parameter does not match the resource identifier this server publishes."
+        });
+    }
+
     cache.Set($"oauth-proxy:state:{state}", clientRedirectUri, TimeSpan.FromMinutes(10));
 
     var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
@@ -461,6 +481,19 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
     var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
 
     var form = await ctx.Request.ReadFormAsync();
+    // Same audience-binding control as /oauth/authorize, applied to the form body — a refresh
+    // exchange can carry `resource` just as a code exchange can, and this endpoint forwarded it
+    // unvalidated too. See the comment there for why it is validated but still relayed.
+    if (form.ContainsKey("resource")
+        && form["resource"].Any(value => !o.IsResourceIndicatorAllowed(value ?? string.Empty)))
+    {
+        return Results.BadRequest(new
+        {
+            error = "invalid_target",
+            error_description = "The resource parameter does not match the resource identifier this server publishes."
+        });
+    }
+
     var pairs = new List<KeyValuePair<string, string>>();
     var sawRedirect = false;
     foreach (var kv in form)

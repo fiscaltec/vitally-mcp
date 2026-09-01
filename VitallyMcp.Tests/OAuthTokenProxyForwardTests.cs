@@ -73,6 +73,52 @@ public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardT
         body.Should().NotContain(Uri.EscapeDataString("http://localhost:54321/callback"));
     }
 
+    [Fact]
+    public async Task Token_ForwardsAMatchingResourceUnchanged()
+    {
+        // Same reasoning as /oauth/authorize: validated here, still relayed, because Auth0's
+        // compatibility profile consumes it and nothing else binds the token's audience.
+        using var client = _factory.CreateClient();
+
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "authorization_code",
+            ["code"] = "test-code",
+            ["redirect_uri"] = "http://localhost:54321/callback",
+            ["resource"] = "https://vitally.example.com/"
+        });
+        var response = await client.PostAsync("/oauth/token", form);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _factory.Upstream.RequestBodies.Last()
+            .Should().Contain("resource=" + Uri.EscapeDataString("https://vitally.example.com/"));
+    }
+
+    [Theory]
+    [InlineData("authorization_code")]
+    [InlineData("refresh_token")]
+    public async Task Token_RejectsAResourceWeDoNotPublish(string grantType)
+    {
+        // The token endpoint forwarded `resource` unvalidated too, and a refresh exchange can
+        // carry one just as a code exchange can — so both grants need the same check.
+        using var client = _factory.CreateClient();
+
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = grantType,
+            ["code"] = "test-code",
+            ["refresh_token"] = "test-refresh",
+            ["resource"] = "https://evil.example.com/"
+        });
+        var response = await client.PostAsync("/oauth/token", form);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("invalid_target");
+        // Order-independent because the fixture is shared: no request the proxy has ever made
+        // may carry the rejected value. The guard has to return before the upstream call.
+        _factory.Upstream.RequestBodies.Should().NotContain(b => b.Contains("evil.example.com"));
+    }
+
     public class Factory : WebApplicationFactory<Program>
     {
         /// <summary>Stands in for the upstream token endpoint; records what the proxy sent it.</summary>

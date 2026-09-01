@@ -118,6 +118,75 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         doc.RootElement.GetProperty("registration_endpoint").GetString().Should().Be("http://localhost/oauth/register");
     }
 
+    [Theory]
+    [InlineData("https://vitally.example.com")]
+    [InlineData("https://vitally.example.com/")]
+    public async Task Authorize_ForwardsAMatchingResourceUnchanged(string resource)
+    {
+        // `resource` still goes upstream: while Auth0 is the authority, the tenant's Resource
+        // Parameter Compatibility Profile consumes it locally and it is the only thing binding
+        // the issued token's audience (Program.cs sends no `audience` parameter anywhere).
+        // Terminating it here is #108's job, once Authority points at Entra.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code&client_id=test&state=res-ok"
+            + "&redirect_uri=" + Uri.EscapeDataString("http://localhost:54321/callback")
+            + "&resource=" + Uri.EscapeDataString(resource));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var forwarded = QueryHelpers.ParseQuery(response.Headers.Location!.Query);
+        forwarded["resource"].ToString().Should().Be(resource,
+            "the value must reach the upstream provider exactly as the client sent it");
+    }
+
+    [Theory]
+    [InlineData("https://evil.example.com/")]
+    [InlineData("https://vitally.example.com.evil.com/")]
+    [InlineData("https://vitally.example.com/other")]
+    [InlineData("")]
+    public async Task Authorize_RejectsAResourceWeDoNotPublish(string resource)
+    {
+        // RFC 8707 `resource` is an audience-binding control, and it arrived unvalidated: the
+        // proxy forwarded the client's query string verbatim. Accepting a value we never
+        // published in our RFC 9728 document would let a client obtain a token bound to an
+        // audience this server does not vouch for.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code&client_id=test&state=res-bad"
+            + "&redirect_uri=" + Uri.EscapeDataString("http://localhost:54321/callback")
+            + "&resource=" + Uri.EscapeDataString(resource));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("invalid_target");
+    }
+
+    [Fact]
+    public async Task Authorize_WithoutAResourceIsUnaffected()
+    {
+        // RFC 8707 is optional for clients. Validation must not turn an absent parameter into
+        // a failure, and must not invent one on the way upstream.
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code&client_id=test&state=res-absent"
+            + "&redirect_uri=" + Uri.EscapeDataString("http://localhost:54321/callback"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        QueryHelpers.ParseQuery(response.Headers.Location!.Query)
+            .Should().NotContainKey("resource");
+    }
+
     [Fact]
     public async Task Register_RejectsWhenAllRedirectUrisDisallowed()
     {

@@ -10,7 +10,7 @@ This is a Model Context Protocol (MCP) server implementation in C# that provides
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
 - **Streamable HTTP transport** (MCP 2026-07-28) on the `ModelContextProtocol.AspNetCore` package, stateless mode
-- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts the upstream Auth0 tenant when `OAuth:SharedClientId` is set — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop).
+- **Auth0 OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts the upstream Auth0 tenant when `OAuth:SharedClientId` is set — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. **Auth0 tenant must have "Resource Parameter Compatibility Profile" enabled** (Settings → Advanced) so the `resource` parameter from MCP clients is consumed locally and not forwarded to upstream IdPs (avoids AADSTS9010010 with the Entra federation hop). Still required: the proxy *validates* `resource` (#105) but deliberately keeps forwarding it, because on Auth0 it is the only thing binding the token audience — see the `resource` section under Architecture.
 - **On-demand Vitally API key fetch**: the server fetches the `vitally-shared` secret from Azure Key Vault via its user-assigned managed identity (with a short in-memory cache) and uses it to call Vitally on behalf of all authenticated users. Future per-user keys can be added by reintroducing claim-based secret resolution.
 - .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
 - Built on the official `ModelContextProtocol` C# SDK 2.2.0 + `ModelContextProtocol.AspNetCore` 2.2.0
@@ -282,9 +282,9 @@ The server uses ASP.NET Core 10 with `WebApplication.CreateBuilder` + `Microsoft
 - OAuth proxy endpoints (only active when `OAuth:SharedClientId` is set):
   - `GET /.well-known/oauth-protected-resource` — RFC 9728 metadata, serialised with `McpJsonUtilities.DefaultOptions`. That is load-bearing, not incidental: the ASP.NET Core defaults write every unset optional as an explicit `null`, and RFC 9728 §3.2 requires an unused parameter to be *omitted* — strict clients reject the whole document over the difference.
   - `GET /.well-known/oauth-authorization-server` — RFC 8414 metadata declaring **our own origin** as `issuer` (see the façade section below), pointing `authorization_endpoint` / `token_endpoint` / `registration_endpoint` at our own proxy endpoints, and advertising `authorization_response_iss_parameter_supported: true`. `userinfo_endpoint` and `jwks_uri` still point upstream — **read from the provider's discovery document**, not concatenated onto `Authority`.
-  - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), stashes it keyed by `state`, and proxies to the **discovered** upstream `authorization_endpoint` with our own fixed callback.
+  - `GET /oauth/authorize` — validates the client `redirect_uri` against `OAuth:AllowedClientRedirectUris` (plus implicit loopback exemption), validates any RFC 8707 `resource` against the identifier we publish (rejecting a mismatch with `invalid_target`; see the `resource` section below), stashes it keyed by `state`, and proxies to the **discovered** upstream `authorization_endpoint` with our own fixed callback.
   - `GET /oauth/callback` — reverses the stash, **replaces any upstream `iss` with our own origin**, and redirects to the original client URI.
-  - `POST /oauth/token` — proxies code/refresh exchanges to the **discovered** upstream `token_endpoint`, server-side-injecting `SharedClientSecret`.
+  - `POST /oauth/token` — proxies code/refresh exchanges to the **discovered** upstream `token_endpoint`, server-side-injecting `SharedClientSecret`. Applies the same `resource` validation to the form body.
   - `POST /oauth/register` — RFC 7591 DCR shim returning `SharedClientId` plus filtered `redirect_uris`.
 - `MapMcp("/mcp").RequireAuthorization()` — auth requirement is dropped when `NoAuth=true`.
 - The 401 challenge on `/mcp` carries a single `WWW-Authenticate` value pointing at the protected-resource metadata document (`resource_metadata="{PublicBaseUrl}/.well-known/oauth-protected-resource/mcp"`), adding `error="invalid_token"` when a token was presented and failed validation. The metadata document is served from both `/.well-known/oauth-protected-resource` and the `/mcp`-suffixed path (`ProtectedResourceMetadataBuilder.MetadataPath`). The status stays exactly 401 — `.github/workflows/deploy.yml` smoke-tests that and rolls back if it changes, so don't alter it. That smoke **also** pins the RFC 8414/9728 documents (`.github/scripts/verify-oauth-metadata.sh`): the `issuer`, its byte-for-byte equality with `authorization_servers`, the advertised `iss` flag, the façade endpoints naming our origin, `jwks_uri`/`userinfo_endpoint` being absolute https without a fragment, and no null-serialised optionals. Those are deploy-gating contracts now, not only test-suite ones.
@@ -349,6 +349,37 @@ against a local container is now a working end-to-end client, which is the pract
   `https://vitally-staging.fiscaltec.com`, whose hostname is stable and whose Resource Server already
   matches it. Reach for a tunnel only for something staging genuinely cannot cover, and budget for the
   cleanup if you do.
+
+### The RFC 8707 `resource` parameter is validated here — and still relayed upstream
+
+`OAuthOptions.IsResourceIndicatorAllowed(value)` is the single check, reading
+`PublishedResourceIdentifier` (`OAuth:Resource`, falling back to `OAuth:Audience`) — the same
+property `ProtectedResourceMetadataBuilder` publishes, so the value validated against is by
+construction the value clients were told to send. `/oauth/authorize` (query) and `/oauth/token`
+(form body) both apply it and reject a mismatch with `invalid_target`; every value is checked when
+the parameter repeats, and a present-but-empty one is a mismatch rather than an absence. An absent
+`resource` is untouched — RFC 8707 is optional for clients.
+
+**Why it is a real control and not paperwork.** `resource` is what binds the audience of the token
+that comes back: `Program.cs` sends **no `audience` parameter anywhere**, and the Auth0 tenant's
+*Resource Parameter Compatibility Profile* consumes `resource` locally to that end. Until #105 it
+was relayed unvalidated, so a client could ask to be bound to an audience this server never
+published and the proxy would pass the request on.
+
+**Comparison rules** — component-wise per RFC 3986 §6.2.2, not one string compare. Scheme and host
+case-insensitive; port, path and query exact; a fragment rejected outright (RFC 8707 §2); a single
+trailing slash tolerated on either side. That last one is load-bearing: Entra refuses to register an
+`identifierUris` value ending in a slash, while Claude Code normalises a bare-host resource *to* the
+trailing-slash form, so the two forms have to name one resource. Nothing else is normalised. With
+neither `Resource` nor `Audience` configured — only possible under `NoAuth` — there is nothing to
+compare against and every value is accepted.
+
+**It is still forwarded, deliberately.** Dropping or substituting it is the Auth0-breaking half of
+#105 and moved to the cutover (#108): with Auth0 live, removing the parameter removes the audience
+binding and `aud` stops matching `OAuth:Audience` for **every** user. So the tenant still needs the
+compatibility profile enabled, and terminating `resource` at the façade — where Entra's exact-match
+rule against a non-slashed `identifierUris` starts to matter — happens only once `OAuth:Authority`
+points at Entra.
 
 ### Upstream endpoints come from OIDC discovery, not from `Authority`
 
@@ -426,7 +457,7 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 `OAuthOptions` (singleton, bound from `OAuth:` section):
 - `Authority` — the provider's OIDC **issuer** identifier, e.g. `https://fiscal-it.uk.auth0.com/` (Auth0) or `https://login.microsoftonline.com/{tenant-id}/v2.0` (Entra). It is *not* a prefix the endpoint URLs are built from: `{Authority}/.well-known/openid-configuration` is fetched and the endpoints come from that document. The trailing slash is whatever the provider's own issuer carries — Auth0's has one, Entra's does not.
 - `Audience` — the Auth0 Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/` — **with the trailing slash**, because Auth0 identifiers are exact-match and production's carries one (verified against the live tenant, 2026-08-22). Validated against the JWT `aud` claim.
-- `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance) — the published client rejects the whole document on a mismatch, so this tracks `Audience` and carries the same trailing slash. `PublicBaseUrl` is the odd one out: it is an origin, so no trailing slash (and `Validate()` trims one anyway).
+- `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance) — the published client rejects the whole document on a mismatch, so this tracks `Audience` and carries the same trailing slash. Second role: `PublishedResourceIdentifier` (this value, falling back to `Audience`) is what an incoming RFC 8707 `resource` parameter is validated *against* on `/oauth/authorize` and `/oauth/token` — so it is now a control on what audience a caller may ask to be bound to, not only a value published. `PublicBaseUrl` is the odd one out: it is an origin, so no trailing slash (and `Validate()` trims one anyway).
 - `SharedClientId` — pre-registered Auth0 native-app client_id that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active.
 - `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`.
 - `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
@@ -725,7 +756,7 @@ than deploying somewhere unintended.
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Two Resource Servers, one per origin: `https://vitally.fiscaltec.com/` and `https://vitally-staging.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable). **One** shared client (`Vitally MCP`) carrying both origins' `/oauth/callback`, so both targets use the same `SharedClientId` / `SharedClientSecret`. Post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation |
+| Auth | Auth0 tenant `fiscal-it.uk.auth0.com` | Two Resource Servers, one per origin: `https://vitally.fiscaltec.com/` and `https://vitally-staging.fiscaltec.com/` (trailing slash — identifiers are exact-match and immutable). **One** shared client (`Vitally MCP`) carrying both origins' `/oauth/callback`, so both targets use the same `SharedClientId` / `SharedClientSecret`. Post-login Action sets the `secret_ref` claim; tenant has **Resource Parameter Compatibility Profile** enabled to stop `resource=` forwarding to the Entra federation — and still needs it, since the proxy validates but does not terminate `resource` until the cutover |
 | CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
 

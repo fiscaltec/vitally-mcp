@@ -223,6 +223,80 @@ public class OAuthOptionsTests
             .Which.Should().Be("https://claude.ai/api/mcp/auth_callback");
     }
 
+
+    [Theory]
+    [InlineData("https://vitally.fiscaltec.com/", "https://vitally.fiscaltec.com/")]  // exact
+    [InlineData("https://vitally.fiscaltec.com/", "https://vitally.fiscaltec.com")]   // client dropped the slash
+    [InlineData("https://vitally.fiscaltec.com", "https://vitally.fiscaltec.com/")]   // client added one
+    [InlineData("https://vitally.fiscaltec.com/mcp", "https://vitally.fiscaltec.com/mcp")]
+    [InlineData("https://VITALLY.fiscaltec.com/", "https://vitally.fiscaltec.com/")]  // host is case-insensitive
+    [InlineData("https://vitally.fiscaltec.com/", "HTTPS://vitally.fiscaltec.com/")]  // so is scheme
+    public void IsResourceIndicatorAllowed_MatchesThePublishedIdentifier(string published, string requested)
+    {
+        // Trailing-slash tolerance is not cosmetic: Entra refuses to register an identifierUri
+        // that ends in a slash, while Claude Code normalises a bare-host resource to the
+        // trailing-slash form. Both forms name the same resource and both must be accepted.
+        var options = ValidOptions([]);
+        options.Resource = published;
+
+        options.IsResourceIndicatorAllowed(requested).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("https://evil.example.com/")]
+    [InlineData("https://vitally.fiscaltec.com.evil.com/")]     // suffix spoof
+    [InlineData("https://vitally.fiscaltec.com/mcp/other")]
+    [InlineData("https://vitally.fiscaltec.com:8443/mcp")]      // different port
+    [InlineData("http://vitally.fiscaltec.com/mcp")]            // different scheme
+    [InlineData("https://vitally.fiscaltec.com/MCP")]           // path is case-sensitive (RFC 3986 6.2.2.1)
+    [InlineData("not-a-uri")]
+    [InlineData("")]                                            // present but empty binds nothing
+    [InlineData("   ")]
+    public void IsResourceIndicatorAllowed_RejectsAnythingElse(string requested)
+    {
+        // `resource` is an audience-binding control (RFC 8707). Accepting a value we do not
+        // publish would hand the caller a token bound to an audience we never vouched for.
+        var options = ValidOptions([]);
+        options.Resource = "https://vitally.fiscaltec.com/mcp";
+
+        options.IsResourceIndicatorAllowed(requested).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsResourceIndicatorAllowed_RejectsAFragment()
+    {
+        // RFC 8707 section 2 forbids a fragment on a resource indicator outright.
+        var options = ValidOptions([]);
+        options.Resource = "https://vitally.fiscaltec.com/";
+
+        options.IsResourceIndicatorAllowed("https://vitally.fiscaltec.com/#frag").Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsResourceIndicatorAllowed_FallsBackToAudienceWhenResourceIsUnset()
+    {
+        // The same fallback ProtectedResourceMetadataBuilder publishes, so the value validated
+        // against is always the value clients were told to send.
+        var options = ValidOptions([]);
+        options.Resource = string.Empty;
+        options.Audience = "https://api.example.com/";
+
+        options.IsResourceIndicatorAllowed("https://api.example.com").Should().BeTrue();
+        options.IsResourceIndicatorAllowed("https://elsewhere.example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsResourceIndicatorAllowed_AcceptsAnythingWhenNoIdentifierIsConfigured()
+    {
+        // Reachable only in a NoAuth dev configuration: Validate() requires Audience whenever
+        // NoAuth is false, so production always has something to compare against. With nothing
+        // published there is no audience binding to protect, and rejecting every value would
+        // break the local proxy for no gain.
+        var options = new OAuthOptions();
+
+        options.IsResourceIndicatorAllowed("https://anything.example.com/").Should().BeTrue();
+    }
+
     private static OAuthOptions ValidOptions(string[] allowedRedirectUris)
     {
         var options = new OAuthOptions
