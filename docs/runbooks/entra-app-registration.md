@@ -17,7 +17,7 @@ Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/t
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
 | Sign-in gate | `appRoleAssignmentRequired = true` + seven department groups, assigned **directly** |
-| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth` |
+| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-09-02 |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
 above (no slash, because Entra refuses to register one); `Resource` stays
@@ -117,17 +117,48 @@ the practical route.
 
 Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth`, referenced by the Container App
 through the user-assigned managed identity (`Key Vault Secrets User`) — the same pattern as
-`vitally-shared`. **Twelve-month lifetime**, so unlike the Auth0 secret (which never expires) this is
-a standing rotation commitment. Record the expiry when creating it.
+`vitally-shared`.
+
+| | |
+|---|---|
+| Created | 2026-09-02 |
+| Entra credential `keyId` | `a7d71deb-cd1d-4c03-9a22-acd404c62e41` |
+| Expires | **2027-09-02T13:03:39Z** (both the Entra credential and the Key Vault secret) |
+| Key Vault secret | `entra-mcp-client-secret`, tagged `purpose=OAuth:SharedClientSecret`, `appId`, `issue=107` |
+
+Twelve months matches the vault's existing practice — `vitally-shared` was created 2026-08-18 and
+expires 2027-08-31. Note that `infra/terraform/scan/run.py` prints *"rotate per the 180-day
+standard"* in its Teams card, which no secret in this vault actually follows; treat the card text as
+stale rather than as the rule, or fix one of the two.
+
+> ⚠️ **Set the expiry on the Key Vault secret, not only on the Entra credential.** The scheduled
+> scanner (`infra/terraform/scan/run.py`, a Container Apps Job) alerts on the **Key Vault secret's**
+> `attributes.exp` and knows nothing about Entra. A secret stored without one is invisible to it, so
+> the rotation deadline passes in silence and the server starts failing token exchanges. This secret
+> was initially stored without an expiry for exactly that reason; it now carries one matching the
+> credential, so the alert fires 30 days out.
+>
+> ```bash
+> az keyvault secret set-attributes --vault-name vitally-prod-kv-uksouth \
+>   --name entra-mcp-client-secret --expires "2027-09-02T13:03:39Z"
+> ```
 
 > **The vault's data plane is private-endpoint only** (`publicNetworkAccess: Disabled`,
 > `networkAcls.defaultAction: Deny`, no IP or VNet rules). A `secret set` from a workstation fails
 > with `ForbiddenByConnection` — a *network* denial, independent of RBAC, so Global Administrator
-> does not help. Writing this secret needs one of:
+> and `Key Vault Secrets Officer` both make no difference.
 >
-> - a temporary IP rule (`az keyvault network-rule add --ip-address <egress-ip>`), removed
->   immediately afterwards — a brief, audited weakening of a deliberate control; or
-> - a host inside the VNet, or a VPN with private-DNS resolution to the private endpoint.
+> **An IP rule on its own does NOT open it.** `publicNetworkAccess: Disabled` short-circuits the ACL
+> entirely — you still get *"Public network access is disabled and request is not from a trusted
+> service nor via an approved private link"*. Reaching the data plane from outside the VNet needs
+> **both** switches: add the IP rule *and* flip `publicNetworkAccess` to `Enabled` while keeping
+> `defaultAction: Deny`, so the endpoint resolves publicly but refuses every address but yours.
+> Revert both afterwards. Policy on this vault is audit-only, so nothing blocks or auto-reverts it,
+> but it does register in the compliance audit.
+>
+> Always drive it from a script with a cleanup `trap`, so the window closes even if a step in the
+> middle fails. The alternative that weakens nothing is a host inside the VNet, or a VPN with
+> private-DNS resolution to the private endpoint.
 
 **Create and store in one go, so the value is never printed.** Entra shows a secret value once;
 capturing it into a variable that is then echoed puts a live credential into terminal scrollback and
@@ -151,13 +182,17 @@ az rest --method post --url "https://graph.microsoft.com/v1.0/applications/$APP/
 az keyvault secret set --vault-name vitally-prod-kv-uksouth \
   --name entra-mcp-client-secret --file secret.txt --output none
 
-# 3. destroy the local copies
+# 3. set the KV secret expiry to match — the scanner keys off THIS, not the Entra credential
+az keyvault secret set-attributes --vault-name vitally-prod-kv-uksouth \
+  --name entra-mcp-client-secret --expires "$END" --output none
+
+# 4. destroy the local copies
 rm -f secret.txt pw.json
 ```
 
 ### Rotation
 
-Same three steps, then **delete the superseded credential** by `keyId` once the Container App has
+Same four steps, then **delete the superseded credential** by `keyId` once the Container App has
 picked up the new value (it caches Key Vault reads for `Vitally:SecretCacheDuration`, default 5
 minutes):
 
