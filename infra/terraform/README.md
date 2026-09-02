@@ -19,6 +19,7 @@ and DR-able.
 | `monitoring.tf` | Log Analytics + Application Insights |
 | `containerapps.tf` | Container Apps env, production app, and the secret-expiry scanner Job (`scan/run.py`) |
 | `containerapps-staging.tf` | Staging app (#112) — second app in the *same* env; pre-production target for IdP changes |
+| `entra.tf` | Entra app registration + SP + Gate 1 group assignments (#107) — needs the `azuread` provider, so re-run `terraform init` |
 | `imports.tf` | import blocks for adoption (comment out after import) |
 
 ## Prerequisites

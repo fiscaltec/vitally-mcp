@@ -185,3 +185,51 @@ import {
 # CMK key:              needs data-plane access to the firewalled CMK vault; import
 #                       "https://vitally-prod-cmk-uksouth.vault.azure.net/keys/acr-cmk/<version>"
 # DNS vnet links / NAT associations: see README for the composite ID formats.
+
+# ---- 2026-09-02: Entra app registration replacing the Auth0 client + Resource Server (#107) ----
+# Created via `az` / Microsoft Graph; entra.tf is the as-built capture. Entra imports take the
+# object's own id, not an ARM resource id, and the app/SP ids are DIFFERENT objects — using the
+# appId for the application import silently adopts nothing.
+#   app objectId  568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   (appId c3812e7d-a413-4169-b57e-803326611ba3)
+#   SP  objectId  7904188d-4b34-4651-bf0f-6941fbcf6a8b
+import {
+  to = azuread_application.vitally_mcp
+  id = "/applications/568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4"
+}
+import {
+  to = azuread_service_principal.vitally_mcp
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b"
+}
+import {
+  to = azuread_application_pre_authorized.self
+  id = "568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4/preAuthorizedApplication/c3812e7d-a413-4169-b57e-803326611ba3"
+}
+# The seven Gate 1 assignments, keyed by display name to match the for_each in entra.tf.
+import {
+  to = azuread_app_role_assignment.gate1["Product Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/3VgmAS85hE2vB_l5N_OiPq7WKQozEDtBq7rpU50iCv0"
+}
+import {
+  to = azuread_app_role_assignment.gate1["IT & Security Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/Yb-pa1np2U2KltR3o1sNA3jvMqj1L_pHq3vD5y9sIS4"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Project Management Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/NUZnj0x1Q0WNnu8q-78NkNAK11cuON1KppEd5lZQBo4"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Customer Operations Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/3sZz9a7dfECIna6esXLn8JouHL8wBedHrp0Q4ukZXWc"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Executive Leadership Team Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/skhubiWElk-BXT5zneZI1JXnO5Us_xFMkGa5r074de0"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Customer Account Management Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/WIMtVQIipEK_j6_gRoSSu7LrFAcyKzFEs6WOLNc2Qj0"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Service Delivery Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/gVhg6QD0o0Se4PXfXqA3-CW9Lh2CgwBFsYfhlP7bVqM"
+}
