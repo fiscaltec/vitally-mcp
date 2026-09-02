@@ -17,7 +17,7 @@ Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/t
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
 | Sign-in gate | `appRoleAssignmentRequired = true` + seven department groups, assigned **directly** |
-| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-09-02 |
+| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-03-01 |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
 above (no slash, because Entra refuses to register one); `Resource` stays
@@ -122,14 +122,26 @@ through the user-assigned managed identity (`Key Vault Secrets User`) — the sa
 | | |
 |---|---|
 | Created | 2026-09-02 |
-| Entra credential `keyId` | `a7d71deb-cd1d-4c03-9a22-acd404c62e41` |
-| Expires | **2027-09-02T13:03:39Z** (both the Entra credential and the Key Vault secret) |
+| Entra credential `keyId` | `e17e0e9e-d4c7-46b4-87c1-afe98a5bc111` |
+| Expires | **2027-03-01T13:18:59Z** — 180 days (both the Entra credential and the Key Vault secret) |
 | Key Vault secret | `entra-mcp-client-secret`, tagged `purpose=OAuth:SharedClientSecret`, `appId`, `issue=107` |
 
-Twelve months matches the vault's existing practice — `vitally-shared` was created 2026-08-18 and
-expires 2027-08-31. Note that `infra/terraform/scan/run.py` prints *"rotate per the 180-day
-standard"* in its Teams card, which no secret in this vault actually follows; treat the card text as
-stale rather than as the rule, or fix one of the two.
+**180 days is the standard**, as asserted by `infra/terraform/scan/run.py`'s Teams card ("rotate per
+the 180-day standard"). Nothing in the vault followed it until 2026-09-02, when both secrets were
+brought into line: `vitally-shared` was moved from 2027-08-31 to **2027-02-14** (180 days from its
+own creation on 2026-08-18, not from the day it was changed), and this secret was **reissued** at
+180 days.
+
+> **The Entra credential's `endDateTime` is immutable.** Shortening it is not an edit — it is a new
+> credential plus a delete of the old one. Add the replacement, store it, confirm it, and only then
+> `az ad app credential delete` the superseded `keyId`; the reverse order is a self-inflicted outage.
+> The first credential (`a7d71deb-…`, 12 months) was created and then replaced this way, which is why
+> the `keyId` above is not the one in the earlier commit message.
+
+> ⚠️ **An expired Key Vault secret cannot be read at all** — Key Vault refuses `GET` once `exp`
+> passes, it does not merely warn. So each expiry date above is a hard outage date: on 2027-02-14
+> the server stops being able to fetch the Vitally API key, and on 2027-03-01 the token exchange
+> stops working. The scanner's 30-day warning is the whole safety margin.
 
 > ⚠️ **Set the expiry on the Key Vault secret, not only on the Entra credential.** The scheduled
 > scanner (`infra/terraform/scan/run.py`, a Container Apps Job) alerts on the **Key Vault secret's**
@@ -140,7 +152,7 @@ stale rather than as the rule, or fix one of the two.
 >
 > ```bash
 > az keyvault secret set-attributes --vault-name vitally-prod-kv-uksouth \
->   --name entra-mcp-client-secret --expires "2027-09-02T13:03:39Z"
+>   --name entra-mcp-client-secret --expires "2027-03-01T13:18:59Z"
 > ```
 
 > **The vault's data plane is private-endpoint only** (`publicNetworkAccess: Disabled`,
@@ -159,6 +171,19 @@ stale rather than as the rule, or fix one of the two.
 > Always drive it from a script with a cleanup `trap`, so the window closes even if a step in the
 > middle fails. The alternative that weakens nothing is a host inside the VNet, or a VPN with
 > private-DNS resolution to the private endpoint.
+>
+> **Resolve the egress IP inside that same script — never reuse one from earlier in the session.**
+> It is a dynamic ISP address and it rotated mid-session here (`86.179.212.113` → `51.148.41.71`),
+> so a second window opened for the stale address and the data plane stayed unreachable. That
+> failure is silent in the sense that it looks exactly like slow propagation, so the abort guard
+> below matters: it stops before creating a credential it cannot store.
+
+```bash
+MYIP=$(curl -s https://ifconfig.me)   # inside the script, every time
+...
+az keyvault secret list --vault-name "$VAULT" -o none 2>/dev/null \
+  || { echo "unreachable — aborting before creating anything"; exit 1; }
+```
 
 **Create and store in one go, so the value is never printed.** Entra shows a secret value once;
 capturing it into a variable that is then echoed puts a live credential into terminal scrollback and
@@ -167,7 +192,7 @@ into any session transcript.
 ```bash
 export MSYS_NO_PATHCONV=1
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4
-END=$(date -u -d '+12 months' '+%Y-%m-%dT%H:%M:%SZ')
+END=$(date -u -d '+180 days' '+%Y-%m-%dT%H:%M:%SZ')   # 180-day standard
 
 # 1. create — write the value straight to a restricted temp file, never to stdout
 umask 077
