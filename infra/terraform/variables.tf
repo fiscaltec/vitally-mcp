@@ -118,3 +118,10 @@ variable "teams_webhook_url" {
   description = "Teams Power Automate Workflows webhook URL for the secret-expiry scanner job."
   sensitive   = true
 }
+
+# ---- Entra (entra.tf, #107) ----
+variable "tenant_id" {
+  type        = string
+  description = "Entra tenant hosting the app registration and the sg-vitally-* / department groups."
+  default     = "75bd6050-92a8-4bde-a406-50000b310c86"
+}

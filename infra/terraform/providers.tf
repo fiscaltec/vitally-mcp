@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+
+    # Entra objects (entra.tf, #107). The azurerm provider cannot express app registrations.
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
 
   # Remote state. Create a storage account + "tfstate" container first (see README),
@@ -27,4 +33,10 @@ provider "azurerm" {
       purge_soft_delete_on_destroy = false
     }
   }
+}
+
+# Entra ID / Microsoft Graph. Tenant is implicit from the `az login` context; pinned explicitly so
+# a mis-set default subscription cannot silently target another directory.
+provider "azuread" {
+  tenant_id = var.tenant_id
 }
