@@ -344,6 +344,100 @@ public class OAuthOptionsTests
         options.IsResourceIndicatorAllowed("https://anything.example.com/").Should().BeTrue();
     }
 
+    // ---- UpstreamResourceScope: the Auth0-relay / Entra-terminate switch (#105 part B, #108) ----
+
+    [Fact]
+    public void TerminatesResourceParameter_IsFalse_WhenNoUpstreamScopeIsConfigured()
+    {
+        // The Auth0 posture, and the default: `resource` is relayed, because the tenant's Resource
+        // Parameter Compatibility Profile consuming it is the only thing binding the audience there.
+        new OAuthOptions().TerminatesResourceParameter.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_RejectsAnUpstreamResourceScopeContainingWhitespace()
+    {
+        // It names exactly one resource — the one whose `resource` parameter it stands in for — and
+        // whitespace would smuggle extra scopes into every authorize request this server makes.
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "https://api.example.com",
+            UpstreamResourceScope = "https://api.example.com/mcp.access openid"
+        };
+
+        options.Invoking(o => o.Validate()).Should().Throw<InvalidOperationException>()
+            .WithMessage("*UpstreamResourceScope*");
+    }
+
+    [Fact]
+    public void Validate_TrimsTheUpstreamResourceScope()
+    {
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "https://api.example.com",
+            UpstreamResourceScope = "  https://api.example.com/mcp.access  "
+        };
+        options.Validate();
+
+        options.UpstreamResourceScope.Should().Be("https://api.example.com/mcp.access");
+        options.TerminatesResourceParameter.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("", "https://api.example.com/mcp.access")]
+    [InlineData("openid profile", "openid profile https://api.example.com/mcp.access")]
+    [InlineData("  openid   profile  ", "openid profile https://api.example.com/mcp.access")]
+    [InlineData("openid https://api.example.com/mcp.access", "openid https://api.example.com/mcp.access")]
+    public void MergeUpstreamScope_AppendsOnceAndPreservesTheClientsOwnScopes(string requested, string expected)
+    {
+        // Dropping a client scope here would have consequences well past this method: losing
+        // offline_access costs the refresh token, and the failure would surface an hour later.
+        var options = new OAuthOptions { UpstreamResourceScope = "https://api.example.com/mcp.access" };
+
+        options.MergeUpstreamScope(requested).Should().Be(expected);
+    }
+
+    [Fact]
+    public void MergeUpstreamScope_DoesNotDuplicateOnACasingDifference()
+    {
+        // RFC 6749 §3.3 makes scope tokens case-sensitive, so this is deliberate leniency: a
+        // duplicate is a request the provider rejects, which is strictly worse than accepting the
+        // client's spelling of a scope it evidently already has.
+        var options = new OAuthOptions { UpstreamResourceScope = "https://api.example.com/mcp.access" };
+
+        options.MergeUpstreamScope("openid HTTPS://API.EXAMPLE.COM/MCP.ACCESS")
+            .Should().Be("openid HTTPS://API.EXAMPLE.COM/MCP.ACCESS");
+    }
+
+    // ---- ValidAudiences ----
+
+    [Fact]
+    public void ValidAudiences_CarriesBothTheAppIdUriAndTheClientId()
+    {
+        // An Entra v1 access token names the App ID URI; a v2 token names the resource
+        // application's appId GUID — and one registration is both our client and our API, so that
+        // GUID is SharedClientId. Accepting each settles which one arrives rather than betting.
+        var options = new OAuthOptions
+        {
+            Audience = "https://vitally.fiscaltec.com",
+            SharedClientId = "c3812e7d-a413-4169-b57e-803326611ba3"
+        };
+
+        options.ValidAudiences.Should().BeEquivalentTo(
+            new[] { "https://vitally.fiscaltec.com", "c3812e7d-a413-4169-b57e-803326611ba3" });
+    }
+
+    [Fact]
+    public void ValidAudiences_OmitsAnUnconfiguredSharedClientId()
+    {
+        // A null or empty entry in ValidAudiences is not inert — it would be compared against the
+        // token's `aud` like any other candidate.
+        new OAuthOptions { Audience = "https://api.example.com" }.ValidAudiences
+            .Should().ContainSingle().Which.Should().Be("https://api.example.com");
+    }
+
     private static OAuthOptions ValidOptions(string[] allowedRedirectUris)
     {
         var options = new OAuthOptions

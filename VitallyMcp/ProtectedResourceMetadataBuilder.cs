@@ -12,8 +12,21 @@ public static class ProtectedResourceMetadataBuilder
     /// <summary>Canonical metadata path. RFC 9728 also allows a resource-path suffix (…/mcp).</summary>
     public const string MetadataPath = "/.well-known/oauth-protected-resource";
 
-    /// <summary>Scopes advertised to clients so they can request them at the authorize step.</summary>
-    public static readonly string[] SupportedScopes = ["openid", "profile", "email", "offline_access", "mcp.access"];
+    /// <summary>
+    /// OIDC scopes advertised to clients so they can request them at the authorize step. The API
+    /// scope is appended by <see cref="ScopesFor"/>, because its spelling depends on the upstream
+    /// provider.
+    /// </summary>
+    public static readonly string[] BaseScopes = ["openid", "profile", "email", "offline_access"];
+
+    /// <summary>
+    /// The advertised scope list: the OIDC scopes plus this server's API scope, named the way the
+    /// upstream provider will accept it. Entra rejects a bare scope name on a custom API — it must
+    /// carry the App ID URI prefix — so advertising the short form to a client that builds its
+    /// request from this list would break the flow before sign-in.
+    /// </summary>
+    public static string[] ScopesFor(OAuthOptions oauth) =>
+        [.. BaseScopes, oauth.TerminatesResourceParameter ? oauth.UpstreamResourceScope : "mcp.access"];
 
     public static ProtectedResourceMetadata Build(OAuthOptions oauth, string serverBaseUrl)
     {
@@ -32,7 +45,7 @@ public static class ProtectedResourceMetadataBuilder
             // Assigning replaces the list outright for all three.
             AuthorizationServers = [authorizationServer ?? string.Empty],
             BearerMethodsSupported = ["header"],
-            ScopesSupported = [.. SupportedScopes],
+            ScopesSupported = [.. ScopesFor(oauth)],
             ResourceName = "Vitally MCP"
         };
     }

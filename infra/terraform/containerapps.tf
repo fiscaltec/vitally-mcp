@@ -97,9 +97,17 @@ resource "azurerm_container_app" "app" {
         name  = "OAuth__Audience"
         value = var.oauth_audience
       }
+      # Deliberately a different variable from OAuth__Audience — see the note on oauth_resource in
+      # variables.tf. They were one value on Auth0 by coincidence and must not be reunified.
       env {
         name  = "OAuth__Resource"
-        value = var.oauth_audience
+        value = var.oauth_resource
+      }
+      # Terminates the RFC 8707 `resource` parameter at the proxy and names the API by scope
+      # instead. Required under Entra; empty is the Auth0 relay behaviour a rollback returns to.
+      env {
+        name  = "OAuth__UpstreamResourceScope"
+        value = var.oauth_upstream_resource_scope
       }
       env {
         name  = "OAuth__NoAuth"

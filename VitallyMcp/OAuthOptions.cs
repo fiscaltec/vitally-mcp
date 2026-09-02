@@ -15,10 +15,18 @@ public class OAuthOptions
     public string Authority { get; set; } = string.Empty;
 
     /// <summary>
-    /// Value to validate the JWT <c>aud</c> claim against. Depends on the AS:
-    /// for Auth0 it's the API identifier; for v2 Entra tokens it's typically the application
-    /// (client) ID GUID.
+    /// Value to validate the JWT <c>aud</c> claim against — the Entra App ID URI, which carries
+    /// <b>no</b> trailing slash because Entra refuses to register one on <c>identifierUris</c>.
+    /// <see cref="ValidAudiences"/> also accepts <see cref="SharedClientId"/>, which is what a v2
+    /// token actually names.
     /// </summary>
+    /// <remarks>
+    /// <b>Not the same value as <see cref="Resource"/>, and must not be reconciled with it.</b> They
+    /// were equal under Auth0 by coincidence — that identifier happened to carry a trailing slash —
+    /// and differ by exactly that slash under Entra. Making them agree breaks token validation in one
+    /// direction and the RFC 9728 document in the other. On staging they differ by host as well,
+    /// because one app registration serves both origins.
+    /// </remarks>
     public string Audience { get; set; } = string.Empty;
 
     /// <summary>
@@ -44,6 +52,60 @@ public class OAuthOptions
         (string.IsNullOrWhiteSpace(Resource) ? Audience : Resource)?.Trim() ?? string.Empty;
 
     /// <summary>
+    /// Audience values the JWT <c>aud</c> claim may carry: <see cref="Audience"/> and, when set,
+    /// <see cref="SharedClientId"/>. Both, because which one a provider mints is a property of the
+    /// token version rather than of our configuration — an Entra <b>v1</b> access token names the
+    /// App ID URI, a <b>v2</b> token names the resource application's appId GUID, and this
+    /// registration is both the client and the resource so the two are the same object. Accepting
+    /// each removes the question rather than betting on it.
+    /// </summary>
+    /// <remarks>
+    /// The consequence to be aware of: an <i>ID</i> token for this app also carries the appId GUID as
+    /// <c>aud</c>, so one presented as a bearer token would pass audience validation. That is not an
+    /// escalation — it is issued to the same client for the same user, and entitlement is still
+    /// resolved from that user's live Entra group membership, so an ID token buys exactly the tier
+    /// its own access token would. Narrowing it would mean requiring <c>scp</c>, which is provider-
+    /// specific in a way this class deliberately is not.
+    /// </remarks>
+    public IReadOnlyList<string> ValidAudiences =>
+        new[] { Audience, SharedClientId }
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
+    /// True when <see cref="UpstreamResourceScope"/> is configured, i.e. the proxy terminates the
+    /// RFC 8707 <c>resource</c> parameter at this façade rather than relaying it upstream.
+    /// </summary>
+    public bool TerminatesResourceParameter => !string.IsNullOrWhiteSpace(UpstreamResourceScope);
+
+    /// <summary>
+    /// Merges <see cref="UpstreamResourceScope"/> into the <c>scope</c> value a client sent, so the
+    /// upstream request names this server's API even when the client only asked for the OIDC scopes.
+    /// Returns the client's value unchanged if it already names it, and the bare scope when the
+    /// client sent none.
+    /// </summary>
+    /// <remarks>
+    /// The comparison is case-insensitive although RFC 6749 §3.3 makes scope tokens case-sensitive:
+    /// a duplicate here is a request that fails upstream, so tolerating a casing difference is
+    /// strictly better than emitting the same scope twice in two spellings.
+    /// </remarks>
+    public string MergeUpstreamScope(string? requestedScope)
+    {
+        var scope = UpstreamResourceScope;
+        var requested = (requestedScope ?? string.Empty).Trim();
+        if (requested.Length == 0)
+        {
+            return scope;
+        }
+
+        var tokens = requested.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.Contains(scope, StringComparer.OrdinalIgnoreCase)
+            ? string.Join(' ', tokens)
+            : string.Join(' ', tokens.Append(scope));
+    }
+
+    /// <summary>
     /// Canonical public origin of this server (scheme + host, no trailing path), e.g.
     /// <c>https://vitally.fiscaltec.com</c>. When set, the <c>/.well-known/*</c> metadata documents
     /// and the OAuth proxy's own callback URL are built from this value instead of the request's
@@ -54,23 +116,62 @@ public class OAuthOptions
     public string PublicBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// OAuth client_id of a pre-registered Auth0 native application that all MCP clients share.
-    /// When set, the server intercepts RFC 7591 Dynamic Client Registration calls and returns this
-    /// client_id to every caller — eliminating per-session client proliferation in Auth0 and the
-    /// per-session manual API-grant clicks that DCR third-party clients otherwise require.
-    /// The pre-registered Auth0 app must be native/public, first-party, with redirect URI
-    /// <c>http://localhost</c> (loopback pattern matches any port), and have a client_grant on
-    /// the Vitally MCP API. Leave empty to fall through to Auth0's native DCR endpoint.
+    /// OAuth client_id of the pre-registered application that all MCP clients converge on. When set,
+    /// the server intercepts RFC 7591 Dynamic Client Registration calls and returns this client_id to
+    /// every caller — eliminating per-session client proliferation at the provider and the
+    /// per-session consent that DCR clients otherwise trigger. Leave empty to fall through to the
+    /// provider's own DCR endpoint, if it has one.
     /// </summary>
+    /// <remarks>
+    /// Under Entra this is the <c>Vitally MCP</c> app registration, which is <b>both</b> the OAuth
+    /// client and the API resource — hence its appearing in <see cref="ValidAudiences"/>. Its
+    /// redirect URIs are the fixed <c>/oauth/callback</c> of each origin, not the clients' own
+    /// loopback URIs: the proxy substitutes its own and reverses the substitution at the callback,
+    /// which is what lets ephemeral loopback ports coexist with one registration. See
+    /// <c>docs/runbooks/entra-app-registration.md</c>.
+    /// </remarks>
     public string SharedClientId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Client secret of the SharedClientId application. Injected server-side by the OAuth proxy's
-    /// /oauth/token endpoint when forwarding token requests upstream — so the shared Auth0 app can
-    /// be a confidential client (verifiable first-party = skip consent screen) without exposing the
-    /// secret to MCP clients. Optional: leave empty for public-client mode (consent screen will show).
+    /// Client secret of the <see cref="SharedClientId"/> application. Injected server-side by the
+    /// OAuth proxy's /oauth/token endpoint when forwarding token requests upstream — so the shared
+    /// app can be a confidential client without exposing the secret to MCP clients. Optional: leave
+    /// empty for public-client mode. Sourced from the Key Vault secret <c>entra-mcp-client-secret</c>,
+    /// which <b>expires</b>; see <c>docs/runbooks/entra-app-registration.md</c> for the rotation.
     /// </summary>
     public string SharedClientSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Scope value that names this server's own API to the upstream provider — under Entra the App
+    /// ID URI plus the exposed scope, e.g. <c>https://vitally.fiscaltec.com/mcp.access</c>. Empty by
+    /// default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Setting this switches the OAuth proxy from <b>relaying</b> the RFC 8707 <c>resource</c>
+    /// parameter to <b>terminating</b> it: <c>resource</c> is still validated against
+    /// <see cref="PublishedResourceIdentifier"/> and a mismatch is still refused, but a matching
+    /// value is then dropped at the façade instead of being forwarded, and this scope is merged into
+    /// the upstream <c>scope</c> parameter in its place.
+    /// </para>
+    /// <para>
+    /// The two halves are one setting on purpose, because neither is usable alone. Dropping
+    /// <c>resource</c> without naming the resource some other way leaves the issued token bound to no
+    /// audience at all — the proxy sends no <c>audience</c> parameter anywhere. Adding a
+    /// resource-naming scope while still relaying <c>resource</c> is exactly the
+    /// <c>AADSTS9010010</c> failure this exists to avoid: Entra matches <c>resource</c> exactly
+    /// against a registered identifier and rejects the trailing-slash form MCP clients send, which
+    /// <see cref="IsResourceIndicatorAllowed"/> deliberately accepts.
+    /// </para>
+    /// <para>
+    /// So this is the provider switch, expressed as configuration rather than inferred from
+    /// <see cref="Authority"/>: leave it empty on Auth0, where the tenant's Resource Parameter
+    /// Compatibility Profile consumes the relayed <c>resource</c> and is the only thing binding the
+    /// audience; set it on Entra. Keeping it configuration is what keeps a cutover rollback a
+    /// revert of environment variables rather than a redeploy.
+    /// </para>
+    /// </remarks>
+    public string UpstreamResourceScope { get; set; } = string.Empty;
 
     /// <summary>
     /// Allowlist of non-loopback redirect URIs that the OAuth proxy will accept on
@@ -96,6 +197,7 @@ public class OAuthOptions
         Resource = Resource?.Trim() ?? string.Empty;
         SharedClientId = SharedClientId?.Trim() ?? string.Empty;
         SharedClientSecret = SharedClientSecret?.Trim() ?? string.Empty;
+        UpstreamResourceScope = UpstreamResourceScope?.Trim() ?? string.Empty;
         PublicBaseUrl = (PublicBaseUrl?.Trim() ?? string.Empty).TrimEnd('/');
 
         if (!string.IsNullOrWhiteSpace(PublicBaseUrl)
@@ -157,6 +259,17 @@ public class OAuthOptions
         if (!string.IsNullOrWhiteSpace(SharedClientSecret) && string.IsNullOrWhiteSpace(SharedClientId))
         {
             throw new InvalidOperationException("OAuth:SharedClientSecret requires OAuth:SharedClientId to also be set.");
+        }
+
+        // A single scope token, checked at boot rather than at the first sign-in. Whitespace would
+        // smuggle extra scopes into every authorize request, and this value names exactly one
+        // resource — the one whose `resource` parameter it replaces. Entra's own form is an absolute
+        // URI plus the scope name, but the check stays shape-agnostic so a different provider's
+        // convention (a bare `api://.../scope`, or a plain name) is not rejected on principle.
+        if (TerminatesResourceParameter && UpstreamResourceScope.Any(char.IsWhiteSpace))
+        {
+            throw new InvalidOperationException(
+                $"OAuth:UpstreamResourceScope must be a single scope token with no whitespace (got '{UpstreamResourceScope}').");
         }
 
         // Normalise the allowlist: trim, strip trailing slashes (we match by prefix below so

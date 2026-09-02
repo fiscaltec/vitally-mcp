@@ -33,18 +33,39 @@ variable "managed_identity_client_id" {
 }
 
 variable "oauth_authority" {
-  type    = string
-  default = "https://fiscal-it.uk.auth0.com/"
+  type        = string
+  description = "Upstream OIDC issuer. Entra since the #108 cutover; the endpoints are read from its discovery document, not built from this."
+  default     = "https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0"
 }
 
+# oauth_audience and oauth_resource are NOT the same value and must not be reconciled. Audience is
+# validated against the token `aud` and follows the Entra App ID URI, which cannot carry a trailing
+# slash (Entra refuses to register one on identifierUris). Resource is published in the RFC 9728
+# document and keeps the slash, because that is the form Claude Code normalises to and then compares.
+# OAuthOptions.IsResourceIndicatorAllowed tolerates exactly one slash of difference, which is what
+# lets the two forms name one resource.
 variable "oauth_audience" {
-  type    = string
-  default = "https://vitally.fiscaltec.com/"
+  type        = string
+  description = "Entra App ID URI, validated against the JWT aud claim. NO trailing slash."
+  default     = "https://vitally.fiscaltec.com"
+}
+
+variable "oauth_resource" {
+  type        = string
+  description = "Canonical resource identifier published in RFC 9728 and validated against as an RFC 8707 indicator. WITH the trailing slash."
+  default     = "https://vitally.fiscaltec.com/"
+}
+
+variable "oauth_upstream_resource_scope" {
+  type        = string
+  description = "Scope naming this server's API upstream. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, which rejects the trailing-slash form clients send (AADSTS9010010). Empty on Auth0."
+  default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 
 variable "oauth_shared_client_id" {
-  type    = string
-  default = "VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D"
+  type        = string
+  description = "Entra app registration appId — both the OAuth client and the API resource (#107)."
+  default     = "c3812e7d-a413-4169-b57e-803326611ba3"
 }
 
 variable "public_base_url" {
@@ -90,13 +111,23 @@ variable "staging_image_tag" {
 
 variable "staging_oauth_authority" {
   type        = string
-  description = "Upstream OIDC issuer for staging. Auth0 today (a like-for-like baseline against production); becomes the Entra issuer first at #108, while production stays on Auth0."
-  default     = "https://fiscal-it.uk.auth0.com/"
+  description = "Upstream OIDC issuer for staging. Moved to Entra first at #108, ahead of production."
+  default     = "https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0"
 }
 
+# Staging's Audience and Resource diverge by HOST as well as by slash, and that is expected. One
+# Entra app registration serves both origins (#107), so a staging token's `aud` is production's App
+# ID URI — whereas `resource` must equal the staging origin, because MCP clients reject a metadata
+# document whose `resource` does not match the server they fetched it from.
 variable "staging_oauth_audience" {
   type        = string
-  description = "Auth0 Resource Server identifier for staging, WITH the trailing slash. Must equal the staging origin: it is published as the RFC 9728 `resource`, and MCP clients reject the whole metadata document when that does not match the server they fetched it from."
+  description = "Entra App ID URI validated against a staging token's aud. Production's URI, because one registration serves both origins. NO trailing slash."
+  default     = "https://vitally.fiscaltec.com"
+}
+
+variable "staging_oauth_resource" {
+  type        = string
+  description = "Canonical resource identifier published by staging, WITH the trailing slash. Must equal the staging origin."
   default     = "https://vitally-staging.fiscaltec.com/"
 }
 
@@ -109,7 +140,7 @@ variable "staging_public_base_url" {
 # ---- Secrets (DO NOT hardcode/commit — supply via TF_VAR_* or an untracked tfvars) ----
 variable "oauth_shared_client_secret" {
   type        = string
-  description = "Auth0 shared app client secret (Container App secret 'oauth-shared-client-secret')."
+  description = "Entra app client secret, sourced from the Key Vault secret `entra-mcp-client-secret` (Container App secret 'oauth-shared-client-secret'). Expires 2027-03-01 — see docs/runbooks/entra-app-registration.md."
   sensitive   = true
 }
 
