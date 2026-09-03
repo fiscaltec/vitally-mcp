@@ -176,35 +176,12 @@ public class ToolAuthorizer
     }
 
     /// <summary>
-    /// Extracts the user's Entra object id (GUID) for the Graph lookup: the <c>oid</c> claim if
-    /// present, else the trailing GUID of the <c>sub</c> (Auth0 federated subjects are shaped
-    /// <c>waad|connection|{objectId}</c>). Returns null if no GUID can be determined.
+    /// The user's Entra object id for the Graph lookup. Delegates to <see cref="CallerIdentity"/>,
+    /// which <see cref="AuditLogger"/> also uses — so the identifier an entitlement decision is made
+    /// against is by construction the one the audit record carries, and a denial can be joined to
+    /// the group membership that caused it.
     /// </summary>
-    private static string? ExtractObjectId(ClaimsPrincipal user)
-    {
-        var oid = user.FindFirst("oid")?.Value
-            ?? user.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
-        if (!string.IsNullOrWhiteSpace(oid) && Guid.TryParse(oid, out _))
-        {
-            return oid;
-        }
-
-        // JwtBearer's default inbound claim mapping renames "sub" to ClaimTypes.NameIdentifier, so
-        // check both — otherwise the object id is never found in production and the live lookup is
-        // silently skipped (falling back to the frozen token claim).
-        var sub = user.FindFirst("sub")?.Value
-            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (!string.IsNullOrWhiteSpace(sub))
-        {
-            var last = sub.Split('|', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-            if (last is not null && Guid.TryParse(last, out _))
-            {
-                return last;
-            }
-        }
-
-        return null;
-    }
+    private static string? ExtractObjectId(ClaimsPrincipal user) => CallerIdentity.TryGetObjectId(user);
 
     /// <summary>
     /// Maps an HTTP verb to the required permission. Unknown verbs fall back to the most

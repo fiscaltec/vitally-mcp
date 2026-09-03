@@ -26,6 +26,81 @@ public class AuditLoggerTests
         return (audit, logger);
     }
 
+    /// <summary>
+    /// A principal shaped like an Entra v2 access token: a pairwise <c>sub</c> that resolves to
+    /// nobody, alongside the <c>oid</c> that does. The subject is synthetic — its only property that
+    /// matters is being an opaque non-GUID, so a real one would add nothing but a checked-in
+    /// user-specific string. The oid matches the constant the sibling authorisation tests already
+    /// use, deliberately: these two suites must agree on what one caller looks like.
+    /// </summary>
+    private static ClaimsPrincipal EntraV2User(string oid, string pairwiseSub) =>
+        new(new ClaimsIdentity(
+            new[] { new Claim("oid", oid), new Claim("sub", pairwiseSub) },
+            authenticationType: "Test"));
+
+    [Fact]
+    public void LogAction_AttributesToTheObjectId_NotThePairwiseSubject()
+    {
+        // An Entra v2 `sub` is unique per (user, application) and cannot be resolved to a person by
+        // any Entra lookup, so an audit trail keyed on it is consistent but unattributable — which
+        // defeats the point of keeping one. The `oid` is the directory object id and resolves with
+        // `az ad user show --id`. This is the defect the #108 validation found, before the
+        // production flip could start writing such records.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pAiRwiSeSuBjEcTeXaMpLeVaLuE0000000000000"));
+
+        audit.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200);
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba");
+        message.Should().NotContain("pAiRwiSeSuBjEcT",
+            "the pairwise subject is not resolvable, so recording it defeats attribution");
+    }
+
+    [Fact]
+    public void LogAction_AttributesAnAuth0SubjectToTheSameObjectId()
+    {
+        // The join across the cutover. An Auth0 federated subject embeds the same object id, so both
+        // providers attribute to one value and a user's history is continuous rather than splitting
+        // into two unrelated identifiers at the migration.
+        var (audit, logger) = Build(user: AuthenticatedUser(
+            email: null, sub: "waad|fiscal-entra|675ebdda-7590-4d79-8ec3-a2d17ab029ba"));
+
+        audit.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200);
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba");
+    }
+
+    [Fact]
+    public void LogAction_FallsBackToTheRawSubject_WhenNoObjectIdCanBeFound()
+    {
+        // A consistent-but-opaque key beats none. The fallback is what stops an unexpected token
+        // shape attributing every action to "unknown", which would be worse than unresolvable.
+        var (audit, logger) = Build(user: AuthenticatedUser(email: null, sub: "opaque-subject-42"));
+
+        audit.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200);
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Should().Contain("opaque-subject-42");
+    }
+
+    [Fact]
+    public void LogToolCallDenied_AttributesToTheSameIdentityTheAuthorizerResolved()
+    {
+        // The two must agree, or a denial record cannot be joined to the group membership that
+        // caused it — which is why both go through CallerIdentity rather than each reading claims.
+        var oid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
+        var user = EntraV2User(oid, "S-1pAiRwiSeSuBjEcTeXaMpLeVaLuE0000000000000");
+        var (audit, logger) = Build();
+
+        audit.LogToolCallDenied(user, "Delete_account", "vitally:delete");
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Should().Contain(oid);
+        CallerIdentity.TryGetObjectId(user).Should().Be(oid,
+            "the authorizer resolves the same principal to the same value");
+    }
+
     private static ClaimsPrincipal AuthenticatedUser(string? email, string sub) =>
         new(new ClaimsIdentity(
             new[]
