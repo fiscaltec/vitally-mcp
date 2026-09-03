@@ -18,7 +18,7 @@ Live since 2026-09-03.
 | Exposed scope | `mcp.access` (`fbdb4f49-d2f6-43b3-91a6-475117ab874b`) |
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
-| Sign-in gate | `appRoleAssignmentRequired = true` + seven department groups, assigned **directly** |
+| Sign-in gate | `appRoleAssignmentRequired = true` + eight department groups, assigned **directly** |
 | Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-03-01 |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
@@ -44,10 +44,29 @@ half-applied.
 ## Gate 1 — sign-in assignment
 
 `appRoleAssignmentRequired = true` restricts sign-in to assigned principals, exactly as
-`FISCAL IT Auth0` does today. The same seven department groups are assigned:
+`FISCAL IT Auth0` does. The same **eight** department groups are assigned:
 
-Product · IT & Security · Project Management · Customer Operations · Executive Leadership Team ·
-Customer Account Management · Service Delivery
+Product · IT & Security · **Development** · Project Management · Customer Operations ·
+Executive Leadership Team · Customer Account Management · Service Delivery
+
+> ⚠️ **This list said seven until 2026-09-03, and the app was provisioned from it — omitting
+> `Development Department`.** `FISCAL IT Auth0` has always had eight, and Development Department is
+> nested in `sg-vitally-readers`, so its 15 members have working read access. The cutover would have
+> signed every one of them out with `AADSTS50105`.
+>
+> It was found by diffing the two apps' assignments during the #108 staging validation, not by
+> reading either document — which is the point. **Derive this list from `FISCAL IT Auth0`'s live
+> assignments while that app still exists**, and diff the two before any cutover:
+>
+> ```bash
+> export MSYS_NO_PATHCONV=1
+> for SP in 3dff0dcd-ebe1-496e-b47f-e5e4e736a548 7904188d-4b34-4651-bf0f-6941fbcf6a8b; do
+>   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" >     --query "value[].principalDisplayName" -o tsv | sort
+> done
+> ```
+>
+> Once Auth0 is retired that cross-check disappears, so the list here becomes the only record —
+> another reason not to retire it early.
 
 **Assign groups directly — never the `sg-vitally-*` tier groups.** The Entra app-assignment gate
 honours only *direct* members of an assigned group; nesting does not grant sign-in. Assigning
@@ -87,7 +106,7 @@ az rest --method get \
   --query "value[].{p:principalDisplayName,t:principalType}" -o tsv
 ```
 
-The result should be **seven Group rows and nothing else**. A `User` row is drift — see below.
+The result should be **eight Group rows and nothing else**. A `User` row is drift — see below.
 
 ## Admin consent
 
