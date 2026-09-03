@@ -42,6 +42,17 @@ public class ToolAuthorizer
     private readonly IGroupPermissionResolver? _groupResolver;
     private readonly ILogger<ToolAuthorizer>? _logger;
 
+    // One line per request per cause, not one per evaluation. This service is scoped, so an instance
+    // is exactly one HTTP request — and a single tools/list evaluates authorisation once per tool
+    // (93 of them), so an unguarded warning turns one malformed token or one Graph outage into 93
+    // identical lines per request. That is not merely noisy: it buries the one line that says what
+    // went wrong under its own repetitions, in the logs someone is reading precisely because
+    // authorisation is failing. A benign race between concurrent evaluations can at worst emit a
+    // second line, which is why a plain bool is enough and Interlocked would be theatre.
+    private bool _loggedNoResolver;
+    private bool _loggedNoObjectId;
+    private bool _loggedUnresolvable;
+
     public ToolAuthorizer(
         IOptions<ToolAuthorizationOptions> options,
         IOptions<OAuthOptions> oauth,
@@ -101,9 +112,11 @@ public class ToolAuthorizer
         {
             // Fail closed: with the live check on, Graph is the *only* source of entitlement, so
             // every way out of this block that is not an answer from Graph is a denial. Each is
-            // logged rather than quietly returning false — after the cutover they are the only ways
-            // a correctly signed-in user can be refused everything, and none of them is visible in
-            // the audit record, which reports the denial and not its cause.
+            // logged once per request rather than quietly returning false — after the cutover they
+            // are the only ways a correctly signed-in user can be refused everything, and none of
+            // them is visible in the audit record, which reports the denial and not its cause. The
+            // messages name no permission, because the outcome is not tier-specific: whichever tool
+            // was evaluated first, the answer for every other one is the same.
             //
             // The resolver being absent is deliberately part of that rule and not a reason to leave
             // the block. Testing it in the condition above would have handed a miswired container
@@ -111,10 +124,13 @@ public class ToolAuthorizer
             // reached by the one route where nobody is watching.
             if (_groupResolver is null)
             {
-                _logger?.LogError(
-                    "Denying '{RequiredPermission}': Authorization:LiveGroupCheck is enabled but no "
-                    + "IGroupPermissionResolver is registered, so entitlement cannot be resolved at all.",
-                    required);
+                if (!_loggedNoResolver)
+                {
+                    _loggedNoResolver = true;
+                    _logger?.LogError(
+                        "Denying all tool access for this request: Authorization:LiveGroupCheck is enabled "
+                        + "but no IGroupPermissionResolver is registered, so entitlement cannot be resolved at all.");
+                }
                 return false;
             }
 
@@ -124,10 +140,14 @@ public class ToolAuthorizer
                 // An Entra v2 token always carries `oid`. Reaching here means the token is not
                 // shaped as expected (or inbound claim mapping has changed), not that the user lacks
                 // a tier — so it is worth its own line.
-                _logger?.LogWarning(
-                    "Denying '{RequiredPermission}': no Entra object id could be determined from the caller's token, "
-                    + "and Authorization:LiveGroupCheck makes the live group lookup the only source of entitlement.",
-                    required);
+                if (!_loggedNoObjectId)
+                {
+                    _loggedNoObjectId = true;
+                    _logger?.LogWarning(
+                        "Denying all tool access for this request: no Entra object id could be determined from "
+                        + "the caller's token, and Authorization:LiveGroupCheck makes the live group lookup the "
+                        + "only source of entitlement.");
+                }
                 return false;
             }
 
@@ -137,11 +157,14 @@ public class ToolAuthorizer
                 // The resolver had neither a fresh result nor a usable stale one — it has already
                 // considered and declined the stale window by this point, and logged the underlying
                 // Graph failure itself. Subject id only, never the caller's email (see AuditOptions).
-                _logger?.LogWarning(
-                    "Denying '{RequiredPermission}' for {UserObjectId}: the live group lookup returned nothing usable "
-                    + "and there is no other source of entitlement.",
-                    required,
-                    objectId);
+                if (!_loggedUnresolvable)
+                {
+                    _loggedUnresolvable = true;
+                    _logger?.LogWarning(
+                        "Denying all tool access for this request for {UserObjectId}: the live group lookup "
+                        + "returned nothing usable and there is no other source of entitlement.",
+                        objectId);
+                }
                 return false;
             }
 

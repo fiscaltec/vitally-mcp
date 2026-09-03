@@ -409,10 +409,13 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
     //
     // What happens afterwards is OAuth:UpstreamResourceScope's job. Empty (Auth0): the value is
     // relayed verbatim, because the tenant's Resource Parameter Compatibility Profile consuming it
-    // is the only thing binding the audience there. Set (Entra): it is dropped at this façade and
-    // the configured scope carries the same meaning instead — Entra matches `resource` exactly
-    // against a registered identifier and rejects the trailing-slash form clients send
-    // (AADSTS9010010), the very slash IsResourceIndicatorAllowed tolerates on purpose.
+    // is the only thing binding the audience there. Set (Entra): it is dropped here and the
+    // configured scope carries the same meaning instead, because Entra's v2 authorize endpoint
+    // refuses *any* `resource` alongside a custom-API `scope` — AADSTS9010010, "the resource
+    // parameter provided in the request doesn't match with the requested scopes". Verified against
+    // the live tenant on 2026-09-02: the slashed form, the exact App ID URI and an unregistered
+    // value all return 400 alike. It is a resource-vs-scope consistency check, not a comparison
+    // against identifierUris, so no amount of reshaping the value would have worked.
     //
     // Indexer lookups on IQueryCollection are case-insensitive, so an oddly-cased `RESOURCE` is
     // validated here too — and refused if it does not match. When the parameter is terminated the

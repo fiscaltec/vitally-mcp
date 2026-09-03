@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VitallyMcp;
 
@@ -27,7 +28,8 @@ public class ToolAuthorizerTests
         bool noAuth = false,
         ClaimsPrincipal? user = null,
         ToolAuthorizationOptions? options = null,
-        IGroupPermissionResolver? resolver = null)
+        IGroupPermissionResolver? resolver = null,
+        ILogger<ToolAuthorizer>? logger = null)
     {
         var accessor = new HttpContextAccessor
         {
@@ -37,7 +39,8 @@ public class ToolAuthorizerTests
             Options.Create(options ?? new ToolAuthorizationOptions { Enabled = enabled }),
             Options.Create(new OAuthOptions { NoAuth = noAuth }),
             accessor,
-            resolver);
+            resolver,
+            logger);
     }
 
     private static ClaimsPrincipal UserWithPermissions(params string[] permissions) =>
@@ -223,6 +226,34 @@ public class ToolAuthorizerTests
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData(false)]  // resolver present, returns null  -> the "nothing usable" line
+    [InlineData(true)]   // resolver absent entirely        -> the "no resolver registered" line
+    public async Task LiveCheck_LogsItsDenialReasonOncePerRequest_NotOncePerEvaluation(bool noResolver)
+    {
+        // ToolAuthorizer is scoped, so one instance is one HTTP request — and a single tools/list
+        // evaluates authorisation once per tool (93 of them). Without the guard, one malformed token
+        // or one Graph outage buries the single line that explains the failure under 92 copies of
+        // itself, in exactly the logs someone is reading because authorisation is failing.
+        var logger = new CapturingLogger<ToolAuthorizer>();
+        var authorizer = Build(
+            user: UserWithSub(SubWithOid),
+            options: LiveOptions(),
+            resolver: noResolver ? null : new StubResolver(null),
+            logger: logger);
+
+        foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post, HttpMethod.Delete, HttpMethod.Get })
+        {
+            await authorizer.Invoking(a => a.EnsureAuthorizedAsync(method))
+                .Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+
+        logger.Entries.Should().ContainSingle().Which.Message
+            .Should().Contain("this request",
+                "the message describes the request's outcome, not one tool's tier — naming a permission "
+                + "would make a single line read as if only that tier were refused");
     }
 
     [Fact]

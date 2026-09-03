@@ -159,9 +159,10 @@ public class OAuthOptions
     /// <c>resource</c> without naming the resource some other way leaves the issued token bound to no
     /// audience at all — the proxy sends no <c>audience</c> parameter anywhere. Adding a
     /// resource-naming scope while still relaying <c>resource</c> is exactly the
-    /// <c>AADSTS9010010</c> failure this exists to avoid: Entra matches <c>resource</c> exactly
-    /// against a registered identifier and rejects the trailing-slash form MCP clients send, which
-    /// <see cref="IsResourceIndicatorAllowed"/> deliberately accepts.
+    /// <c>AADSTS9010010</c> failure this exists to avoid: Entra's v2 authorize endpoint refuses any
+    /// <c>resource</c> that does not match the requested scopes, and every spelling of ours fails
+    /// that check — it is not a comparison against the registered identifier, so reshaping the value
+    /// is not an option.
     /// </para>
     /// <para>
     /// So this is the provider switch, expressed as configuration rather than inferred from

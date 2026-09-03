@@ -58,7 +58,7 @@ variable "oauth_resource" {
 
 variable "oauth_upstream_resource_scope" {
   type        = string
-  description = "Scope naming this server's API upstream. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, which rejects the trailing-slash form clients send (AADSTS9010010). Empty on Auth0."
+  description = "Scope naming this server's API upstream. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty on Auth0."
   default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 

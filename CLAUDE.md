@@ -990,6 +990,12 @@ Three things about it that are deliberate and shouldn't be "tidied":
 
 - **No normalisation anywhere.** Trailing slashes and case are compared literally, because that is
   what clients do — a check that tolerated a difference would pass configurations clients reject.
+- **A first manual run against staging can fail spuriously, and it is not a regression.** Staging is
+  `minReplicas: 0`, the script retries each *fetch* only twice, and a cold start can burn both — the
+  symptom is `200 but the body is not valid JSON` on the protected-resource documents, which look
+  perfectly valid the moment you curl them by hand. CI never sees it because the `/health` smoke runs
+  first and warms the replica. Warm it yourself (`curl <origin>/health`) before reading anything into
+  a manual failure.
 - **It is invoked through `bash`**, not by its executable bit. The repo is authored on Windows with
   `core.filemode=false`, so an edit can silently drop the mode; relying on it would surface as
   "Permission denied" during a deploy rather than in review.

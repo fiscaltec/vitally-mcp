@@ -38,11 +38,12 @@ public class OAuthProxyResourceTerminationTests : IClassFixture<OAuthProxyResour
     [InlineData("https://vitally.example.com/")]
     public async Task Authorize_DropsAMatchingResourceInsteadOfForwardingIt(string resource)
     {
-        // The failure this prevents is AADSTS9010010: Entra matches `resource` exactly against a
-        // registered identifier and rejects the trailing-slash form MCP clients send — which
-        // IsResourceIndicatorAllowed deliberately accepts, because that slash is the difference
-        // between what Entra will register and what Claude Code normalises to. Both spellings are
-        // exercised: the parameter has to disappear whichever one arrives.
+        // The failure this prevents is AADSTS9010010, and it is not slash-specific: Entra's v2
+        // authorize endpoint refuses any `resource` that does not match the requested scopes, and
+        // against the live tenant the slashed form, the exact App ID URI and an unregistered value
+        // all returned 400 alike. Both spellings are exercised here because
+        // IsResourceIndicatorAllowed accepts both — so both reach this point, and the parameter has
+        // to disappear whichever one arrives.
         using var client = NoRedirect(_factory);
 
         var response = await client.GetAsync(
