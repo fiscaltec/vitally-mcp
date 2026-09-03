@@ -273,6 +273,18 @@ public class OAuthOptions
                 $"OAuth:UpstreamResourceScope must be a single scope token with no whitespace (got '{UpstreamResourceScope}').");
         }
 
+        // Both halves of the switch live in the proxy — /oauth/authorize and /oauth/token are the
+        // only places `resource` is dropped and this scope injected. Without a SharedClientId there
+        // is no proxy, so the setting would do nothing while still being advertised in
+        // `scopes_supported`: a configuration that reads as switched on and is not. Refusing it is
+        // the same rule as SharedClientSecret below, for the same reason.
+        if (TerminatesResourceParameter && !proxyEnabled)
+        {
+            throw new InvalidOperationException(
+                "OAuth:UpstreamResourceScope requires OAuth:SharedClientId to also be set — it only takes "
+                + "effect in the OAuth proxy, which is inactive without one.");
+        }
+
         // Normalise the allowlist: trim, strip trailing slashes (we match by prefix below so
         // both stored and incoming values need the same shape), and fail fast on invalid URIs
         // rather than at first request.

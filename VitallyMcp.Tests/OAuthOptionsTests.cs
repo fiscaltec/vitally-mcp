@@ -363,11 +363,12 @@ public class OAuthOptionsTests
         {
             Authority = "https://example.auth0.com/",
             Audience = "https://api.example.com",
+            SharedClientId = "test-client-id",
             UpstreamResourceScope = "https://api.example.com/mcp.access openid"
         };
 
         options.Invoking(o => o.Validate()).Should().Throw<InvalidOperationException>()
-            .WithMessage("*UpstreamResourceScope*");
+            .WithMessage("*whitespace*");
     }
 
     [Fact]
@@ -377,6 +378,7 @@ public class OAuthOptionsTests
         {
             Authority = "https://example.auth0.com/",
             Audience = "https://api.example.com",
+            SharedClientId = "test-client-id",
             UpstreamResourceScope = "  https://api.example.com/mcp.access  "
         };
         options.Validate();
@@ -409,6 +411,24 @@ public class OAuthOptionsTests
 
         options.MergeUpstreamScope("openid HTTPS://API.EXAMPLE.COM/MCP.ACCESS")
             .Should().Be("openid HTTPS://API.EXAMPLE.COM/MCP.ACCESS");
+    }
+
+    [Fact]
+    public void Validate_RejectsAnUpstreamResourceScopeWithNoProxyToApplyIt()
+    {
+        // Both halves of the switch live in /oauth/authorize and /oauth/token, so with no
+        // SharedClientId the setting does nothing — while `scopes_supported` still advertises the
+        // scope, making the configuration read as switched on. Fail at boot rather than let someone
+        // conclude from the metadata document that termination is happening.
+        var options = new OAuthOptions
+        {
+            Authority = "https://example.auth0.com/",
+            Audience = "https://api.example.com",
+            UpstreamResourceScope = "https://api.example.com/mcp.access"
+        };
+
+        options.Invoking(o => o.Validate()).Should().Throw<InvalidOperationException>()
+            .WithMessage("*SharedClientId*");
     }
 
     // ---- ValidAudiences ----
