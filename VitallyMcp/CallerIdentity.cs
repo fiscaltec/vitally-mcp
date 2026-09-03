@@ -18,8 +18,9 @@ namespace VitallyMcp;
 /// subject — unique per (user, application), opaque, and <b>not resolvable to a person</b>: there is
 /// no Entra lookup that takes one. <c>oid</c> is the directory object id, stable across every
 /// application in the tenant and resolvable with <c>az ad user show --id</c>, while carrying no more
-/// personal data than the pairwise value does. Verified against a real staging token on 2026-09-03,
-/// which is what surfaced this: `sub` was `pVp-4kbv…`, an identifier nothing can attribute.
+/// personal data than the pairwise value does. Surfaced on 2026-09-03 by decoding a token from the
+/// staging sign-in: its <c>sub</c> was a random-looking base64url string that nothing can attribute,
+/// sitting alongside an <c>oid</c> that resolves in one command.
 /// </para>
 /// <para>
 /// The <c>sub</c> fallback exists for Auth0-shaped subjects (<c>waad|connection|{objectId}</c>),
