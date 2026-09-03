@@ -96,7 +96,14 @@ if (!noAuth)
         .Configure<IOptions<OAuthOptions>>((jwt, oauth) =>
         {
             jwt.Authority = oauth.Value.Authority;
-            jwt.Audience = oauth.Value.Audience;
+            // ValidAudiences rather than the single-valued jwt.Audience: which audience a provider
+            // stamps on an access token is a property of the token version, not of our config. An
+            // Entra v1 token names the App ID URI (OAuth:Audience); a v2 token names the resource
+            // application's appId GUID — which, because one registration is both our OAuth client
+            // and our API resource, is OAuth:SharedClientId. Accepting both settles it rather than
+            // betting on it, and stays correct on Auth0, where SharedClientId is simply a second
+            // audience nothing mints for this API. See OAuthOptions.ValidAudiences.
+            jwt.TokenValidationParameters.ValidAudiences = oauth.Value.ValidAudiences;
 
             // MCP requires the 401 to point at the protected-resource metadata document. Without
             // this, clients can only guess the well-known location. Built from PublicBaseUrl so a
@@ -345,7 +352,10 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
         userinfo_endpoint = endpoints.UserInfoEndpoint,
         jwks_uri = endpoints.JwksUri,
         registration_endpoint = $"{ourBase}/oauth/register",
-        scopes_supported = new[] { "openid", "profile", "email", "offline_access", "mcp.access" },
+        // Shared with the RFC 9728 document rather than restated, so the two lists cannot drift.
+        // The API scope is named in the form the upstream provider will actually accept — see
+        // ProtectedResourceMetadataBuilder.ScopesFor.
+        scopes_supported = ProtectedResourceMetadataBuilder.ScopesFor(o),
         response_types_supported = new[] { "code" },
         grant_types_supported = new[] { "authorization_code", "refresh_token" },
         token_endpoint_auth_methods_supported = new[] { "none" },
@@ -391,19 +401,28 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
         return Results.BadRequest(new { error = "invalid_request", error_description = "redirect_uri is not allowed" });
     }
 
-    // RFC 8707. `resource` is what binds the audience of the token that comes back: this proxy
-    // sends no `audience` parameter anywhere, and the Auth0 tenant's Resource Parameter
-    // Compatibility Profile consumes `resource` locally to that end. It arrived here
-    // unvalidated — so a client could ask to be bound to an audience this server never
-    // published, and we would relay the request. Refuse the mismatch instead; the value is
-    // still forwarded verbatim below, because dropping it is what would break Auth0 today.
-    // Terminating it at this façade belongs to the Entra cutover (#105 part B / #108), which is
-    // where Entra's exact-match rule against a non-slashed identifierUri starts to matter.
+    // RFC 8707. `resource` is what binds the audience of the token that comes back — this proxy
+    // sends no `audience` parameter anywhere — so a client must not be able to ask to be bound to
+    // an audience this server never published. Refuse a mismatch regardless of what happens to the
+    // value afterwards, because the check is about what we are willing to request, not about which
+    // provider consumes it.
+    //
+    // What happens afterwards is OAuth:UpstreamResourceScope's job. Empty (Auth0): the value is
+    // relayed verbatim, because the tenant's Resource Parameter Compatibility Profile consuming it
+    // is the only thing binding the audience there. Set (Entra): it is dropped here and the
+    // configured scope carries the same meaning instead, because Entra's v2 authorize endpoint
+    // refuses *any* `resource` alongside a custom-API `scope` — AADSTS9010010, "the resource
+    // parameter provided in the request doesn't match with the requested scopes". Verified against
+    // the live tenant on 2026-09-02: the slashed form, the exact App ID URI and an unregistered
+    // value all return 400 alike. It is a resource-vs-scope consistency check, not a comparison
+    // against identifierUris, so no amount of reshaping the value would have worked.
+    //
     // Indexer lookups on IQueryCollection are case-insensitive, so an oddly-cased `RESOURCE` is
-    // validated here too — and refused if it does not match. The forwarding loop below preserves
-    // the caller's key casing, so such a pair does travel upstream as-is; a conformant provider
-    // ignores it, because RFC 6749 defines parameter names as lowercase literals. #123 tracks
-    // stripping them rather than relying on that.
+    // validated here too — and refused if it does not match. When the parameter is terminated the
+    // forwarding loop drops it case-insensitively as well; when it is relayed, the loop preserves
+    // the caller's key casing and such a pair travels upstream as-is, which a conformant provider
+    // ignores because RFC 6749 defines parameter names as lowercase literals. #123 tracks stripping
+    // those rather than relying on it.
     if (query.ContainsKey("resource")
         && query["resource"].Any(value => !o.IsResourceIndicatorAllowed(value ?? string.Empty)))
     {
@@ -418,6 +437,11 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
 
     var ourCallback = $"{GetServerBaseUrl(ctx, o.PublicBaseUrl)}/oauth/callback";
     var endpoints = await upstream.GetAsync(ctx.RequestAborted);
+    // Repeated `scope` is not legal OAuth, but a client that sends it means the union — so join on
+    // a space rather than letting StringValues.ToString() comma-splice the values into one token.
+    var mergedScope = o.TerminatesResourceParameter
+        ? o.MergeUpstreamScope(string.Join(' ', query["scope"].Select(v => v ?? string.Empty)))
+        : null;
     // The provider is free to publish an authorization_endpoint that already carries a query
     // (nothing in OIDC Discovery forbids it), so pick the separator rather than assuming '?'.
     var separator = endpoints.AuthorizationEndpoint.Contains('?') ? '&' : '?';
@@ -429,10 +453,23 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
         // re-prompt every session even when a user_grant already exists. Without prompt=*
         // Auth0 honours the cached grant and silently issues an authorization code.
         if (kv.Key == "prompt") continue;
+        if (mergedScope is not null
+            && (string.Equals(kv.Key, "resource", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kv.Key, "scope", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Terminated here (`resource`) or re-emitted once below in merged form (`scope`).
+            // OrdinalIgnoreCase and not ==: a `RESOURCE` that survived would defeat the whole point
+            // of dropping it, and letting a `SCOPE` through would put two scope parameters upstream.
+            continue;
+        }
         foreach (var v in kv.Value)
         {
             sb.Append(Uri.EscapeDataString(kv.Key)).Append('=').Append(Uri.EscapeDataString(v ?? string.Empty)).Append('&');
         }
+    }
+    if (mergedScope is not null)
+    {
+        sb.Append("scope=").Append(Uri.EscapeDataString(mergedScope)).Append('&');
     }
     sb.Append("redirect_uri=").Append(Uri.EscapeDataString(ourCallback));
     return Results.Redirect(sb.ToString());
@@ -485,8 +522,8 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
 
     var form = await ctx.Request.ReadFormAsync();
     // Same audience-binding control as /oauth/authorize, applied to the form body — a refresh
-    // exchange can carry `resource` just as a code exchange can, and this endpoint forwarded it
-    // unvalidated too. See the comment there for why it is validated but still relayed.
+    // exchange can carry `resource` just as a code exchange can. See the comment there for what
+    // OAuth:UpstreamResourceScope then does with a value that passes.
     if (form.ContainsKey("resource")
         && form["resource"].Any(value => !o.IsResourceIndicatorAllowed(value ?? string.Empty)))
     {
@@ -497,6 +534,15 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
         });
     }
 
+    // Merged for both grants, not just refresh. On a refresh exchange it is load-bearing: Entra
+    // issues the new access token for whatever resource `scope` names, so a client that refreshes
+    // with only the OIDC scopes would silently be handed a token for the wrong audience. On a code
+    // exchange it is redundant but harmless — the scope was already consented at /oauth/authorize —
+    // and applying one rule to both is easier to keep true than a per-grant one.
+    var mergedScope = o.TerminatesResourceParameter
+        ? o.MergeUpstreamScope(string.Join(' ', form["scope"].Select(v => v ?? string.Empty)))
+        : null;
+
     var pairs = new List<KeyValuePair<string, string>>();
     var sawRedirect = false;
     foreach (var kv in form)
@@ -506,6 +552,14 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
             pairs.Add(new KeyValuePair<string, string>("redirect_uri", ourCallback));
             sawRedirect = true;
         }
+        else if (mergedScope is not null
+            && (string.Equals(kv.Key, "resource", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kv.Key, "scope", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Terminated (`resource`) or replaced by the merged value below (`scope`) — see the
+            // matching skip in /oauth/authorize.
+            continue;
+        }
         else
         {
             foreach (var v in kv.Value)
@@ -513,6 +567,10 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
                 pairs.Add(new KeyValuePair<string, string>(kv.Key, v ?? string.Empty));
             }
         }
+    }
+    if (mergedScope is not null)
+    {
+        pairs.Add(new KeyValuePair<string, string>("scope", mergedScope));
     }
     // Restrict the grants this proxy will service. We inject a confidential client_secret
     // below, so we must never forward a grant the shared app shouldn't service — otherwise a

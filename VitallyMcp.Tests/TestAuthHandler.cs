@@ -12,6 +12,13 @@ namespace VitallyMcp.Tests;
 public class TestAuthHandlerOptions : AuthenticationSchemeOptions
 {
     public string[] Permissions { get; set; } = [];
+
+    /// <summary>
+    /// Entra object id to emit as an <c>oid</c> claim. Leave null for the claim-only principal most
+    /// tests want; set it when the test needs <see cref="ToolAuthorizer"/> to take the live group
+    /// path, which is skipped entirely when no object id can be determined.
+    /// </summary>
+    public string? ObjectId { get; set; }
 }
 
 /// <summary>
@@ -35,6 +42,10 @@ public class TestAuthHandler(
             new("sub", "test-subject")
         };
         claims.AddRange(Options.Permissions.Select(p => new Claim("permissions", p)));
+        if (!string.IsNullOrWhiteSpace(Options.ObjectId))
+        {
+            claims.Add(new Claim("oid", Options.ObjectId));
+        }
 
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);

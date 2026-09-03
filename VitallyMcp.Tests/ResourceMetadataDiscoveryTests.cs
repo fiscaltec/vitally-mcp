@@ -105,8 +105,9 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
         root.TryGetProperty("scopes_supported", out var scopes).Should().BeTrue(
             "clients use this to request the right scopes up front");
         scopes.EnumerateArray().Select(e => e.GetString()).Should()
-            .BeEquivalentTo(ProtectedResourceMetadataBuilder.SupportedScopes,
-                "the advertised scopes must match the builder's list exactly, with no duplicates");
+            .BeEquivalentTo(ProtectedResourceMetadataBuilder.BaseScopes.Append("mcp.access"),
+                "the advertised scopes must match the builder's list exactly, with no duplicates; "
+                + "this fixture leaves OAuth:UpstreamResourceScope unset, so the API scope is the bare Auth0 form");
     }
 
     [Theory]

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace VitallyMcp;
@@ -11,20 +12,27 @@ namespace VitallyMcp;
 /// (including search) is a GET and every mutation is a POST/PUT/DELETE, the HTTP verb is a
 /// faithful proxy for the tool's read/write/delete tier.
 ///
-/// Permission resolution order:
-///   1. If <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> is on, the caller's <b>live</b>
-///      Entra group membership (via <see cref="IGroupPermissionResolver"/>) — so group changes
-///      take effect within the cache window regardless of token age. The resolver answers from its
-///      own fresh cache, and on a Graph failure from that caller's last known-good set for up to
-///      <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>.
-///   2. Otherwise — the live check is off, no object id could be determined, or the resolver has
-///      nothing usable at all — the token's permission claim / scope.
+/// Permission resolution has two modes, chosen by
+/// <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> and never mixed:
+///   1. <b>Live group check on</b> (every deployed target): permissions come from the caller's
+///      current Entra group membership via <see cref="IGroupPermissionResolver"/>, which answers
+///      from its own fresh cache and, when a Graph call fails, from that caller's last known-good
+///      set for up to <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>. So the tiers are
+///      <b>fresh Graph → stale Graph → deny</b>. Nothing in the token can grant access.
+///   2. <b>Live group check off</b>: the token's permission claim / scope, for deployments with no
+///      Graph reachability that accept a token-frozen entitlement.
 ///
-/// So the effective tiers are: fresh Graph → stale Graph → token claim → deny. The claim tier is the
-/// Auth0 post-login Action's <c>permissions</c> claim, which still authorises correctly today; it
-/// becomes permanently empty at the Entra cutover, and removing it there is #108's job. Until then
-/// the tier below the stale cache is a working fallback, not a formality — which is why the stale
-/// cache was added beneath it rather than in place of it.
+/// <para>Which mode applies is decided by that one flag alone. A missing resolver does not quietly
+/// select mode 2 — it denies, because a miswired container silently reverting to token claims is
+/// exactly the posture this arrangement exists to rule out.</para>
+///
+/// <para>The token claim used to sit beneath the stale cache as a third tier in mode 1. It was the
+/// Auth0 post-login Action's <c>permissions</c> claim, and while Auth0 issued the tokens it genuinely
+/// authorised — which is why #106 added the stale cache beneath it rather than in place of it. The
+/// Entra cutover (#108) retired the Action, so that claim is now permanently absent and a
+/// fall-through to it could only ever deny. Keeping it would have left code that reads like a working
+/// fallback and behaves like a silent denial; the explicit deny below says what actually happens, and
+/// logs why.</para>
 /// </summary>
 public class ToolAuthorizer
 {
@@ -32,17 +40,31 @@ public class ToolAuthorizer
     private readonly bool _noAuth;
     private readonly IHttpContextAccessor? _httpContextAccessor;
     private readonly IGroupPermissionResolver? _groupResolver;
+    private readonly ILogger<ToolAuthorizer>? _logger;
+
+    // One line per request per cause, not one per evaluation. This service is scoped, so an instance
+    // is exactly one HTTP request — and a single tools/list evaluates authorisation once per tool
+    // (93 of them), so an unguarded warning turns one malformed token or one Graph outage into 93
+    // identical lines per request. That is not merely noisy: it buries the one line that says what
+    // went wrong under its own repetitions, in the logs someone is reading precisely because
+    // authorisation is failing. A benign race between concurrent evaluations can at worst emit a
+    // second line, which is why a plain bool is enough and Interlocked would be theatre.
+    private bool _loggedNoResolver;
+    private bool _loggedNoObjectId;
+    private bool _loggedUnresolvable;
 
     public ToolAuthorizer(
         IOptions<ToolAuthorizationOptions> options,
         IOptions<OAuthOptions> oauth,
         IHttpContextAccessor? httpContextAccessor = null,
-        IGroupPermissionResolver? groupResolver = null)
+        IGroupPermissionResolver? groupResolver = null,
+        ILogger<ToolAuthorizer>? logger = null)
     {
         _options = options.Value;
         _noAuth = oauth.Value.NoAuth;
         _httpContextAccessor = httpContextAccessor;
         _groupResolver = groupResolver;
+        _logger = logger;
     }
 
     /// <summary>
@@ -78,28 +100,76 @@ public class ToolAuthorizer
     }
 
     /// <summary>
-    /// Resolves whether <paramref name="user"/> effectively holds <paramref name="required"/>, using
-    /// the live Entra group lookup when enabled and falling back to the token claim. Public so the
+    /// Resolves whether <paramref name="user"/> effectively holds <paramref name="required"/> — from
+    /// the live Entra group lookup when it is enabled, and from the token claim only when it is not.
+    /// There is no path from the former to the latter: see the class remarks. Public so the
     /// ASP.NET Core authorization policy handler can share exactly this resolution — the discovery
     /// filter and the <see cref="VitallyService"/> enforcement backstop must never disagree.
     /// </summary>
     public async Task<bool> HasEffectivePermissionAsync(ClaimsPrincipal user, string required, CancellationToken cancellationToken = default)
     {
-        if (_options.LiveGroupCheck && _groupResolver is not null)
+        if (_options.LiveGroupCheck)
         {
-            var objectId = ExtractObjectId(user);
-            if (objectId is not null)
+            // Fail closed: with the live check on, Graph is the *only* source of entitlement, so
+            // every way out of this block that is not an answer from Graph is a denial. Each is
+            // logged once per request rather than quietly returning false — after the cutover they
+            // are the only ways a correctly signed-in user can be refused everything, and none of
+            // them is visible in the audit record, which reports the denial and not its cause. The
+            // messages name no permission, because the outcome is not tier-specific: whichever tool
+            // was evaluated first, the answer for every other one is the same.
+            //
+            // The resolver being absent is deliberately part of that rule and not a reason to leave
+            // the block. Testing it in the condition above would have handed a miswired container
+            // back to the token claim — a silent downgrade to the posture this cutover removed,
+            // reached by the one route where nobody is watching.
+            if (_groupResolver is null)
             {
-                var live = await _groupResolver.TryResolvePermissionsAsync(objectId, cancellationToken);
-                if (live is not null)
+                if (!_loggedNoResolver)
                 {
-                    // Authoritative when the live lookup succeeds (empty set => deny).
-                    return live.Contains(required);
+                    _loggedNoResolver = true;
+                    _logger?.LogError(
+                        "Denying all tool access for this request: Authorization:LiveGroupCheck is enabled "
+                        + "but no IGroupPermissionResolver is registered, so entitlement cannot be resolved at all.");
                 }
-                // live == null => the resolver had neither a fresh nor a usable stale result,
-                // so fall through to the token claim. Not merely "Graph was slow": the stale window
-                // has already been considered and declined by this point.
+                return false;
             }
+
+            var objectId = ExtractObjectId(user);
+            if (objectId is null)
+            {
+                // An Entra v2 token always carries `oid`. Reaching here means the token is not
+                // shaped as expected (or inbound claim mapping has changed), not that the user lacks
+                // a tier — so it is worth its own line.
+                if (!_loggedNoObjectId)
+                {
+                    _loggedNoObjectId = true;
+                    _logger?.LogWarning(
+                        "Denying all tool access for this request: no Entra object id could be determined from "
+                        + "the caller's token, and Authorization:LiveGroupCheck makes the live group lookup the "
+                        + "only source of entitlement.");
+                }
+                return false;
+            }
+
+            var live = await _groupResolver.TryResolvePermissionsAsync(objectId, cancellationToken);
+            if (live is null)
+            {
+                // The resolver had neither a fresh result nor a usable stale one — it has already
+                // considered and declined the stale window by this point, and logged the underlying
+                // Graph failure itself. Subject id only, never the caller's email (see AuditOptions).
+                if (!_loggedUnresolvable)
+                {
+                    _loggedUnresolvable = true;
+                    _logger?.LogWarning(
+                        "Denying all tool access for this request for {UserObjectId}: the live group lookup "
+                        + "returned nothing usable and there is no other source of entitlement.",
+                        objectId);
+                }
+                return false;
+            }
+
+            // Authoritative when the live lookup succeeds (empty set => deny).
+            return live.Contains(required);
         }
 
         return HasPermission(user, required, _options.CustomPermissionsClaim);
@@ -161,10 +231,15 @@ public class ToolAuthorizer
     public Task<bool> IsAuthorizationBypassedAsync() => Task.FromResult(!_options.Enabled || _noAuth);
 
     /// <summary>
-    /// True if the principal carries <paramref name="required"/> as an Auth0 RBAC <c>permissions</c>
-    /// claim entry, as an entry in the optional <paramref name="customClaimType"/> claim, or as a
-    /// space-delimited value in the <c>scope</c> claim.
+    /// True if the principal carries <paramref name="required"/> as a <c>permissions</c> claim entry,
+    /// as an entry in the optional <paramref name="customClaimType"/> claim, or as a space-delimited
+    /// value in the <c>scope</c> claim.
     /// </summary>
+    /// <remarks>
+    /// Reached only when <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> is off, where it is
+    /// that mode's entire resolution rather than a fallback beneath the live check. See the class
+    /// remarks for why there is no longer a fall-through from the live path to here.
+    /// </remarks>
     public static bool HasPermission(ClaimsPrincipal user, string required, string? customClaimType = null)
     {
         if (user.FindAll("permissions").Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))

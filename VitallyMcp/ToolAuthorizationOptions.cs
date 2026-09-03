@@ -6,9 +6,10 @@ namespace VitallyMcp;
 /// hard backstop behind the advisory <c>ReadOnly</c>/<c>Destructive</c> tool flags — those flags
 /// only guide MCP clients; this enforces access regardless of what the client does.
 ///
-/// Permission strings must match the permissions defined on the Auth0 API (Resource Server) with
-/// "Enable RBAC" + "Add Permissions in the Access Token" turned on. To collapse to two tiers,
-/// point <see cref="DeletePermission"/> at the same value as <see cref="WritePermission"/>.
+/// The permission strings are internal names, not something an identity provider issues: with
+/// <see cref="LiveGroupCheck"/> on they are produced by mapping Entra group membership to tiers in
+/// <see cref="GraphGroupPermissionResolver"/>. To collapse to two tiers, point
+/// <see cref="DeletePermission"/> at the same value as <see cref="WritePermission"/>.
 /// </summary>
 public class ToolAuthorizationOptions
 {
@@ -39,12 +40,16 @@ public class ToolAuthorizationOptions
     public string DeletePermission { get; set; } = "vitally:delete";
 
     /// <summary>
-    /// Optional namespaced claim that may carry the permission values, in addition to the standard
-    /// Auth0 RBAC <c>permissions</c> claim and the space-delimited <c>scope</c> claim. Use this when
-    /// an Auth0 post-login Action maps Entra group membership to permissions via a custom claim
-    /// rather than Auth0 role assignment. Auth0 requires custom claims to be namespaced (a URL on a
-    /// domain you control). Leave empty to check only <c>permissions</c> and <c>scope</c>.
+    /// Optional namespaced claim that may carry the permission values, alongside the <c>permissions</c>
+    /// claim and the space-delimited <c>scope</c> claim. Leave empty to check only those two.
     /// </summary>
+    /// <remarks>
+    /// <b>Consulted only when <see cref="LiveGroupCheck"/> is false.</b> It exists for the
+    /// namespaced-custom-claim convention (Auth0 required custom claims to be namespaced on a domain
+    /// you control), and the Auth0 post-login Action that minted it here was retired at the #108
+    /// cutover — so on every deployed target this value is inert, and no claim of any kind can grant
+    /// access. See <see cref="ToolAuthorizer"/>.
+    /// </remarks>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
 
     /// <summary>
@@ -53,11 +58,12 @@ public class ToolAuthorizationOptions
     /// the frozen token claim — so group changes (grants and especially revocations) take effect
     /// within the cache window regardless of token age.
     ///
-    /// On a Graph failure the resolution degrades in two steps rather than one: the caller's last
-    /// known-good permission set is served for up to <see cref="LiveGroupStaleSeconds"/>, and only
-    /// when there is no such copy does it fall through to the token claim. Never fail-open — an
-    /// empty set and an empty claim both deny. Requires the server's managed identity to hold
-    /// Microsoft Graph <c>GroupMember.Read.All</c>.
+    /// On a Graph failure the caller's last known-good permission set is served for up to
+    /// <see cref="LiveGroupStaleSeconds"/>; when there is no such copy the call is <b>denied</b>.
+    /// There is no third tier — the token claim was removed at the #108 cutover, once the Auth0
+    /// Action that minted it was retired and it could only ever have denied anyway. Never
+    /// fail-open: an empty set denies just as a missing one does. Requires the server's managed
+    /// identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
     /// </summary>
     public bool LiveGroupCheck { get; set; }
 
@@ -69,12 +75,12 @@ public class ToolAuthorizationOptions
     /// being fresh, so a Microsoft Graph outage degrades to the caller's last known-good tier instead
     /// of denying them. Default 3600; <b>0 disables stale serving</b> entirely.
     ///
-    /// This exists because Graph becomes the sole source of entitlement once Auth0 is retired
-    /// (#102/#106), at which point the token-claim fall-through is always empty and a Graph outage
-    /// would deny every user. Bounded staleness is the trade being made: a revoked user could retain
-    /// access for up to this window, but only while Graph is unavailable — a better failure mode than
-    /// a total outage, and strictly tighter than the 8-hour frozen token claim the architecture
-    /// tolerated before the live check existed.
+    /// Graph is now the sole source of entitlement (#102/#106/#108), so without this a Graph outage
+    /// would deny every user outright. Bounded staleness is the trade being made: a revoked user
+    /// could retain access for up to this window, but only while Graph is unavailable — a better
+    /// failure mode than a total outage, and strictly tighter than the 8-hour frozen token claim the
+    /// architecture tolerated before the live check existed. Setting it to 0 restores the
+    /// deny-immediately behaviour, at the cost of that protection.
     ///
     /// Distinct from <see cref="LiveGroupCacheSeconds"/> on purpose: that one governs how long a
     /// result is served <i>without asking Graph</i>, and lengthening it would slow revocation

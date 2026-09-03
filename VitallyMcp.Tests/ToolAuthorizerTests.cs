@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VitallyMcp;
 
@@ -27,7 +28,8 @@ public class ToolAuthorizerTests
         bool noAuth = false,
         ClaimsPrincipal? user = null,
         ToolAuthorizationOptions? options = null,
-        IGroupPermissionResolver? resolver = null)
+        IGroupPermissionResolver? resolver = null,
+        ILogger<ToolAuthorizer>? logger = null)
     {
         var accessor = new HttpContextAccessor
         {
@@ -37,7 +39,8 @@ public class ToolAuthorizerTests
             Options.Create(options ?? new ToolAuthorizationOptions { Enabled = enabled }),
             Options.Create(new OAuthOptions { NoAuth = noAuth }),
             accessor,
-            resolver);
+            resolver,
+            logger);
     }
 
     private static ClaimsPrincipal UserWithPermissions(params string[] permissions) =>
@@ -183,23 +186,85 @@ public class ToolAuthorizerTests
     }
 
     [Fact]
-    public async Task LiveCheck_FallsBackToClaim_WhenResolverUnavailable()
+    public async Task LiveCheck_Denies_WhenResolverUnavailable_EvenThoughTheTokenClaimWouldGrantIt()
     {
-        // Resolver returns null (e.g. Graph down) -> fall back to the token claim, which grants delete.
+        // The claim tier that used to sit beneath the stale cache is gone (#108). The resolver
+        // returning null means it had neither a fresh Graph result nor a usable stale one, and
+        // there is nothing below that any more — so this must deny despite a token claim that
+        // plainly grants delete. Asserting *with* the claim present is the whole point: a version
+        // that still consulted it would pass a test written without one.
         var resolver = new StubResolver(null);
         var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: resolver);
 
-        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
+        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
+            .Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*vitally:delete*");
     }
 
     [Fact]
-    public async Task LiveCheck_FallbackDenies_WhenResolverUnavailableAndClaimLacksPermission()
+    public async Task LiveCheck_Denies_WhenNoObjectIdCanBeDetermined_EvenThoughTheTokenClaimWouldGrantIt()
     {
-        var resolver = new StubResolver(null);
-        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:read"), options: LiveOptions(), resolver: resolver);
+        // Same fail-closed rule for the other way out of the live path. An Entra v2 token always
+        // carries `oid`, so a subject with no GUID in it is a malformed token rather than an
+        // un-entitled user — and before #108 it fell through to the claim, which here would allow.
+        var resolver = new StubResolver(new HashSet<string> { "vitally:delete" });
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            new[] { new Claim("sub", "not-a-guid"), new Claim("permissions", "vitally:delete") }, "Test"));
+        var authorizer = Build(user: user, options: LiveOptions(), resolver: resolver);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>();
+        resolver.LastObjectId.Should().BeNull("the resolver must not be called with a subject that is not an object id");
+    }
+
+    [Fact]
+    public async Task LiveCheck_Denies_WhenNoResolverIsRegistered_RatherThanFallingBackToTheClaim()
+    {
+        // The mode is chosen by the flag alone. Testing the resolver for null alongside it — which
+        // is how this was first written — hands a miswired container back to the token claim, a
+        // silent revert to the posture the cutover removed, by the one route nobody is watching.
+        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: null);
+
+        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData(false)]  // resolver present, returns null  -> the "nothing usable" line
+    [InlineData(true)]   // resolver absent entirely        -> the "no resolver registered" line
+    public async Task LiveCheck_LogsItsDenialReasonOncePerRequest_NotOncePerEvaluation(bool noResolver)
+    {
+        // ToolAuthorizer is scoped, so one instance is one HTTP request — and a single tools/list
+        // evaluates authorisation once per tool (93 of them). Without the guard, one malformed token
+        // or one Graph outage buries the single line that explains the failure under 92 copies of
+        // itself, in exactly the logs someone is reading because authorisation is failing.
+        var logger = new CapturingLogger<ToolAuthorizer>();
+        var authorizer = Build(
+            user: UserWithSub(SubWithOid),
+            options: LiveOptions(),
+            resolver: noResolver ? null : new StubResolver(null),
+            logger: logger);
+
+        foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post, HttpMethod.Delete, HttpMethod.Get })
+        {
+            await authorizer.Invoking(a => a.EnsureAuthorizedAsync(method))
+                .Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+
+        logger.Entries.Should().ContainSingle().Which.Message
+            .Should().Contain("this request",
+                "the message describes the request's outcome, not one tool's tier — naming a permission "
+                + "would make a single line read as if only that tier were refused");
+    }
+
+    [Fact]
+    public async Task ClaimTier_StillResolves_WhenTheLiveCheckIsOff()
+    {
+        // Removing the fall-through must not remove the mode. With LiveGroupCheck off the token
+        // claim is the entire resolution rather than a fallback beneath Graph, and a deployment
+        // configured that way has to keep working.
+        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), resolver: new StubResolver(null));
+
+        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
     }
 
     [Theory]

@@ -42,8 +42,8 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # The same Auth0 client as production, so this is the same secret value. The client's Allowed
-  # Callback URLs carry both origins' /oauth/callback; the proxy's callback is fixed per origin.
+  # The same Entra app registration as production, so this is the same secret value. Its redirect
+  # URIs carry both origins' /oauth/callback; the proxy's callback is fixed per origin.
   secret {
     name  = "oauth-shared-client-secret"
     value = var.oauth_shared_client_secret
@@ -102,19 +102,26 @@ resource "azurerm_container_app" "staging" {
         name  = "AZURE_CLIENT_ID"
         value = var.managed_identity_client_id
       }
-      # The one value that intentionally diverges from production during the migration: staging is
-      # pointed at Entra first (#108), production stays on Auth0 until staging has passed.
+      # Staging is pointed at a new identity provider first and production follows once it has
+      # passed; both are on Entra now that #108 has cut over.
       env {
         name  = "OAuth__Authority"
         value = var.staging_oauth_authority
       }
+      # Note this is *production's* App ID URI: one Entra registration serves both origins, so a
+      # staging token's `aud` names production. Resource below must still name the staging origin,
+      # so here the two diverge by host as well as by slash. See variables.tf.
       env {
         name  = "OAuth__Audience"
         value = var.staging_oauth_audience
       }
       env {
         name  = "OAuth__Resource"
-        value = var.staging_oauth_audience
+        value = var.staging_oauth_resource
+      }
+      env {
+        name  = "OAuth__UpstreamResourceScope"
+        value = var.oauth_upstream_resource_scope
       }
       env {
         name  = "OAuth__NoAuth"
