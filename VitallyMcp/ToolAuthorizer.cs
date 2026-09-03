@@ -22,6 +22,10 @@ namespace VitallyMcp;
 ///   2. <b>Live group check off</b>: the token's permission claim / scope, for deployments with no
 ///      Graph reachability that accept a token-frozen entitlement.
 ///
+/// <para>Which mode applies is decided by that one flag alone. A missing resolver does not quietly
+/// select mode 2 — it denies, because a miswired container silently reverting to token claims is
+/// exactly the posture this arrangement exists to rule out.</para>
+///
 /// <para>The token claim used to sit beneath the stale cache as a third tier in mode 1. It was the
 /// Auth0 post-login Action's <c>permissions</c> claim, and while Auth0 issued the tokens it genuinely
 /// authorised — which is why #106 added the stale cache beneath it rather than in place of it. The
@@ -93,13 +97,27 @@ public class ToolAuthorizer
     /// </summary>
     public async Task<bool> HasEffectivePermissionAsync(ClaimsPrincipal user, string required, CancellationToken cancellationToken = default)
     {
-        if (_options.LiveGroupCheck && _groupResolver is not null)
+        if (_options.LiveGroupCheck)
         {
             // Fail closed: with the live check on, Graph is the *only* source of entitlement, so
-            // every way out of this block that is not an answer from Graph is a denial. Both are
-            // logged rather than quietly returning false — after the cutover they are the only two
-            // ways a correctly signed-in user can be refused everything, and neither is visible in
+            // every way out of this block that is not an answer from Graph is a denial. Each is
+            // logged rather than quietly returning false — after the cutover they are the only ways
+            // a correctly signed-in user can be refused everything, and none of them is visible in
             // the audit record, which reports the denial and not its cause.
+            //
+            // The resolver being absent is deliberately part of that rule and not a reason to leave
+            // the block. Testing it in the condition above would have handed a miswired container
+            // back to the token claim — a silent downgrade to the posture this cutover removed,
+            // reached by the one route where nobody is watching.
+            if (_groupResolver is null)
+            {
+                _logger?.LogError(
+                    "Denying '{RequiredPermission}': Authorization:LiveGroupCheck is enabled but no "
+                    + "IGroupPermissionResolver is registered, so entitlement cannot be resolved at all.",
+                    required);
+                return false;
+            }
+
             var objectId = ExtractObjectId(user);
             if (objectId is null)
             {

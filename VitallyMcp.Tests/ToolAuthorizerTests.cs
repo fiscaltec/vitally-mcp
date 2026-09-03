@@ -214,6 +214,18 @@ public class ToolAuthorizerTests
     }
 
     [Fact]
+    public async Task LiveCheck_Denies_WhenNoResolverIsRegistered_RatherThanFallingBackToTheClaim()
+    {
+        // The mode is chosen by the flag alone. Testing the resolver for null alongside it — which
+        // is how this was first written — hands a miswired container back to the token claim, a
+        // silent revert to the posture the cutover removed, by the one route nobody is watching.
+        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: null);
+
+        await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [Fact]
     public async Task ClaimTier_StillResolves_WhenTheLiveCheckIsOff()
     {
         // Removing the fall-through must not remove the mode. With LiveGroupCheck off the token

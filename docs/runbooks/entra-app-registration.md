@@ -1,10 +1,12 @@
 # Entra app registration — Vitally MCP (#107)
 
-The app registration that replaces the Auth0 client + Resource Server pair at the #108 cutover. It is
-**both** the shared OAuth client and the API resource, because that is what the proxy's
-`SharedClientId` / `SharedClientSecret` model expects.
+The app registration that **replaced** the Auth0 client + Resource Server pair at the #108 cutover on
+2026-09-03. It is **both** the shared OAuth client and the API resource, because that is what the
+proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
+valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
+Live since 2026-09-03.
 
 | | |
 |---|---|
@@ -73,9 +75,9 @@ az rest --method post \
   --headers "Content-Type=application/json" --body @body.json
 ```
 
-Add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` in the same change, and do the
-equivalent on `FISCAL IT Auth0` until the cutover completes — until then, Auth0 is still the live
-sign-in path and this app gates nothing.
+Add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` in the same change. Until the
+Auth0 rollback path is retired, do the equivalent on `FISCAL IT Auth0` too — not because Auth0 gates
+anything today (it does not), but so a rollback does not silently lock the new department out.
 
 Verify at any time:
 
@@ -155,6 +157,11 @@ own creation on 2026-08-18, not from the day it was changed), and this secret wa
 >   --name entra-mcp-client-secret --expires "2027-03-01T13:18:59Z"
 > ```
 
+> **Resolve the egress IP with `curl -4`.** This workstation egresses over IPv6 by default now, and
+> Key Vault network ACLs accept IPv4 only — an unqualified `curl https://ifconfig.me` returns an IPv6
+> address and `az keyvault network-rule add` fails outright with *"Invalid IPv4 address"*. That one is
+> at least loud; the quiet failure is the stale-address case below.
+>
 > **The vault's data plane is private-endpoint only** (`publicNetworkAccess: Disabled`,
 > `networkAcls.defaultAction: Deny`, no IP or VNet rules). A `secret set` from a workstation fails
 > with `ForbiddenByConnection` — a *network* denial, independent of RBAC, so Global Administrator
@@ -246,26 +253,66 @@ configuration — worth raising after #108 rather than during it.
   a separate object in `identity.tf`.
 - **No implicit grant.** Authorization code + PKCE only.
 
-## At the cutover (#108)
+## The cutover (#108) — done 2026-09-03
 
-This app is inert until then — nothing about the live Auth0 path changes by its existence. The
-cutover is config-only:
+Config-only, as designed. The variable table and the rollback live in **CLAUDE.md**, under *The
+Auth0 → Entra cutover (#108) and its rollback*; the per-target values are in
+`infra/terraform/variables.tf`. What belongs here is what the cutover **learned about this
+registration**, since that is what the next person changing it needs.
 
-| Setting | Auth0 (today) | Entra |
-|---|---|---|
-| `OAuth__Authority` | `https://fiscal-it.uk.auth0.com/` | `https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0` |
-| `OAuth__Audience` | `https://vitally.fiscaltec.com/` | `https://vitally.fiscaltec.com` (**no slash**) |
-| `OAuth__Resource` | `https://vitally.fiscaltec.com/` | unchanged — **still with the slash** |
-| `OAuth__SharedClientId` | Auth0 client | `c3812e7d-a413-4169-b57e-803326611ba3` |
-| `OAuth__SharedClientSecret` | `auth0-shared-client-secret` | `entra-mcp-client-secret` |
+### `resource` had to be dropped, not reshaped — and the reason recorded earlier was wrong
 
-Staging flips first. Note that staging's token `aud` will be *production's* App ID URI, since one
-registration serves both origins — that is expected, and is why `Audience` and `Resource` diverge by
-host as well as by slash there.
+#105 shipped validation only, relaying the parameter because on Auth0 the relay was the only thing
+binding the token audience. The note here predicted the relay would fail under Entra "because Entra
+matches `resource` exactly against a registered identifier and will not accept the trailing-slash
+form". Driving `/oauth2/v2.0/authorize` against the live tenant on 2026-09-02 showed something
+different, and more absolute:
 
-**#108 also has to stop forwarding the RFC 8707 `resource` parameter.** #105 shipped validation only:
-the proxy checks `resource` and still relays it, because on Auth0 that relay is the only thing binding
-the token audience. Under Entra the relay *fails* — Entra matches `resource` exactly against a
-registered identifier and will not accept the trailing-slash form clients send (`AADSTS9010010`). So
-"the proxy consumes `resource` locally" becomes true only when #108 lands, and the Auth0 tenant's
-*Resource Parameter Compatibility Profile* must stay enabled until it does.
+```
+error=invalid_target&error_description=AADSTS9010010: The resource parameter provided in the
+request doesn't match with the requested scopes.
+```
+
+| Request | Result |
+|---|---|
+| no `resource`, scope `openid profile` | 200, sign-in page |
+| `resource=https://vitally.fiscaltec.com/` | **400** |
+| `resource=https://vitally.fiscaltec.com` (the exact App ID URI) | **400** |
+| `resource=` anything unregistered | **400** |
+| `scope=openid mcp.access` (bare, unqualified) | 200, sign-in page |
+
+So the v2 endpoint cross-checks `resource` against `scope` — it is not comparing against
+`identifierUris` at all, and **the trailing slash is beside the point**. Dropping the parameter is
+required rather than tidier; normalising the slash would not have helped.
+
+The last row is the one worth remembering, because it fails the other way round: a bare `mcp.access`
+is *accepted* at `/authorize` and resolved against Microsoft Graph, so the flow completes and hands
+back a token for the wrong resource. A scope on a custom API must carry the App ID URI prefix, which
+is why both metadata documents advertise `https://vitally.fiscaltec.com/mcp.access` in
+`scopes_supported`.
+
+### The proxy names this API by scope now
+
+`OAuth:UpstreamResourceScope = https://vitally.fiscaltec.com/mcp.access`. That single value is what
+switches the proxy from relaying `resource` to terminating it — `resource` is still validated, and a
+value we never published is still refused with `invalid_target`. It is merged into `scope` on
+`/oauth/token` as well as `/oauth/authorize`, which matters on a **refresh**: Entra issues the new
+access token for whatever resource `scope` names.
+
+### `aud` is the appId, not the App ID URI
+
+`requestedAccessTokenVersion = 2`, and a v2 access token names the resource application's **appId
+GUID**. `OAuthOptions.ValidAudiences` therefore accepts both that and the App ID URI (which is what a
+v1 token would carry), so `OAuth:Audience` remaining the URI is correct and not the whole story.
+
+One consequence to be aware of rather than alarmed by: an **ID** token for this app carries the same
+`aud`, because one registration is both client and resource — so one presented as a bearer token
+passes audience validation. It is not an escalation (same client, same user, and entitlement is still
+the live Graph lookup), and narrowing it would mean requiring `scp`, a provider-specific rule in a
+deliberately provider-neutral class. Tracked separately rather than bundled into the cutover.
+
+### The Auth0 side is retained, not removed
+
+Its client, both Resource Servers and the `Vitally MCP claims` Action stay in place until production
+has soaked on Entra — deleting them early turns a one-command rollback into an outage. The tenant's
+*Resource Parameter Compatibility Profile* is now irrelevant to this server and can be left alone.
