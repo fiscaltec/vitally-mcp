@@ -7,13 +7,19 @@ namespace VitallyMcp;
 
 /// <summary>
 /// Emits per-user audit records for Vitally actions. Called from <see cref="VitallyService.SendAsync"/>
-/// so every tool is covered in one place. Records the authenticated identity as the stable subject
-/// id (the <c>sub</c> claim — an opaque Entra object id, resolvable to a person in Entra but not
-/// itself PII), the HTTP verb, target resource path and outcome. Deliberately logs neither the
-/// user's email nor the request body, keeping personal data out of telemetry while remaining fully
-/// attributable. Uses structured logging so the named properties surface as queryable dimensions
-/// in Application Insights / Log Analytics.
+/// so every tool is covered in one place. Records the caller's Entra <b>object id</b> (see
+/// <see cref="CallerIdentity"/>), the HTTP verb, target resource path and outcome. Deliberately logs
+/// neither the user's email nor the request body, keeping personal data out of telemetry while
+/// remaining fully attributable. Uses structured logging so the named properties surface as queryable
+/// dimensions in Application Insights / Log Analytics.
 /// </summary>
+/// <remarks>
+/// The object id rather than <c>sub</c>, which is what this used to record. An Entra v2 <c>sub</c> is
+/// a <i>pairwise</i> identifier — unique per (user, application) and not resolvable to a person by
+/// any Entra lookup — so an audit trail keyed on it is consistent but unattributable, which defeats
+/// the point. Found by decoding a real staging token during the #108 cutover validation, before the
+/// production flip could start writing such records.
+/// </remarks>
 public class AuditLogger
 {
     private readonly AuditOptions _options;
@@ -86,9 +92,9 @@ public class AuditLogger
             ResolveUserId(user), toolName ?? "unknown", requiredPermission);
     }
 
-    // Resolve the stable, attributable actor identity: the Entra subject id. This is an opaque
-    // object id (resolvable to a person in Entra) rather than the user's email, so the audit trail
-    // stays fully attributable without scattering personal data through telemetry.
+    // Resolve the stable, attributable actor identity: the caller's Entra object id — a GUID that
+    // resolves to a person via `az ad user show --id`, and carries no more personal data than the
+    // opaque alternative does.
     private string ResolveUserId() => ResolveUserId(_httpContextAccessor?.HttpContext?.User);
 
     // Same rule applied to an explicitly supplied principal, so callers that already hold one (the
@@ -100,7 +106,12 @@ public class AuditLogger
             return "anonymous";
         }
 
-        return user.FindFirst("sub")?.Value
+        // The raw subject remains the fallback rather than being dropped: a token shape carrying no
+        // object id would otherwise attribute to "unknown", and a consistent-but-opaque key is worth
+        // more than none. It is the fallback and not the primary because an Entra v2 `sub` cannot be
+        // resolved to a person — see CallerIdentity.
+        return CallerIdentity.TryGetObjectId(user)
+            ?? user.FindFirst("sub")?.Value
             ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? "unknown";
     }
