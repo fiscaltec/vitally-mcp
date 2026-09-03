@@ -36,15 +36,24 @@ data "azuread_service_principal" "msgraph" {
   client_id = "00000003-0000-0000-c000-000000000000"
 }
 
-# The seven department groups that gate sign-in (Gate 1). Resolved by object id rather than by
-# display name: these ids were read off the `FISCAL IT Auth0` app's own assignments, so they are
-# provably the same groups that gate sign-in today and not merely same-named ones.
+# The eight department groups that gate sign-in (Gate 1). Resolved by object id rather than by
+# display name, so these are provably the same groups that gate sign-in today and not merely
+# same-named ones.
+#
+# THIS LIST MUST EQUAL `FISCAL IT Auth0`'s ASSIGNMENTS EXACTLY. It listed seven until 2026-09-03,
+# omitting Development Department — whose 15 members hold a reader tier via sg-vitally-readers, so
+# the #108 cutover would have signed every one of them out with AADSTS50105. The original comment
+# here claimed the ids "were read off the FISCAL IT Auth0 app's own assignments"; evidently they
+# were not, or the list would have had eight. Diff the two apps rather than trusting either
+# document — see the runbook. Once Auth0 is retired that cross-check is gone and this becomes the
+# only record.
 variable "entra_gate1_group_object_ids" {
   type        = map(string)
-  description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate."
+  description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate. Must match FISCAL IT Auth0's assignments while that app exists."
   default = {
     "Product Department"                     = "012658dd-392f-4d84-af07-f97937f3a23e"
     "IT & Security Department"               = "6ba9bf61-e959-4dd9-8a96-d477a35b0d03"
+    "Development Department"                 = "bff3e509-659a-41ca-b752-3c669768f2eb"
     "Project Management Department"          = "8f674635-754c-4543-8d9e-ef2afbbf0d90"
     "Customer Operations Department"         = "f573c6de-ddae-407c-889d-ae9eb172e7f0"
     "Executive Leadership Team Department"   = "6e6e48b2-8425-4f96-815d-3e739de648d4"
