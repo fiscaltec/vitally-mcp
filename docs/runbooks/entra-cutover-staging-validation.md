@@ -3,8 +3,12 @@
 `https://vitally-staging.fiscaltec.com` runs Entra-direct. This is the part of the acceptance suite
 that needs a real sign-in, and therefore a person.
 
-**Nothing here touches production.** Staging is a separate Container App; production is still on
-Auth0 until its five environment variables are flipped as a separate step.
+Written for the #108 cutover, but it is the standing checklist for **any** identity-provider change:
+staging is the pre-production target for exactly this, so re-run it whenever the authority, the app
+registration or the entitlement wiring moves.
+
+**Nothing here touches production.** Staging is a separate Container App with its own configuration,
+and none of the steps below reach production whatever state it is in.
 
 ⚠️ **Staging reads the production `vitally-shared` Vitally key.** There is one Vitally tenant and its
 API keys are global, so its write and delete tools mutate **real customer data**. `Authorization:ReadOnly`
@@ -13,7 +17,7 @@ exercise one at all — reading the tool list is enough for every check below.
 
 ## Already verified, so you can skip it
 
-Run against `sha-d7bbdf1` and re-runnable at any time:
+Verified on the branch head before merge, and re-runnable at any time:
 
 | | |
 |---|---|
@@ -86,14 +90,15 @@ mistaken for something this change caused.
 
 ## If something fails
 
-Staging rolls back by reverting its five `OAuth__*` variables and restoring the Container App secret
-to the Auth0 client secret — see *The Auth0 → Entra cutover (#108) and its rollback* in `CLAUDE.md`.
-Production is untouched throughout and needs nothing.
+Staging rolls back by reverting its `OAuth__*` variables and its Container App secret to the previous
+provider's — see *The Auth0 → Entra cutover (#108) and its rollback* in `CLAUDE.md`. Production is
+untouched throughout and needs nothing.
 
 ## After it passes
 
-Production takes the same five variables plus the Container App secret, copied from the Key Vault
-secret `entra-mcp-client-secret` through the two-switch network window in
-`docs/runbooks/entra-app-registration.md`. The code is already there and inert until
-`OAuth__UpstreamResourceScope` is set, so the flip is the whole change and reverting it is the whole
-rollback.
+If production has not yet had the same five variables applied, that is the next step: the values are
+in `CLAUDE.md`, and the Container App secret is copied from the Key Vault secret
+`entra-mcp-client-secret` through the two-switch network window in
+`docs/runbooks/entra-app-registration.md`. The code ships ahead of the configuration and is inert
+until `OAuth__UpstreamResourceScope` is set, so the flip is the whole change and reverting it is the
+whole rollback.
