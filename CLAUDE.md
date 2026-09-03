@@ -1062,7 +1062,8 @@ Together it covers every failure mode except "a real user cannot sign in", which
 **department-nested** user (not a directly-assigned admin — every tier but `sg-vitally-admins` is
 granted by nesting, and the #102 spike produced three wrong conclusions by reasoning about nesting
 instead of testing it), a reader being denied a write tool, and decoding the token for `aud`, `iss`
-and `oid`.
+and `oid`. Written out as a checklist in `docs/runbooks/entra-cutover-staging-validation.md`, which
+also records what has already been machine-verified so it is not repeated.
 
 #### Rollback
 
