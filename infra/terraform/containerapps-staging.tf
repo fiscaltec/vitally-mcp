@@ -46,7 +46,7 @@ resource "azurerm_container_app" "staging" {
   # URIs carry both origins' /oauth/callback; the proxy's callback is fixed per origin.
   secret {
     name  = "oauth-shared-client-secret"
-    value = var.oauth_shared_client_secret
+    value = var.staging_oauth_shared_client_secret
   }
 
   ingress {
@@ -122,7 +122,7 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__UpstreamResourceScope"
-        value = var.oauth_upstream_resource_scope
+        value = var.staging_oauth_upstream_resource_scope
       }
       env {
         name  = "OAuth__NoAuth"
@@ -130,7 +130,7 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__SharedClientId"
-        value = var.oauth_shared_client_id
+        value = var.staging_oauth_shared_client_id
       }
       env {
         name        = "OAuth__SharedClientSecret"

@@ -32,10 +32,19 @@ variable "managed_identity_client_id" {
   default = "d93687a0-ef76-4df8-804e-d941067abdeb"
 }
 
+# ---- PRODUCTION OAuth inputs: the LIVE values, which are still Auth0 ----
+#
+# This directory is an as-built capture, so these record what production is configured with *now* —
+# not what #108 moves it to. Changing them to the Entra values is part of applying the flip, not
+# preparation for it: a capture that runs ahead of reality is how a plan comes to propose a change
+# nobody asked for, and how a reader concludes the cutover already happened. The Entra target values
+# live in CLAUDE.md, under "The Auth0 → Entra cutover (#108) and its rollback".
+#
+# Staging has its own `staging_oauth_*` variables below and is already on Entra.
 variable "oauth_authority" {
   type        = string
-  description = "Upstream OIDC issuer. This default is the Entra value #108 moves to; the live production app is still set to Auth0 until that configuration flip is applied (staging is already on Entra). Endpoints are read from the issuer's discovery document, not built from this."
-  default     = "https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0"
+  description = "Upstream OIDC issuer for PRODUCTION — currently Auth0. Endpoints are read from the issuer's discovery document, not built from this."
+  default     = "https://fiscal-it.uk.auth0.com/"
 }
 
 # oauth_audience and oauth_resource are NOT the same value and must not be reconciled. Audience is
@@ -46,8 +55,8 @@ variable "oauth_authority" {
 # lets the two forms name one resource.
 variable "oauth_audience" {
   type        = string
-  description = "Entra App ID URI, validated against the JWT aud claim. NO trailing slash."
-  default     = "https://vitally.fiscaltec.com"
+  description = "Identifier validated against the JWT aud claim for PRODUCTION — currently the Auth0 Resource Server identifier, WITH the trailing slash. Becomes the slash-less Entra App ID URI at the flip."
+  default     = "https://vitally.fiscaltec.com/"
 }
 
 variable "oauth_resource" {
@@ -58,14 +67,14 @@ variable "oauth_resource" {
 
 variable "oauth_upstream_resource_scope" {
   type        = string
-  description = "Scope naming this server's API upstream. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty on Auth0."
-  default     = "https://vitally.fiscaltec.com/mcp.access"
+  description = "PRODUCTION only. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty while production is on Auth0, where the relayed parameter is what binds the audience."
+  default     = ""
 }
 
 variable "oauth_shared_client_id" {
   type        = string
-  description = "Entra app registration appId — both the OAuth client and the API resource (#107)."
-  default     = "c3812e7d-a413-4169-b57e-803326611ba3"
+  description = "Shared OAuth client_id for PRODUCTION — currently the Auth0 native app. Becomes the Entra app registration appId at the flip."
+  default     = "VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D"
 }
 
 variable "public_base_url" {
@@ -131,6 +140,20 @@ variable "staging_oauth_resource" {
   default     = "https://vitally-staging.fiscaltec.com/"
 }
 
+# Shared with production until #108: after the staging flip these diverge, so staging carries its
+# own. Reunify them only once production is on Entra too.
+variable "staging_oauth_shared_client_id" {
+  type        = string
+  description = "Shared OAuth client_id for STAGING — the Entra app registration appId (#107), since staging flipped on 2026-09-03."
+  default     = "c3812e7d-a413-4169-b57e-803326611ba3"
+}
+
+variable "staging_oauth_upstream_resource_scope" {
+  type        = string
+  description = "STAGING only. Set, because staging is on Entra: the proxy terminates the RFC 8707 `resource` parameter and names the API by this scope instead."
+  default     = "https://vitally.fiscaltec.com/mcp.access"
+}
+
 variable "staging_public_base_url" {
   type        = string
   description = "Canonical public origin for staging — no trailing slash (it is an origin, and Validate() trims one anyway)."
@@ -140,7 +163,13 @@ variable "staging_public_base_url" {
 # ---- Secrets (DO NOT hardcode/commit — supply via TF_VAR_* or an untracked tfvars) ----
 variable "oauth_shared_client_secret" {
   type        = string
-  description = "Entra app client secret, sourced from the Key Vault secret `entra-mcp-client-secret` (Container App secret 'oauth-shared-client-secret'). Expires 2027-03-01 — see docs/runbooks/entra-app-registration.md."
+  description = "Client secret for PRODUCTION's `oauth_shared_client_id` (Container App secret 'oauth-shared-client-secret') — currently the Auth0 client's. Becomes the Entra one at the flip."
+  sensitive   = true
+}
+
+variable "staging_oauth_shared_client_secret" {
+  type        = string
+  description = "Client secret for STAGING's `staging_oauth_shared_client_id` — the Entra app's, sourced from the Key Vault secret `entra-mcp-client-secret`. Expires 2027-03-01; see docs/runbooks/entra-app-registration.md."
   sensitive   = true
 }
 
