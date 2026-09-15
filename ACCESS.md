@@ -70,12 +70,13 @@ Group object IDs (for IT reference):
 ### Departments currently granted a tier
 
 Tiers are granted to whole teams by **nesting a department group** inside the relevant
-`sg-vitally-*` group, rather than adding people one by one. As of 2026-07-09 (Entra is the
-live source of truth — verify there if in doubt):
+`sg-vitally-*` group, rather than adding people one by one. **Entra is the source of truth and this
+table is a copy** — read it as indicative and verify there, because it has been stale before (it
+omitted two reader departments between July and September 2026). As of 2026-09-15:
 
 | Tier | Departments |
 |---|---|
-| Read (`sg-vitally-readers`) | Product |
+| Read (`sg-vitally-readers`) | Product, Development, Data Science |
 | Write (`sg-vitally-editors`) | Customer Account Management, Customer Operations, Executive Leadership Team, Project Management |
 | Delete (`sg-vitally-admins`) | *(granted to individuals, not by department)* |
 
@@ -90,8 +91,8 @@ regardless of any `sg-vitally-*` membership.
 >
 > | App | Role |
 > |---|---|
-> | **Vitally MCP** | the Entra app the server is moving to |
-> | **FISCAL IT Auth0** | the Auth0 federation app, retained as the rollback path |
+> | **FISCAL IT Auth0** | gates production sign-in **today** |
+> | **Vitally MCP** | gates staging today, and production once the switch is made |
 >
 > Assigning only one is the single most common way to break access here, and it has happened twice —
 > because this page used to name only *FISCAL IT Auth0*. A department assigned to just one app works

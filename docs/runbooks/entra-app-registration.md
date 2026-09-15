@@ -1,12 +1,12 @@
 # Entra app registration — Vitally MCP (#107)
 
-The app registration that **replaced** the Auth0 client + Resource Server pair at the #108 cutover on
-2026-09-03. It is **both** the shared OAuth client and the API resource, because that is what the
+The app registration that **will replace** the Auth0 client + Resource Server pair at the #108
+cutover. Live on staging; **production has not been flipped yet.** It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
-Live since 2026-09-03.
+Serving staging since 2026-09-03. **Production still signs in through Auth0.** The cutover code is merged and deployed, but it is inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables are set, and that configuration flip has not happened yet. Staging runs Entra.
 
 | | |
 |---|---|
@@ -73,18 +73,25 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
+> set -o pipefail   # without this a failed `az rest` is masked by `sort` and the check reports OK
 > AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
 > Q='value[].[principalType,principalId,principalDisplayName]'
-> az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$AUTH0/appRoleAssignedTo" --query "$Q" -o tsv | sort > gate-auth0.txt
-> az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ENTRA/appRoleAssignedTo" --query "$Q" -o tsv | sort > gate-entra.txt
-> diff gate-auth0.txt gate-entra.txt && echo "PARITY OK" || echo "DRIFT — lines above are the difference"
+> fetch() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo" --query "$Q" -o tsv | sort > "$2"; }
+> fetch "$AUTH0" gate-auth0.txt && fetch "$ENTRA" gate-entra.txt && [ -s gate-auth0.txt ] && [ -s gate-entra.txt ] && { diff gate-auth0.txt gate-entra.txt && echo "PARITY OK" || echo "DRIFT — lines above are the difference"; } || echo "NOT ASSESSED — a lookup failed or returned nothing"
 > grep -c '^User' gate-auth0.txt gate-entra.txt   # must be 0 and 0 — Gate 1 stays group-driven
 > ```
 >
-> It compares **object ids**, not display names: Entra display names are not unique, so a
-> name-only comparison would read as parity while Gate 1 pointed at a different group entirely. And
-> it runs an actual `diff` rather than printing two lists to be eyeballed — an earlier version of
-> this snippet did the latter, which is how a check that looks like a check fails to be one.
+> Three things in there are deliberate, and each replaces a version of this snippet that looked like
+> a check and was not:
+>
+> - **`set -o pipefail`, plus the `-s` emptiness guards.** Without them a failed `az rest` is masked
+>   by `sort`'s exit status, both files come out empty, and `diff` of two empty files succeeds — so
+>   the check reports `PARITY OK` during exactly the outage or credential failure in which it cannot
+>   assess anything. It now says **NOT ASSESSED**, which is the only honest answer.
+> - **It compares object ids, not display names.** Entra display names are not unique, so a
+>   name-only comparison reads as parity while Gate 1 points at a different group entirely.
+> - **It runs an actual `diff`.** The first version printed two sorted lists consecutively for a
+>   human to eyeball, in the document whose entire subject is that this difference gets missed.
 >
 > Once Auth0 is retired that cross-check disappears, so the list here becomes the only record —
 > another reason not to retire it early.
