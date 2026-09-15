@@ -46,9 +46,10 @@ public class ToolAuthorizationOptions
     /// <remarks>
     /// <b>Consulted only when <see cref="LiveGroupCheck"/> is false.</b> It exists for the
     /// namespaced-custom-claim convention (Auth0 required custom claims to be namespaced on a domain
-    /// you control), and the Auth0 post-login Action that minted it here was retired at the #108
-    /// cutover — so on every deployed target this value is inert, and no claim of any kind can grant
-    /// access. See <see cref="ToolAuthorizer"/>.
+    /// you control). The Auth0 post-login Action that mints it still exists and still runs — it is
+    /// retained for the #108 rollback window — but <see cref="LiveGroupCheck"/> is true on every
+    /// deployed target, so nothing reads this value and no claim of any kind can grant access there.
+    /// See <see cref="ToolAuthorizer"/>.
     /// </remarks>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
 

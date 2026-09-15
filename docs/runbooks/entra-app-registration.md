@@ -78,18 +78,14 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > Q='value[].[principalType,principalId,principalDisplayName]'
 > page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
 > fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName]|@tsv' | sort > "$2"; }
+> rc=0
 > if ! fetch "$AUTH0" gate-auth0.txt || ! fetch "$ENTRA" gate-entra.txt || [ ! -s gate-auth0.txt ] || [ ! -s gate-entra.txt ]; then
->   echo "NOT ASSESSED — a lookup failed or returned nothing"; false
-> elif diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then
->   echo "PARITY OK"
+>   echo "NOT ASSESSED — a lookup failed or returned nothing"; rc=1
 > else
->   echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; false
+>   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
+>   if grep -q '^User' gate-auth0.txt gate-entra.txt; then echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven"; grep -h '^User' gate-auth0.txt gate-entra.txt; rc=1; else echo "no user assignments — Gate 1 is group-driven"; fi
 > fi
-> if grep -q '^User' gate-auth0.txt gate-entra.txt; then
->   echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven"; grep -h '^User' gate-*.txt; false
-> else
->   echo "no user assignments — Gate 1 is group-driven"
-> fi
+> [ "$rc" -eq 0 ]   # final status: 0 only if parity held AND no user row was found
 > ```
 >
 > Three things in there are deliberate, and each replaces a version of this snippet that looked like
@@ -105,12 +101,13 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
 >   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
 >   held to four times now.
-> - **It exits non-zero on every bad outcome**, including a stray `User` row. Written as
->   `… || echo "DRIFT"` the pipeline succeeds whatever it found, so anything that scripts this —
->   including a future `scan/run.py` lifting it wholesale — reads a clean exit and reports health.
->   The `if/elif/else` form is longer and that is the point: the status code says the same thing as
->   the message. Note the user check cannot be `grep -c … # must be 0`: `grep` exits **0 when it
->   finds** a match, so the unsafe result would have been the successful one.
+> - **It exits non-zero on every bad outcome**, including a stray `User` row, and **accumulates**
+>   that across both checks. Three separate ways this went wrong while being written, all of which
+>   reported health while finding a problem: `… || echo "DRIFT"` succeeds whatever it found;
+>   `grep -c '^User' # must be 0` is inverted, because `grep` exits **0 when it finds** a match, so
+>   the unsafe result was the successful one; and a second `if` after the first silently overwrites
+>   `$?`, so a real DRIFT followed by a clean user check exits 0. Hence the `rc` accumulator and the
+>   closing `[ "$rc" -eq 0 ]`, which sets the status without exiting an interactive shell.
 > - **It re-sorts after projecting.** Strictly redundant — a whole-line sort is already dominated by
 >   type and id, which precede the name — but it makes rename-safety a local property of the
 >   comparison rather than something a reader has to derive from field order, and it survives someone
