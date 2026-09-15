@@ -22,8 +22,11 @@ report a failure that is really the guard working. Unset it before step 3 and **
 immediately after step 4**:
 
 ```bash
-az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --remove-env-vars Authorization__ReadOnly   # before step 4
-az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --set-env-vars Authorization__ReadOnly=true # after step 4
+# BEFORE step 3 — steps 3 and 4 both need the write tools visible
+az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --remove-env-vars Authorization__ReadOnly
+
+# AFTER step 4 — restore the guard immediately; staging writes reach real customer data
+az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --set-env-vars Authorization__ReadOnly=true
 ```
 
 Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool
