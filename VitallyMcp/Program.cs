@@ -44,8 +44,12 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureCredential());
 
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
-// Authorization:LiveGroupCheck is enabled. Short Graph timeout so a slow/unreachable Graph
-// degrades to the token-claim fallback rather than stalling tool calls.
+// Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
+// unreachable Graph can stall a tool call; it does NOT buy a fallback. #125 removed the
+// token-claim route, so what a timeout reaches is the retained stale set
+// (Authorization:LiveGroupStaleSeconds) and, past that window, a denial — see
+// GraphGroupPermissionResolver. This comment said "degrades to the token-claim fallback"
+// for long enough to outlive the fallback itself.
 builder.Services.AddHttpClient<IGroupPermissionResolver, GraphGroupPermissionResolver>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(5);

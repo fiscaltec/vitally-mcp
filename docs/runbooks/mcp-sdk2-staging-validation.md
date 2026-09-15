@@ -9,7 +9,7 @@
 >
 > | If you came here to… | Go to |
 > |---|---|
-> | stand staging up | `infra/terraform/containerapps-staging.tf`, then the two `az containerapp hostname` commands in CLAUDE.md |
+> | stand staging up | the **Staging** section of CLAUDE.md — `deploy.yml` plus the two `az containerapp hostname` commands, and set `Authorization__ReadOnly` yourself. `infra/terraform/containerapps-staging.tf` is an as-built *record*, not a stand-up path: `terraform apply` is never run here, so it applies nothing, including that guard |
 > | validate an identity-provider change | `docs/runbooks/entra-cutover-staging-validation.md` |
 > | work on the app registration | `docs/runbooks/entra-app-registration.md` |
 > | tear staging down | the teardown table in CLAUDE.md |

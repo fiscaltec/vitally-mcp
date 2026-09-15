@@ -7,8 +7,13 @@ Written for the #108 cutover, but it is the standing checklist for **any** ident
 staging is the pre-production target for exactly this, so re-run it whenever the authority, the app
 registration or the entitlement wiring moves.
 
-**Nothing here touches production.** Staging is a separate Container App with its own configuration,
-and none of the steps below reach production whatever state it is in.
+**Nothing here touches the production Container App or its OAuth configuration.** Staging is a
+separate app with its own settings, and no step below changes production's, whatever state it is in.
+
+⚠️ **That is not the same as "no production blast radius."** Staging reads the **production**
+`vitally-shared` Vitally key — one tenant, no sandbox — so any write or delete tool call here
+mutates **real customer data**. What isolates you is `Authorization__ReadOnly`, not the environment
+boundary, which is why the steps that switch it off are fenced the way they are below.
 
 ⚠️ **Staging reads the production `vitally-shared` Vitally key**, so its write and delete tools
 mutate **real customer data**. There is one Vitally tenant, no sandbox, and no read-scoped API key
@@ -37,14 +42,14 @@ unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__
 # Retries, then VERIFIES, then shouts. `az … && echo "restored"` is not a restore: a single
 # failed call would be swallowed by the && and the shell would exit looking successful.
 guard() {
-  for _ in 1 2 3; do
+  for _ in 1 2 3 4 5; do
     az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none && break
-    sleep 5
+    sleep 10
   done
   if [ "$(state)" = "true" ]; then
-    echo "guard RESTORED"
+    echo "$(date -u +%FT%TZ) guard RESTORED"
   else
-    echo "!!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
+    echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
     echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
   fi
 }
@@ -54,14 +59,28 @@ guard() {
 trap guard EXIT INT TERM HUP
 
 # (b) A detached failsafe, because (a) dies with the terminal, the SSH session or the laptop.
-#     Restores unconditionally after 30 minutes whatever happened here.
-unguard && nohup bash -c "sleep 1800; az containerapp update -n $CA -g $RG \
-  --set-env-vars Authorization__ReadOnly=true -o none" >/dev/null 2>&1 &
-echo "guard REMOVED — failsafe PID $!; run steps 3 and 4 now, then exit this shell"
+#     It reuses guard() verbatim via `declare -f` rather than carrying a second, simpler copy of
+#     the restore — a detached one-shot `az` call is the version that can fail silently 30
+#     minutes from now, when nobody is watching and the pre-exit check has long since passed.
+#
+#     unguard runs in the FOREGROUND. `unguard && nohup … &` backgrounds the whole list, so the
+#     success line prints before unguard has run, and a failed unguard silently skips the timer.
+LOG=~/vitally-staging-guard-failsafe.log
+if unguard; then
+  nohup bash -c "$(declare -p APP CA RG); $(declare -f state guard); sleep 1800; guard" >>"$LOG" 2>&1 &
+  echo "guard REMOVED — failsafe PID $!, logging to $LOG"
+  echo "run steps 3 and 4 now, then exit this shell"
+else
+  echo "unguard FAILED — the guard is still ON and NO failsafe was started."
+  echo "Nothing to clean up. Fix your az session and re-run this block."
+fi
 ```
 
-Keep that shell open for steps 3 and 4, then exit it. **Neither mechanism survives the machine
-losing power, so the check is not optional — run it before you walk away, from any shell:**
+Keep that shell open for steps 3 and 4, then exit it. The failsafe logs its own outcome, so
+`cat ~/vitally-staging-guard-failsafe.log` says whether it fired and whether it worked.
+
+**Neither mechanism survives the machine losing power, so the check is not optional — run it
+before you walk away, from any shell:**
 
 ```bash
 az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
