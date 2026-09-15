@@ -36,17 +36,22 @@ data "azuread_service_principal" "msgraph" {
   client_id = "00000003-0000-0000-c000-000000000000"
 }
 
-# The eight department groups that gate sign-in (Gate 1). Resolved by object id rather than by
+# The nine department groups that gate sign-in (Gate 1). Resolved by object id rather than by
 # display name, so these are provably the same groups that gate sign-in today and not merely
 # same-named ones.
 #
-# THIS LIST MUST EQUAL `FISCAL IT Auth0`'s ASSIGNMENTS EXACTLY. It listed seven until 2026-09-03,
-# omitting Development Department — whose 15 members hold a reader tier via sg-vitally-readers, so
-# the #108 cutover would have signed every one of them out with AADSTS50105. The original comment
-# here claimed the ids "were read off the FISCAL IT Auth0 app's own assignments"; evidently they
-# were not, or the list would have had eight. Diff the two apps rather than trusting either
-# document — see the runbook. Once Auth0 is retired that cross-check is gone and this becomes the
-# only record.
+# THIS LIST MUST EQUAL `FISCAL IT Auth0`'s ASSIGNMENTS EXACTLY, and it has drifted twice:
+#
+#   2026-09-03  Development Department missing (15 members, reader tier via sg-vitally-readers)
+#   2026-09-15  Data Science Department missing (2 members, same tier) — onboarded in between
+#
+# Both would have been signed out at the #108 cutover with AADSTS50105. The second is the
+# informative one: the first was fixed by correcting this list and the runbook, and it happened
+# again twelve days later anyway. Onboarding naturally touches whichever app is *live*, so the
+# inert one is missed every time — documentation cannot fix that, and #134 tracks a check that can.
+#
+# Until then: diff the two apps immediately before any cutover or rollback, and never trust either
+# document. Once Auth0 is retired the cross-check is gone and this becomes the only record.
 variable "entra_gate1_group_object_ids" {
   type        = map(string)
   description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate. Must match FISCAL IT Auth0's assignments while that app exists."
@@ -54,6 +59,7 @@ variable "entra_gate1_group_object_ids" {
     "Product Department"                     = "012658dd-392f-4d84-af07-f97937f3a23e"
     "IT & Security Department"               = "6ba9bf61-e959-4dd9-8a96-d477a35b0d03"
     "Development Department"                 = "bff3e509-659a-41ca-b752-3c669768f2eb"
+    "Data Science Department"                = "f8e0c915-8aa6-4a62-b6f9-82f3ec8701ea"
     "Project Management Department"          = "8f674635-754c-4543-8d9e-ef2afbbf0d90"
     "Customer Operations Department"         = "f573c6de-ddae-407c-889d-ae9eb172e7f0"
     "Executive Leadership Team Department"   = "6e6e48b2-8425-4f96-815d-3e739de648d4"

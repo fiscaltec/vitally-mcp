@@ -18,7 +18,7 @@ Live since 2026-09-03.
 | Exposed scope | `mcp.access` (`fbdb4f49-d2f6-43b3-91a6-475117ab874b`) |
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
-| Sign-in gate | `appRoleAssignmentRequired = true` + eight department groups, assigned **directly** |
+| Sign-in gate | `appRoleAssignmentRequired = true` + nine department groups, assigned **directly** |
 | Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-03-01 |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
@@ -44,19 +44,27 @@ half-applied.
 ## Gate 1 — sign-in assignment
 
 `appRoleAssignmentRequired = true` restricts sign-in to assigned principals, exactly as
-`FISCAL IT Auth0` does. The same **eight** department groups are assigned:
+`FISCAL IT Auth0` does. The same **nine** department groups are assigned:
 
-Product · IT & Security · **Development** · Project Management · Customer Operations ·
+Product · IT & Security · Development · Data Science · Project Management · Customer Operations ·
 Executive Leadership Team · Customer Account Management · Service Delivery
 
-> ⚠️ **This list said seven until 2026-09-03, and the app was provisioned from it — omitting
-> `Development Department`.** `FISCAL IT Auth0` has always had eight, and Development Department is
-> nested in `sg-vitally-readers`, so its 15 members have working read access. The cutover would have
-> signed every one of them out with `AADSTS50105`.
+> ⚠️ **This list has drifted from `FISCAL IT Auth0`'s twice, and the second time is the one that
+> matters.**
 >
-> It was found by diffing the two apps' assignments during the #108 staging validation, not by
-> reading either document — which is the point. **Derive this list from `FISCAL IT Auth0`'s live
-> assignments while that app still exists**, and diff the two before any cutover:
+> | Found | Missing from the Entra app | Consequence at cutover |
+> |---|---|---|
+> | 2026-09-03 | `Development Department` (15 members) | `AADSTS50105` — total loss of access |
+> | 2026-09-15 | `Data Science Department` (2 members) | the same |
+>
+> Both groups are nested in `sg-vitally-readers`, so both had working access at the time. The first
+> was fixed by correcting this list *and* this warning — **and it happened again twelve days later
+> anyway.** Onboarding a department naturally touches whichever app is currently *live*; the inert
+> one is invisible at that moment, so prose here cannot prevent it. #134 tracks a check that can.
+>
+> Until that exists: **derive this list from `FISCAL IT Auth0`'s live assignments, never from a
+> document**, and diff the two immediately before any cutover *or rollback* — parity matters in both
+> directions while both apps exist:
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
@@ -106,7 +114,7 @@ az rest --method get \
   --query "value[].{p:principalDisplayName,t:principalType}" -o tsv
 ```
 
-The result should be **eight Group rows and nothing else**. A `User` row is drift — see below.
+The result should be **nine Group rows and nothing else**. A `User` row is drift — see below.
 
 ## Admin consent
 
