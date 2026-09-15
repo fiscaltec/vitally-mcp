@@ -38,10 +38,22 @@ standing between that and an accident is `Authorization__ReadOnly`.
 | running the tier-enforcement test specifically | **unset** — the test has to see the write tools to prove a reader is denied one |
 | torn down | n/a, and this is the strongest control of the three |
 
-**It is set in `infra/terraform/containerapps-staging.tf`, not applied by hand.** Staging is
-recreated from that capture, so a guard that lived only in someone's memory would be absent from
-every fresh spin-up — which is exactly when nobody is thinking about it. Unsetting it for a tier test
-is the deliberate act; having it on is the default the recipe gives you.
+**It is recorded in `infra/terraform/containerapps-staging.tf`** so the guard lives somewhere other
+than one person's memory — which is exactly what is absent at a fresh spin-up, when nobody is
+thinking about it. Unsetting it for a tier test is the deliberate act; having it on is the default
+the recipe describes.
+
+⚠️ **That file does not set it — nothing applies it.** `infra/terraform/` is a back-filled as-built
+capture and **`terraform apply` is never run here**; staging is stood up through `deploy.yml` plus the
+`az containerapp` commands in CLAUDE.md. So the capture is a recipe to follow and keep in step, not a
+mechanism. **After any recreate, verify the live flag rather than assuming it came up guarded:**
+
+```bash
+az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
+```
+
+Empty output means **unguarded**, not "defaulted to safe" — the application default is `false`.
 
 Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
 staging, and worth knowing before doing it anywhere else.

@@ -83,15 +83,15 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   echo "NOT ASSESSED — a lookup failed or returned nothing"; rc=1
 > else
 >   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
->   if grep -q '^User' gate-auth0.txt gate-entra.txt; then
->     echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each with the command printed for it:"
->     for pair in "gate-auth0.txt:$AUTH0" "gate-entra.txt:$ENTRA"; do awk -F'	' -v sp="${pair##*:}" '$1=="User"{print "  "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' "${pair%%:*}"; done
+>   if [ "$(cat gate-auth0.txt gate-entra.txt | awk -F'	' '$1!="Group"' | wc -l)" != "0" ]; then
+>     echo "NON-GROUP ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each with the command printed for it:"
+>     for pair in "gate-auth0.txt:$AUTH0" "gate-entra.txt:$ENTRA"; do awk -F'	' -v sp="${pair##*:}" '$1!="Group"{print "  "$1" "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' "${pair%%:*}"; done
 >     rc=1
 >   else
->     echo "no user assignments — Gate 1 is group-driven"
+>     echo "every assignment is a Group — Gate 1 is group-driven"
 >   fi
 > fi
-> [ "$rc" -eq 0 ]   # final status: 0 only if parity held AND no user row was found
+> [ "$rc" -eq 0 ]   # final status: 0 only if parity held AND every row was a Group
 > ```
 >
 > Three things in there are deliberate, and each replaces a version of this snippet that looked like
@@ -107,7 +107,13 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
 >   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
 >   held to four times now.
-> - **It exits non-zero on every bad outcome**, including a stray `User` row, and **accumulates**
+> - **It tests the invariant, not the one violation that has occurred.** Gate 1 is meant to hold
+>   *nine Group rows and nothing else*, so the check rejects every row whose `principalType` is
+>   not `Group` — not just `User`. The `User` row this runbook records really happened (admin
+>   consent created one), but a `ServicePrincipal` assignment would grant an application
+>   sign-in and would have been reported as "no user assignments", passing. Checking for the
+>   failure you have seen rather than the property you require is how the next one gets through.
+> - **It exits non-zero on every bad outcome**, including a non-`Group` row, and **accumulates**
 >   that across both checks. Three separate ways this went wrong while being written, all of which
 >   reported health while finding a problem: `… || echo "DRIFT"` succeeds whatever it found;
 >   `grep -c '^User' # must be 0` is inverted, because `grep` exits **0 when it finds** a match, so
@@ -231,7 +237,13 @@ Then, **in the same change**:
    ```bash
    export MSYS_NO_PATHCONV=1
    GROUP=<the department group's object id>
-   j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json)      && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]      && echo "$j" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "NOT ASSIGNED"'      || echo "NOT ASSESSED — the lookup failed or the collection is paginated; this is not 'no assignment'"
+   if j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json) \
+      && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]; then
+     echo "$j" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "NOT ASSIGNED"'
+   else
+     echo "NOT ASSESSED — the lookup failed or the collection is paginated; this is not 'no assignment'" >&2
+     false
+   fi
    ```
    )
 3. Run the parity check above.
@@ -240,7 +252,13 @@ Verify at any time:
 
 ```bash
 export MSYS_NO_PATHCONV=1
-j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json)   && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]   && echo "$j" | jq -r '.value[]|[.principalDisplayName,.principalType]|@tsv'   || echo "NOT ASSESSED — the lookup failed or the collection is paginated"
+if j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json) \
+   && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]; then
+  echo "$j" | jq -r '.value[]|[.principalDisplayName,.principalType]|@tsv'
+else
+  echo "NOT ASSESSED — the lookup failed or the collection is paginated" >&2
+  false
+fi
 ```
 
 The result should be **nine Group rows and nothing else**. A `User` row is drift — see below.
@@ -291,8 +309,12 @@ through the user-assigned managed identity (`Key Vault Secrets User`) — the sa
 | Key Vault secret | `entra-mcp-client-secret`, tagged `purpose=OAuth:SharedClientSecret`, `appId`, `issue=107` |
 
 **180 days is the convention** — note *convention*, not an enforced rule. `infra/terraform/scan/run.py`
-warns on any secret within **30 days** of expiry and its Teams card repeats the wording ("rotate per
-the 180-day standard"). Nothing in the vault followed it until 2026-09-02, when both secrets were
+warns when an **enabled Key Vault secret that has an expiry** comes within **30 days** of it, and its
+Teams card repeats the wording ("rotate per the 180-day standard"). Both qualifiers are load-bearing:
+`run.py` filters on `attributes.enabled` *and* on `exp` being present, so a **secret with no expiry
+set is not covered at all** — it can never come within 30 days of a date it does not have. The
+scanner also knows nothing about Entra, so the app registration credential's own `endDateTime` is
+outside its scope entirely; that is why the expiry is set on the Key Vault secret as well. Nothing in the vault followed it until 2026-09-02, when both secrets were
 brought into line: `vitally-shared` was moved from 2027-08-31 to **2027-02-14** (180 days from its
 own creation on 2026-08-18, not from the day it was changed), and this secret was **reissued** at
 180 days.
