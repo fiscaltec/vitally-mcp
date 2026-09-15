@@ -34,7 +34,7 @@ variable "managed_identity_client_id" {
 
 variable "oauth_authority" {
   type        = string
-  description = "Upstream OIDC issuer. Entra since the #108 cutover; the endpoints are read from its discovery document, not built from this."
+  description = "Upstream OIDC issuer. This default is the Entra value #108 moves to; the live production app is still set to Auth0 until that configuration flip is applied (staging is already on Entra). Endpoints are read from the issuer's discovery document, not built from this."
   default     = "https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0"
 }
 

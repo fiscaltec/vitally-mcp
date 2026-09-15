@@ -23,7 +23,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
 | Subnet (func) | `snet-func` | `10.80.0.48/28`, delegation per Functions Flex VNet-integration (confirm at create) |
-| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for app/func → Auth0/Vitally/Graph/Teams |
+| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for app/func → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
 | KV private endpoint | `vitally-prod-pe-kv-uksouth` | in `snet-pe` |

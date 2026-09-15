@@ -1,5 +1,5 @@
 name: Ops / infrastructure
-description: Azure, deployment, configuration, or Auth0 work
+description: Azure, deployment, configuration, or identity-provider (Entra / Auth0) work
 title: "chore: <short description>"
 labels: ["ops", "status: ready"]
 
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        For Azure, deployment, config or Auth0 work. Add a `priority:` label after creating
+        For Azure, deployment, config or identity-provider work. Add a `priority:` label after creating
         (`status: ready` is preset).
 
         Two standing constraints worth knowing before you write the steps:
@@ -68,7 +68,7 @@ body:
     id: teardown
     attributes:
       label: Teardown
-      description: If this creates temporary resources, what must be removed and in what order — role assignments before identities, and any Auth0 objects. Say so if not applicable.
+      description: If this creates temporary resources, what must be removed and in what order — role assignments before identities, and any Entra or Auth0 objects. Say so if not applicable.
     validations:
       required: false
 

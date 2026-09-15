@@ -5,7 +5,7 @@ Automated test suite for the Vitally MCP server.
 ## Coverage
 
 **400 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
-test host), running fully in-process — no live API calls, no real Auth0
+test host), running fully in-process — no live API calls, no real identity provider
 tenant, no Key Vault.
 
 > **Integration tests that set environment variables must join
