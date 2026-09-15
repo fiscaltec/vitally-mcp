@@ -48,10 +48,19 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    fallback path to honour nested groups too, either enable the transitive/"all (security) groups"
    groups claim on the Entra app registration feeding the waad connection, or have the Action resolve
    transitive membership via Graph. The **live check (step 2) already handles nesting** and is the
-   production path; the fallback only applies during a Graph outage.
+   production path.
+
+   > ⚠️ **This is no longer a fallback, and has not been since #125 deployed.** With
+   > `LiveGroupCheck=true` — set on every deployed target — the order is **fresh Graph → stale Graph
+   > → deny**. `ToolAuthorizer` never consults a token claim in that mode, so the Action described in
+   > this step cannot authorise anyone during a Graph outage. What covers an outage is
+   > `LiveGroupStaleSeconds` (default 1 h) serving each caller's last known-good tier; past that the
+   > call is denied. Read the rest of this step as a description of configuration that still exists
+   > for the rollback window, not as a path that runs.
 4. **Verify on the live revision:** with a reader token, a write returns the RBAC denial; with an
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
-   denials appear in the audit log (`LogDenied`, by `sub`).
+   denials appear in the audit log (`LogDenied`, keyed by the caller's Entra **object id** — the
+   `oid` claim, not `sub`; see `CallerIdentity` and #127).
 5. Once verified, `Authorization__ReadOnly` can be removed from editor/admin deployments while
    read-only stays the default for view-only consumers.
 

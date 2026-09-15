@@ -113,7 +113,8 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 > itself** to the app (the dynamic `*-Department` groups qualify, since their members are direct
 > members). Nesting a department inside an `sg-vitally-*` group grants the *tier* but **not**
 > sign-in, so a team needs both: the department nested in `sg-vitally-editors`/etc. **and** that
-> same department directly assigned to *FISCAL IT Auth0*.
+> same department directly assigned to **each** sign-in app listed above — *FISCAL IT Auth0* and
+> *Vitally MCP*. Assigning one is the mistake this page previously caused twice.
 
 ## Getting access
 
@@ -126,7 +127,7 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 - **Revoking** access takes effect within ~60s of removing the user from the group — no reconnect required.
 - **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
 
-> **Urgent revocation:** for an immediate cut-off (e.g. a compromised account), remove the user from the group **and** revoke their Auth0 session — that takes effect on their next request rather than waiting for the ~60s window.
+> **Urgent revocation:** for an immediate cut-off (e.g. a compromised account), remove the user from the group **and** revoke their sign-in session at whichever provider is currently live — Auth0 for production today, Entra for staging, and Entra for both once the switch is made. If in doubt, revoke at both; an extra revocation costs the user one re-authentication, a missed one leaves a live session. That takes effect on their next request rather than waiting for the ~60s window.
 
 ## How it's set up (in brief)
 

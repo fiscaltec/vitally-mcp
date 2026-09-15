@@ -76,7 +76,8 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > set -o pipefail   # without this a failed `az rest` is masked by `sort` and the check reports OK
 > AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
 > Q='value[].[principalType,principalId,principalDisplayName]'
-> fetch() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo" --query "$Q" -o tsv | sort > "$2"; }
+> page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
+> fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName]|@tsv' | sort > "$2"; }
 > fetch "$AUTH0" gate-auth0.txt && fetch "$ENTRA" gate-entra.txt && [ -s gate-auth0.txt ] && [ -s gate-entra.txt ] && { diff gate-auth0.txt gate-entra.txt && echo "PARITY OK" || echo "DRIFT — lines above are the difference"; } || echo "NOT ASSESSED — a lookup failed or returned nothing"
 > grep -c '^User' gate-auth0.txt gate-entra.txt   # must be 0 and 0 — Gate 1 stays group-driven
 > ```
@@ -88,6 +89,12 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   by `sort`'s exit status, both files come out empty, and `diff` of two empty files succeeds — so
 >   the check reports `PARITY OK` during exactly the outage or credential failure in which it cannot
 >   assess anything. It now says **NOT ASSESSED**, which is the only honest answer.
+> - **It refuses to answer off a truncated page.** `appRoleAssignedTo` is a paginated collection and
+>   `az rest` does not follow `@odata.nextLink`, so a future estate with more assignments than fit in
+>   one page would compare partial lists and could report parity while missing a group — or a `User`
+>   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
+>   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
+>   held to three times now.
 > - **It compares object ids, not display names.** Entra display names are not unique, so a
 >   name-only comparison reads as parity while Gate 1 points at a different group entirely.
 > - **It runs an actual `diff`.** The first version printed two sorted lists consecutively for a
@@ -122,9 +129,11 @@ az rest --method post \
   --headers "Content-Type=application/json" --body @body.json
 ```
 
-Add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` in the same change. Until the
-Auth0 rollback path is retired, do the equivalent on `FISCAL IT Auth0` too — not because Auth0 gates
-anything today (it does not), but so a rollback does not silently lock the new department out.
+Add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` in the same change, **and do
+the equivalent on `FISCAL IT Auth0`** — which is still the live production sign-in gate until the
+#108 configuration flip is applied, and the rollback path for a period after it. Omitting either app
+locks the new department out of one of them, silently, until that app is the one being used. That is
+exactly how Development and Data Science were missed.
 
 Verify at any time:
 
