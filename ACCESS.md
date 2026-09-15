@@ -118,19 +118,31 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 
 ## Getting access
 
-**As a user:** request membership of the group for the tier you need (most people need `sg-vitally-readers`) from the **IT & Security team**. Once added, you have access within about a minute — no need to reconnect or sign in again.
+**As a user:** ask the **IT & Security team** for the tier you need (most people need read). Once
+granted, access appears within about a minute — no need to reconnect or sign in again.
 
-**As an admin (granting/changing access):** first confirm the person's **department group is assigned to *both* sign-in apps** — Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under **FISCAL IT Auth0** — so they can sign in whichever app is live. Assign the department group to **every** app it is missing from — not just the first one you find; see the warning above for why missing one is invisible until it is not. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
+**As an admin:** granting access is two independent steps, and both are required.
 
-- **Granting** a tier takes effect within ~60s of adding the user to the group.
-- **Changing** tier = move the user to a different group (e.g. readers → editors).
-- **Revoking** access takes effect within ~60s of removing the user from the group — no reconnect required.
-- **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
+### 1. Sign-in (Gate 1) — assign the department to *both* apps
 
-> **Urgent revocation — check *how* they hold the tier first.** Membership is evaluated
-> **transitively**, so most people are not direct members of any `sg-vitally-*` group: they inherit
-> the tier from a department group nested inside one. **Removing such a user from the `sg-vitally-*`
-> group does nothing** — they were never in it.
+Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under
+**FISCAL IT Auth0**. Assign the department group to **every** app it is missing from; see the
+warning above for why missing one is invisible until the day it is not. The scripted version, which
+is idempotent and safe to re-run, is in `docs/runbooks/entra-app-registration.md`.
+
+### 2. Tier (Gate 2) — grant, change or revoke
+
+Membership is evaluated **transitively**, so a tier can be held two different ways, and *which one
+decides what you have to change*:
+
+| How they hold it | To grant | To change | To revoke |
+|---|---|---|---|
+| **Directly** in `sg-vitally-*` | add the user to the group | move them to a different tier group | remove them from the group |
+| **Inherited** via a department nested in `sg-vitally-*` — the common case | nest their department in the tier group | move the *department's* nesting, or move the person between departments | remove them from the **department**, or un-nest that department (which affects everyone in it) |
+
+> ⚠️ **Removing an inheriting user from the `sg-vitally-*` group does nothing** — they were never in
+> it. This is the single most likely way to believe you have revoked access and not have. Establish
+> which row applies before acting:
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
@@ -138,39 +150,41 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 > az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$select=id" --query "length(value[?id=='$USER'])" -o tsv
 > ```
 >
-> `1` means a direct member — remove them from the tier group. `0` with access still working means
-> they inherit it: **remove them from the department group** that is nested in the tier (or un-nest
-> that department, which revokes the whole department and is usually not what you want for one
-> person).
->
-> Either way the change takes effect within the ~60s live-membership window in the healthy case.
->
-> **That ~60s is not a guarantee.** If Microsoft Graph is unreachable the server serves each caller's
-> last known-good tier for up to `Authorization:LiveGroupStaleSeconds` (**1 hour** by default) rather
-> than denying everyone — so a revoked user can retain access for that long during a Graph outage.
-> The trade is deliberate; see the entitlement section in `CLAUDE.md`.
->
-> **Disabling the Entra account does not bypass that window either.** It blocks new sign-ins and
-> refreshes, but this server validates bearer tokens locally, so a token already issued stays valid
-> until it expires and can still be served the retained stale entitlement. For a genuinely
-> compromised account, do all three — remove the correct group membership, disable the account, and
-> revoke sessions — and treat the token lifetime plus the stale window as the worst case.
->
-> Revoking their IdP session does **not** cut off an access token they already hold: this server
-> validates the bearer token locally against the provider's signing keys, so an issued token stays
-> valid until it expires (Entra: roughly 60–90 minutes) no matter what happens to the session.
-> Session revocation stops them signing in *again* and stops refresh, which is still worth doing —
-> at whichever provider is live for that target, or both if unsure — but do it **in addition to**
-> the group removal, not instead of it.
->
-> An earlier version of this note had these the wrong way round and implied session revocation was
-> the immediate control. It is not.
+> `1` = direct member, use the first row. `0` while they still have access = inherited, use the
+> second.
+
+Any of these take effect within about **60 seconds**, with no reconnect: the server re-reads live
+group membership on each call rather than trusting the token.
+
+### Urgent revocation (compromised account)
+
+Do all three, in this order, and understand what each does *not* cover:
+
+1. **Remove the correct group membership** (per the table above) — this is the control that actually
+   stops them using the server, normally within ~60s.
+2. **Disable the Entra account** — stops new sign-ins and refreshes.
+3. **Revoke their sessions** — same effect, at whichever provider is live for that target, or both.
+
+**None of these invalidates an access token they already hold.** This server validates bearer tokens
+locally against the provider's signing keys, so an issued token remains valid until it expires
+(Entra: roughly 60–90 minutes) regardless of the account or session state. Steps 2 and 3 close off
+getting a *new* one.
+
+**And the ~60s in step 1 assumes Microsoft Graph is reachable.** During a Graph outage the server
+serves each caller's last known-good tier for up to `Authorization:LiveGroupStaleSeconds` (**1 hour**
+by default) rather than denying everyone — so a revoked user can retain access for that long. The
+trade is deliberate; see the entitlement section in `CLAUDE.md`.
+
+So the honest worst case is **the remaining token lifetime plus the stale window**. If that is not
+acceptable for a given incident, the escalation is to stop the server accepting anything — scale the
+Container App to zero or set `Authorization__ReadOnly=true` for a blunt halt to all mutations — not a
+group change.
 
 ## How it's set up (in brief)
 
 - **Sign-in:** Microsoft Entra — reached via Auth0 federation on production today, directly on staging, and directly on production once the #108 switch is made. FISCAL staff sign in with their normal Microsoft account in every case.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
-- **Auditing:** every action is logged with the acting user, operation and outcome (queryable in Application Insights / Log Analytics).
+- **Auditing:** every action is logged with the acting user's Entra object id (resolvable with `az ad user show --id`; never their email), the operation and the outcome — queryable in Application Insights / Log Analytics.
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.
 
 Group membership is managed in Entra by the IT & Security team. Questions: contact the Infrastructure team.
