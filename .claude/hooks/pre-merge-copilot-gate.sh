@@ -100,12 +100,25 @@ esac
 [ "$pending" = "false" ] || deny "Copilot is still a requested reviewer on PR #$pr (review pending)"
 
 # (2) Copilot's latest review must target the current head commit.
-#     sort_by(.submitted_at) first — the REST reviews response order isn't guaranteed.
+#
+#     READ THIS VIA GraphQL, NOT REST. The REST reviews collection
+#     (`repos/{owner}/{repo}/pulls/N/reviews`) lags badly for this bot: on PR #129
+#     on 2026-09-15 it reported Copilot's latest review as ee1770c submitted at
+#     14:45:44Z while GraphQL reported 1559962 at 18:43:14Z — nearly four hours and
+#     nine reviews behind. Because this gate fails closed, reading the stale view
+#     does not make it conservative, it makes it STUCK: every merge is denied with
+#     "not on the current head" however clean the review is, and no amount of
+#     re-requesting clears it. A gate that cannot pass gets switched off, which is
+#     worse than the mistake it was written to prevent.
+#
+#     sort_by(submittedAt) first — response order isn't guaranteed either way.
 #     `// empty` coerces the no-reviews case (null) to an empty string.
-# Exact login match — REST reports Copilot as `…[bot]` (gh pr view omits the
-# suffix; see the pending check above). `contains` would match unrelated logins.
-last=$(gh api "repos/{owner}/{repo}/pulls/$pr/reviews" \
-	--jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id // empty' 2>/dev/null) \
+#     Mind the login spelling: GraphQL omits the `[bot]` suffix that REST carries
+#     (see the Dependabot note above). Exact match — `contains` would match
+#     unrelated logins.
+last=$(gh api graphql -f owner="$owner" -f name="$name" -F number="$pr" \
+	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){nodes{author{login} commit{oid} submittedAt}}}}}' \
+	--jq '[.data.repository.pullRequest.reviews.nodes[] | select(.author.login == "copilot-pull-request-reviewer")] | sort_by(.submittedAt) | last | .commit.oid // empty' 2>/dev/null) \
 	|| deny "could not read reviews for PR #$pr (failing closed)"
 [ -n "$last" ] || deny "Copilot has not reviewed PR #$pr yet"
 [ "$last" = "$head" ] || deny "Copilot's latest review ($last) is not on the current head ($head) — re-review pending on PR #$pr"

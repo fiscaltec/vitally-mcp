@@ -173,12 +173,24 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       review of an earlier commit does not count, and timestamps cannot be lined up against the head
       commit — compare the SHA.
       ```bash
-      n=<PR>; head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
+      n=<PR>; head=$(git rev-parse HEAD)
       gh pr view "$n" --json reviewRequests \
         --jq '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null'   # false = not pending
-      gh api "repos/fiscaltec/vitally-mcp/pulls/$n/reviews" \
-        --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id'
+      gh api graphql -f owner=fiscaltec -f name=vitally-mcp -F number="$n" \
+        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){nodes{author{login} commit{oid} submittedAt}}}}}' \
+        --jq '[.data.repository.pullRequest.reviews.nodes[] | select(.author.login=="copilot-pull-request-reviewer")] | sort_by(.submittedAt) | last | .commit.oid'
       ```
+
+      ⚠️ **Read the review commit from GraphQL, never from REST.** The REST reviews
+      collection (`…/pulls/N/reviews`) lags for this bot by hours, not seconds. Measured on
+      #129 on 2026-09-15: REST reported Copilot's latest review as `ee1770c` submitted
+      `14:45:44Z` while GraphQL reported `1559962` at `18:43:14Z` — nine reviews and nearly
+      four hours apart, from the same `gh` session seconds apart. The earlier version of this
+      block used REST, so following it would have parked the PR indefinitely: the SHA never
+      matches, re-requesting does not help, and the obvious reading is "Copilot hasn't
+      reviewed the head yet" when it has. `.claude/hooks/pre-merge-copilot-gate.sh` had the
+      same defect and was fixed with it — a fail-closed gate reading a stale source is not
+      conservative, it is stuck, and a gate that cannot pass is a gate someone switches off.
 
       ⚠️ **Take the head SHA from `git rev-parse HEAD`, not from `gh pr view --json headRefOid`,
       in the seconds after a push.** The GraphQL field lags: on #122 it still reported the previous
