@@ -1,5 +1,25 @@
 # Read-only deployments & per-user RBAC rollout
 
+> **Status as observed on 2026-09-15** — recorded because the closing *Data-classification gate*
+> section and the deployed configuration disagree, and the discrepancy should be resolved by a person
+> rather than by whoever reads this next.
+>
+> | | Production | Staging |
+> |---|---|---|
+> | `Authorization__LiveGroupCheck` | `true` | `true` |
+> | `Authorization__ReadOnly` | **unset** (writes permitted, tier-gated) | **unset** |
+>
+> So the per-user RBAC rollout below (steps 1–3) **is live on both targets**, and step 5's "remove
+> `Authorization__ReadOnly` once verified" has effectively been taken. Staging's is deliberate and
+> documented in CLAUDE.md — the tier-enforcement test needs the write tools visible.
+>
+> ⚠️ **What is not established is whether the data-classification review at the end of this document
+> ever cleared.** That section still says to keep deployments read-only by default, and they are not.
+> Either the gate cleared and this was never updated, or the instruction stopped being followed.
+> **Confirm with the Infrastructure team before treating either as settled**, and update or delete
+> that section accordingly — it concerns customer-data exposure, so an out-of-date instruction there
+> is worse than none.
+
 ## Deploy read-only (immediate safety net)
 
 Set `Authorization__ReadOnly=true` on the Container App revision. Effect:
@@ -66,5 +86,10 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
 
 ## Data-classification gate
 
-Wider rollout remains gated on the pending data-classification review (customer data exposure).
-Keep deployments read-only by default until that clears.
+**This section is unverified — see the status note at the top of this file.** As written it says:
+wider rollout remains gated on the pending data-classification review (customer data exposure), and
+deployments should be kept read-only by default until that clears.
+
+Neither production nor staging has `Authorization__ReadOnly` set, so that instruction is not in
+force. Whether that is because the review cleared or because the instruction lapsed is not recorded
+anywhere in this repository, and this runbook should not be the thing that decides it.
