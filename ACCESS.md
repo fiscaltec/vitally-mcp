@@ -176,12 +176,16 @@ by default) rather than denying everyone — so a revoked user can retain access
 trade is deliberate; see the entitlement section in `CLAUDE.md`.
 
 So the honest worst case is **the remaining token lifetime plus the stale window**. If that is not
-acceptable for a given incident, escalate to a control that does not depend on group membership:
+acceptable, escalate — but pick the right lever, because the two cases differ:
 
-- `Authorization__ReadOnly=true` on the Container App — denies every create/update/delete for
-  everyone, immediately on the new revision, without consulting Graph or any token. Reads keep
-  working.
-- `az containerapp ingress disable` — stops the server answering at all.
+- **Graph healthy, and you want to stop writes without knowing who is compromised:**
+  `Authorization__ReadOnly=true` on the Container App. Denies every create/update/delete for
+  everyone on the new revision, consulting neither Graph nor any token. Reads keep working.
+- **Graph is down (the case this paragraph is about):** `az containerapp ingress disable`. Do **not**
+  reach for `ReadOnly` here — setting it rolls a new revision, a new revision has an empty permission
+  cache, and with Graph unreachable nobody can be resolved at all, so every caller is denied
+  everything including reads. The restart is a harder outage than the one you were trying to contain,
+  and it arrives by surprise. If that is the outcome you want, disable ingress and know you chose it.
 
 **Do not reach for "scale to zero".** A Container App with HTTP ingress scales back up on the next
 request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is not a halt.

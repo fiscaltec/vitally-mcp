@@ -891,12 +891,16 @@ still be the staging origin (clients reject a metadata document whose `resource`
 they fetched it from). So the two diverge by **host as well as by slash** here. It looks like a
 copy-paste error and is not; see the divergence warning under *Configuration*.
 
-**One divergence that will cost you time if you meet it cold: there is one Vitally tenant and its API
-keys are global.** Staging reads the *production* `vitally-shared` secret, so its write and delete
-tools mutate real customer data — there is no sandbox to point it at. `Authorization:ReadOnly=true`
-is deliberately **not** set, because the tier-enforcement acceptance test needs the write tools
-visible to prove a reader is denied one. So staging is read-only by convention, not by
-configuration.
+**One divergence that will cost you time if you meet it cold: staging reads the *production*
+`vitally-shared` secret**, so its write and delete tools mutate real customer data. There is one
+Vitally tenant and no sandbox. Vitally *does* allow additional API keys, but its REST API
+documentation describes no **read-scoped** key (checked 2026-09-15), so a second key would be
+revocable and separately attributable while carrying the same write access — it would not fix this.
+Revisit if scoped keys ever ship; a read-only key at the boundary beats any switch of ours.
+
+**So `Authorization__ReadOnly=true` is staging's guard, and it is the one live use for that switch.**
+Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
+write tools to prove a reader is denied one. It is currently unset on both targets.
 
 **The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
 DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from
@@ -956,8 +960,8 @@ serves multiple subnets in the same VNet, and both CAEs resolve the same private
 shared DNS zone links. That closes the one gap the shared model cannot: **CAE-level and platform
 changes cannot be rehearsed before production sees them.**
 
-What no topology fixes: there is one Vitally tenant and its API keys are global, so any staging or dev
-environment reads real customer data.
+What no topology fixes: there is one Vitally tenant and no sandbox, and Vitally offers no read-scoped
+API key, so any staging or dev environment reads — and can write — real customer data.
 
 ### The deploy smoke covers the OAuth metadata, not just liveness
 

@@ -1,42 +1,60 @@
 # Read-only deployments & per-user RBAC rollout
 
-> **Status as observed on 2026-09-15** — recorded because the closing *Data-classification gate*
-> section and the deployed configuration disagree, and the discrepancy should be resolved by a person
-> rather than by whoever reads this next.
+> **Status, 2026-09-15.** The per-user RBAC rollout below is **complete and live**:
+> `Authorization__LiveGroupCheck=true` with all three group ids set, on production and staging.
+> Steps 1–3 are a record of how it was done, not work outstanding.
 >
-> | | Production | Staging |
-> |---|---|---|
-> | `Authorization__LiveGroupCheck` | `true` | `true` |
-> | `Authorization__ReadOnly` | **unset** (writes permitted, tier-gated) | **unset** |
->
-> So the per-user RBAC rollout below (steps 1–3) **is live on both targets**, and step 5's "remove
-> `Authorization__ReadOnly` once verified" has effectively been taken. Staging's is deliberate and
-> documented in CLAUDE.md — the tier-enforcement test needs the write tools visible.
->
-> ⚠️ **What is not established is whether the data-classification review at the end of this document
-> ever cleared.** That section still says to keep deployments read-only by default, and they are not.
-> Either the gate cleared and this was never updated, or the instruction stopped being followed.
-> **Confirm with the Infrastructure team before treating either as settled**, and update or delete
-> that section accordingly — it concerns customer-data exposure, so an out-of-date instruction there
-> is worse than none.
+> `Authorization__ReadOnly` is **unset on both targets**. That is correct for production and correct
+> for staging *while a tier test is running* — see below for when staging should have it on.
 
-## Deploy read-only (immediate safety net)
+## `Authorization__ReadOnly` — what it is for now
 
 Set `Authorization__ReadOnly=true` on the Container App revision. Effect:
 - All create/update/delete tool calls are denied (`ToolAuthorizer`, before the RBAC/NoAuth gate),
   audited via `LogDenied`.
 - `tools/list` advertises only read tools (no `Create_*`/`Update_*`/`Delete_*`).
-- Independent of `Authorization:Enabled` and of any Entra-group/Auth0 setup — a guaranteed lock.
+- Independent of `Authorization:Enabled` and of any Entra-group setup — a guaranteed lock that does
+  not consult Microsoft Graph, a token, or group membership.
 
-> **This is deployment-wide, and it overrides per-caller filtering.** Since the SDK 2.1.0 adoption,
-> `tools/list` is *also* filtered per caller by permission tier (56 read / 81 editor / 93 admin).
-> `Authorization__ReadOnly=true` strips every destructive tool for **everyone regardless of tier**,
-> so with it on, readers, editors and admins all see the same 56 read tools. Do not read that as
-> per-caller filtering being broken — it is the read-only switch doing its job.
+> **It is deployment-wide and overrides per-caller filtering.** `tools/list` is *also* filtered per
+> caller by tier (56 read / 81 editor / 93 admin). With `ReadOnly` on, readers, editors and admins
+> all see the same 56 read tools. That is the switch working, not per-caller filtering breaking.
 
-Use this for CS-facing deployments until per-user RBAC (below) is rolled out and verified.
+### Its one live use: guarding staging
 
-## Per-user RBAC rollout (finer-grained; out of the application repo)
+**Staging reads the production `vitally-shared` key.** There is one Vitally tenant, and although
+Vitally does allow additional API keys to be created, nothing in its REST API documentation offers a
+**read-scoped** key — so a second key would be revocable and separately attributable but would carry
+the same write access. Confirmed 2026-09-15; revisit if Vitally ever ships scoped keys, because a
+read-only key at the boundary would be strictly better than this switch.
+
+Until then, staging's write and delete tools mutate **real customer data**, and the only thing
+standing between that and an accident is `Authorization__ReadOnly`.
+
+| Staging is… | `Authorization__ReadOnly` |
+|---|---|
+| up for validation work generally | **`true`** |
+| running the tier-enforcement test specifically | **unset** — the test has to see the write tools to prove a reader is denied one |
+| torn down | n/a, and this is the strongest control of the three |
+
+Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
+staging, and worth knowing before doing it anywhere else.
+
+### What it is *not* for
+
+**Not an incident lever during a Microsoft Graph outage.** Setting it requires a new revision, a new
+revision is a new process, and the permission cache is in-process (`AddMemoryCache`). With Graph
+unreachable a fresh process can resolve nobody, so every caller is denied everything — reads
+included — regardless of this flag. The restart is a harder outage than the state you were reaching
+for. If you want the server to stop, use `az containerapp ingress disable` and mean it.
+
+**Not the pre-RBAC stopgap it was built as.** It was added in June 2026 (PR #53) after CS reported
+suspected accidental deletions, when there was no per-user tiering at all and every authenticated
+user could do everything. Tiering now covers that: delete is `sg-vitally-admins`, and the CS-facing
+departments are editors. Do not reinstate the old "keep CS-facing deployments read-only until RBAC
+lands" posture — RBAC landed.
+
+## Per-user RBAC rollout — how it was done
 
 The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb → `vitally:read` /
 `vitally:write` / `vitally:delete`). To grant tiers per user via Entra group membership:
@@ -83,13 +101,3 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    `oid` claim, not `sub`; see `CallerIdentity` and #127).
 5. Once verified, `Authorization__ReadOnly` can be removed from editor/admin deployments while
    read-only stays the default for view-only consumers.
-
-## Data-classification gate
-
-**This section is unverified — see the status note at the top of this file.** As written it says:
-wider rollout remains gated on the pending data-classification review (customer data exposure), and
-deployments should be kept read-only by default until that clears.
-
-Neither production nor staging has `Authorization__ReadOnly` set, so that instruction is not in
-force. Whether that is because the review cleared or because the instruction lapsed is not recorded
-anywhere in this repository, and this runbook should not be the thing that decides it.
