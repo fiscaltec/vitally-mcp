@@ -152,28 +152,39 @@ export MSYS_NO_PATHCONV=1   # Git Bash mangles the URL path otherwise
 ENTRA_SP=7904188d-4b34-4651-bf0f-6941fbcf6a8b   # Vitally MCP
 AUTH0_SP=3dff0dcd-ebe1-496e-b47f-e5e4e736a548   # FISCAL IT Auth0
 GROUP=<new-group-object-id>
-rc=0
-for SP in "$ENTRA_SP" "$AUTH0_SP"; do
-  echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
-  # The status check is not optional: on a failed lookup `existing` is empty, and `"" != "0"` is
-  # true — so a naive test reports "already assigned", skips the POST, and exits 0. A Graph outage
-  # would then silently reproduce the one-sided drift this procedure exists to repair.
-  if ! existing=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv); then
-    echo "LOOKUP FAILED on $SP — cannot tell whether it is assigned; stopping"; rc=1; continue
-  fi
-  if [ "$existing" != "0" ]; then
-    # Print the existing id too: the Terraform import step below needs it, and the common reason to
-    # re-run this loop is repairing drift, where at least one app is already assigned.
-    echo -n "already assigned on $SP — id: "
-    az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv || { echo "could not read its id"; rc=1; }
-  elif az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
-    echo "  ^ assignment id on $SP — needed for the import block below"
-  else
-    echo "FAILED on $SP — the apps are now out of parity; fix before stopping"; rc=1
-  fi
-done
-rm -f body.json
-[ "$rc" -eq 0 ]
+
+# PHASE 1 — survey BOTH apps before touching either.
+# Surveying and mutating in one pass is how a half-applied onboarding happens: if the first lookup
+# fails and the loop carries on, the group gets assigned to the second app only, which is precisely
+# the one-sided drift this procedure exists to prevent.
+count_for() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv; }
+have_entra=$(count_for "$ENTRA_SP") || have_entra=""
+have_auth0=$(count_for "$AUTH0_SP") || have_auth0=""
+if [ -z "$have_entra" ] || [ -z "$have_auth0" ]; then
+  echo "LOOKUP FAILED — NEITHER app has been changed. Fix access and re-run."
+  false
+else
+  # PHASE 2 — both states known, so a failure here is a real failure rather than an unknown.
+  rc=0
+  for pair in "$ENTRA_SP:$have_entra" "$AUTH0_SP:$have_auth0"; do
+    SP=${pair%%:*}; have=${pair##*:}
+    if [ "$have" != "0" ]; then
+      # Print the existing id: the Terraform import step below needs it, and the common reason to
+      # re-run this is repairing drift, where at least one app is already assigned.
+      echo -n "already assigned on $SP — id: "
+      az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv || { echo "could not read its id"; rc=1; }
+    else
+      echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
+      if az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
+        echo "  ^ assignment id on $SP — needed for the import block below"
+      else
+        echo "FAILED on $SP — the apps are now OUT OF PARITY; fix before stopping"; rc=1
+      fi
+    fi
+  done
+  rm -f body.json
+  [ "$rc" -eq 0 ]
+fi
 ```
 
 **It is idempotent on purpose**, so it doubles as the drift repair: a group already assigned to one
@@ -392,7 +403,10 @@ configuration — worth raising after #108 rather than during it.
 
 Config-only, as designed — and only half applied. **Staging** was flipped on 2026-09-03 and has run
 Entra since; **production** still signs in through Auth0, because the five `OAuth__*` variables have
-not been set there. The code is deployed to both and is inert without them.
+not been set there. The code is deployed to both and *runs* on both — the OIDC discovery, the
+proxy and the `resource` validation are all live on production today. What is inactive there is the
+Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relays `resource` exactly as
+it did before, which is why the deploy was a no-op and the flip is the whole change.
 
 The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → Entra cutover (#108)
 and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is

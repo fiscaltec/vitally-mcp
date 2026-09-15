@@ -1,12 +1,20 @@
 # Runbook: MCP SDK 2.0 staging validation
 
-> ⚠️ **Historical record, executed 2026-08-12 — do not follow this to stand staging up today.**
-> Staging is now a persistent-scaffolding, on-demand Container App (#112): recreate the app itself
-> from `infra/terraform/containerapps-staging.tf`, then bind its hostname with the two
-> `az containerapp hostname` commands in CLAUDE.md. Not by the portal steps below. The Auth0 client
-> creation in step 2.5 is superseded by the Entra app registration (`entra-app-registration.md`), and
-> the current identity-change checklist is `entra-cutover-staging-validation.md`. Kept because the
-> Layer 2/3 evidence it records is still the basis for the SDK 2.0 adoption sign-off.
+> # ⚠️ ARCHIVED — DO NOT FOLLOW
+>
+> **Every command below is superseded.** This records a validation executed on 2026-08-12 and is kept
+> only because the Layer 2/3 evidence is the basis for the SDK 2.0 adoption sign-off. It is not a
+> procedure, and following its section headings will provision infrastructure that does not exist in
+> the current estate — notably the Auth0 client in step 2.5, replaced by the Entra app registration.
+>
+> | If you came here to… | Go to |
+> |---|---|
+> | stand staging up | `infra/terraform/containerapps-staging.tf`, then the two `az containerapp hostname` commands in CLAUDE.md |
+> | validate an identity-provider change | `docs/runbooks/entra-cutover-staging-validation.md` |
+> | work on the app registration | `docs/runbooks/entra-app-registration.md` |
+> | tear staging down | the teardown table in CLAUDE.md |
+>
+> Read the rest as a record of what happened, in the past tense, regardless of how it is worded.
 
 **Purpose:** execute Layers 2 and 3 of the validation design for the MCP SDK 2.0 / spec
 2026-07-28 adoption (`docs/superpowers/specs/2026-08-10-mcp-sdk2-validation-design.md`), and tear
