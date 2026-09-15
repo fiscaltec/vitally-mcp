@@ -147,11 +147,17 @@ decides what you have to change*:
 > ```bash
 > export MSYS_NO_PATHCONV=1
 > USER=<their-entra-object-id>; TIER=<sg-vitally-readers|editors|admins object id>
-> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$select=id" --query "length(value[?id=='$USER'])" -o tsv
+> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$count=true&\$filter=id eq '$USER'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
 > ```
 >
 > `1` = direct member, use the first row. `0` while they still have access = inherited, use the
 > second.
+>
+> The query filters **server-side** on the user id rather than fetching the member list and searching
+> it. That matters during a revocation: `/members` is paginated, so reading only the first page would
+> report `0` for a direct member further down the list and send you to remove a department membership
+> they do not have — leaving them authorised. `$filter` with `ConsistencyLevel: eventual` returns a
+> complete answer whatever the group's size.
 
 Any of these take effect within about **60 seconds**, with no reconnect: the server re-reads live
 group membership on each call rather than trusting the token.

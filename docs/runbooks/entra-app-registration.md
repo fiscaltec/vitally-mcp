@@ -148,11 +148,16 @@ GROUP=<new-group-object-id>
 rc=0
 for SP in "$ENTRA_SP" "$AUTH0_SP"; do
   echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
-  existing=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv)
+  # The status check is not optional: on a failed lookup `existing` is empty, and `"" != "0"` is
+  # true — so a naive test reports "already assigned", skips the POST, and exits 0. A Graph outage
+  # would then silently reproduce the one-sided drift this procedure exists to repair.
+  if ! existing=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv); then
+    echo "LOOKUP FAILED on $SP — cannot tell whether it is assigned; stopping"; rc=1; continue
+  fi
   if [ "$existing" != "0" ]; then
     echo "already assigned on $SP"
-  elif az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json -o none; then
-    echo "assigned on $SP"
+  elif az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
+    echo "  ^ assignment id on $SP — needed for the import block below"
   else
     echo "FAILED on $SP — the apps are now out of parity; fix before stopping"; rc=1
   fi
@@ -171,8 +176,24 @@ a period after it; `Vitally MCP` gates staging now and production after. Omittin
 new department out of that one, silently, until it is the app being used — which is exactly how
 Development and Data Science were missed, both times by following a procedure that named one app.
 
-Then add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` and run the parity check
-above in the same change.
+Then, **in the same change**:
+
+1. Add the group to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf`.
+2. Add a matching `import` block to `infra/terraform/imports.tf`, using the assignment id the POST
+   printed above — the `gate1` resource is `for_each` over that map, so a map entry without an
+   import reads as unmanaged and a plan would propose creating an assignment that already exists:
+
+   ```hcl
+   import {
+     to = azuread_app_role_assignment.gate1["<Department name>"]
+     id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/<assignment-id>"
+   }
+   ```
+
+   (If you lost the id, re-read it: `az rest --method get --url
+   "https://graph.microsoft.com/v1.0/servicePrincipals/$ENTRA_SP/appRoleAssignedTo" --query
+   "value[?principalDisplayName=='<Department name>'].id" -o tsv`.)
+3. Run the parity check above.
 
 Verify at any time:
 
