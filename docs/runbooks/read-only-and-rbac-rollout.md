@@ -43,10 +43,12 @@ than one person's memory — which is exactly what is absent at a fresh spin-up,
 thinking about it. Unsetting it for a tier test is the deliberate act; having it on is the default
 the recipe describes.
 
-⚠️ **That file does not set it — nothing applies it.** `infra/terraform/` is a back-filled as-built
-capture and **`terraform apply` is never run here**; staging is stood up through `deploy.yml` plus the
-`az containerapp` commands in CLAUDE.md. So the capture is a recipe to follow and keep in step, not a
-mechanism. **After any recreate, verify the live flag rather than assuming it came up guarded:**
+⚠️ **The file sets it; nothing applies the file.** `containerapps-staging.tf` does carry
+`Authorization__ReadOnly = "true"` (lines 163–166) — but `infra/terraform/` is a back-filled
+as-built capture and **`terraform apply` is never run here**; staging is stood up through
+`deploy.yml` plus the `az containerapp` commands in CLAUDE.md. So it is a recipe to follow and
+keep in step, not a mechanism that enforces anything, and a fresh app comes up on the application
+default of `false`. **After any recreate, set the variable and then verify it:**
 
 ```bash
 az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \

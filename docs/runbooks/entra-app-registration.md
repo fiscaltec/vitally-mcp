@@ -83,7 +83,17 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   echo "NOT ASSESSED — a lookup failed or returned nothing"; rc=1
 > else
 >   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
->   if [ "$(cat gate-auth0.txt gate-entra.txt | awk -F'	' '$1!="Group"' | wc -l)" != "0" ]; then
+>   # Parity is agreement, NOT correctness: the same unintended group added to both apps diffs
+>   # clean. Assert the live set against the expected one recorded in Terraform. Run from the
+>   # repo root. The sed anchors on `^variable` deliberately: an unanchored pattern also matches
+>   # the `for_each = var.entra_gate1_group_object_ids` line further down and reopens the range
+>   # over the `gate1` resource, pulling in its all-zero `app_role_id` as a tenth id — which
+>   # would report a healthy nine-group gate as UNEXPECTED MEMBERSHIP.
+>   sed -n '/^variable "entra_gate1_group_object_ids"/,/^}/p' infra/terraform/entra.tf | grep -ioE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | sort > gate-expected.txt
+>   if [ ! -s gate-expected.txt ]; then echo "EXPECTED SET NOT READ — run from the repo root; not asserting membership"; rc=1
+>   elif diff gate-expected.txt <(cut -f2 gate-entra.txt | sort); then echo "MEMBERSHIP OK — matches infra/terraform/entra.tf"
+>   else echo "UNEXPECTED MEMBERSHIP — the live gate differs from entra.tf (< expected, > live). Either a group was added outside the process, or entra.tf was not updated when one was onboarded."; rc=1; fi
+>   if [ "$(awk -F'	' '$1!="Group"{n++} END{print n+0}' gate-auth0.txt gate-entra.txt)" != "0" ]; then
 >     echo "NON-GROUP ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each with the command printed for it:"
 >     for pair in "gate-auth0.txt:$AUTH0" "gate-entra.txt:$ENTRA"; do awk -F'	' -v sp="${pair##*:}" '$1!="Group"{print "  "$1" "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' "${pair%%:*}"; done
 >     rc=1
@@ -107,6 +117,13 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
 >   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
 >   held to four times now.
+> - **Parity and correctness are two questions, and it now asks both.** Comparing the apps to each
+>   other catches the drift that has happened twice, but it passes happily when the *same* wrong
+>   group sits on both — which is what onboarding a department to the wrong tier looks like, and
+>   the diff would call it healthy. So the live set is also asserted against
+>   `entra_gate1_group_object_ids` in `infra/terraform/entra.tf`, which is the recorded expected
+>   nine. That makes the Terraform capture load-bearing for this check rather than decorative:
+>   onboarding a department means updating it, which the runbook already tells you to do.
 > - **It tests the invariant, not the one violation that has occurred.** Gate 1 is meant to hold
 >   *nine Group rows and nothing else*, so the check rejects every row whose `principalType` is
 >   not `Group` — not just `User`. The `User` row this runbook records really happened (admin

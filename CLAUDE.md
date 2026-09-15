@@ -934,8 +934,21 @@ Revisit if scoped keys ever ship; a read-only key at the boundary beats any swit
 
 **So `Authorization__ReadOnly=true` is staging's guard, and it is the one live use for that switch.**
 Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
-write tools to prove a reader is denied one. Live state: **`true` on staging** (and set in
-`containerapps-staging.tf`, so a recreate inherits it), **unset on production**.
+write tools to prove a reader is denied one. Live state: **`true` on staging**, **unset on production**.
+
+⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it
+(`Authorization__ReadOnly = "true"`, lines 163–166), but `infra/terraform/` is an as-built
+capture and **`terraform apply` is never run here** — staging is stood up through `deploy.yml`
+and `az containerapp`. So a fresh app comes up on the application default, `false`, writing to
+the shared production Vitally tenant until someone sets the variable. Set it as part of the
+spin-up and verify it, rather than reading the capture as a guarantee:
+
+```bash
+az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
+```
+
+Empty output means unguarded, not "defaulted to safe".
 
 **The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
 DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from
