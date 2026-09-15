@@ -39,8 +39,13 @@ state()   { az containerapp show "${APP[@]}" \
   --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
 unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
 
-# Retries, then VERIFIES, then shouts. `az … && echo "restored"` is not a restore: a single
-# failed call would be swallowed by the && and the shell would exit looking successful.
+# Retries, then VERIFIES, then shouts, then RETURNS A STATUS. Three separate things, and each
+# one has been the bug here at some point:
+#   * `az … && echo "restored"` is not a restore — one failed call is swallowed by the &&.
+#   * A successful `az` is not a restored guard — read the value back and check it.
+#   * A printed warning is not a failure — a function ending in `echo` returns 0, so the
+#     detached `bash -c "…; guard"` below would exit SUCCESSFULLY while staging stayed writable,
+#     and nothing monitoring that process could tell.
 guard() {
   for _ in 1 2 3 4 5; do
     az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none && break
@@ -48,10 +53,11 @@ guard() {
   done
   if [ "$(state)" = "true" ]; then
     echo "$(date -u +%FT%TZ) guard RESTORED"
-  else
-    echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
-    echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
+    return 0
   fi
+  echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
+  echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
+  return 1
 }
 
 # (a) This shell. EXIT alone is not enough: Ctrl-C at an interactive prompt does not exit the
