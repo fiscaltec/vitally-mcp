@@ -176,9 +176,15 @@ by default) rather than denying everyone — so a revoked user can retain access
 trade is deliberate; see the entitlement section in `CLAUDE.md`.
 
 So the honest worst case is **the remaining token lifetime plus the stale window**. If that is not
-acceptable for a given incident, the escalation is to stop the server accepting anything — scale the
-Container App to zero or set `Authorization__ReadOnly=true` for a blunt halt to all mutations — not a
-group change.
+acceptable for a given incident, escalate to a control that does not depend on group membership:
+
+- `Authorization__ReadOnly=true` on the Container App — denies every create/update/delete for
+  everyone, immediately on the new revision, without consulting Graph or any token. Reads keep
+  working.
+- `az containerapp ingress disable` — stops the server answering at all.
+
+**Do not reach for "scale to zero".** A Container App with HTTP ingress scales back up on the next
+request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is not a halt.
 
 ## How it's set up (in brief)
 
