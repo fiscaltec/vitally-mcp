@@ -190,17 +190,20 @@ Then, **in the same change**:
    }
    ```
 
-   (If you lost the id, re-read it: `az rest --method get --url
-   "https://graph.microsoft.com/v1.0/servicePrincipals/$ENTRA_SP/appRoleAssignedTo" --query
-   "value[?principalDisplayName=='<Department name>'].id" -o tsv`.)
+   (If you lost the id, re-read it — the service-principal id is spelled out because this command
+   is meant to work pasted on its own:
+
+   ```bash
+   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo" --query "value[?principalDisplayName=='<Department name>'].id" -o tsv
+   ```
+   )
 3. Run the parity check above.
 
 Verify at any time:
 
 ```bash
-az rest --method get \
-  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" \
-  --query "value[].{p:principalDisplayName,t:principalType}" -o tsv
+export MSYS_NO_PATHCONV=1
+az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo" --query "value[].{p:principalDisplayName,t:principalType}" -o tsv
 ```
 
 The result should be **nine Group rows and nothing else**. A `User` row is drift — see below.
@@ -223,8 +226,7 @@ app's own `mcp.access`, so users see no consent screen. Together with
 > after every re-consent** and delete any `User` row:
 >
 > ```bash
-> az rest --method delete \
->   --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo/<assignment-id>"
+> az rest --method delete --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo/<assignment-id>"
 > ```
 
 Doing consent via Graph directly (`POST /oauth2PermissionGrants`) avoids the side effect, but that
@@ -302,7 +304,8 @@ own creation on 2026-08-18, not from the day it was changed), and this secret wa
 > below matters: it stops before creating a credential it cannot store.
 
 ```bash
-MYIP=$(curl -s https://ifconfig.me)   # inside the script, every time
+VAULT=vitally-prod-kv-uksouth
+MYIP=$(curl -4 -s https://ifconfig.me)   # inside the script, every time; -4 because KV ACLs are IPv4-only
 ...
 az keyvault secret list --vault-name "$VAULT" -o none 2>/dev/null \
   || { echo "unreachable — aborting before creating anything"; exit 1; }
@@ -345,6 +348,7 @@ picked up the new value (it caches Key Vault reads for `Vitally:SecretCacheDurat
 minutes):
 
 ```bash
+APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
 az ad app credential list --id $APP --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
 az ad app credential delete --id $APP --key-id <old-keyId>
 ```

@@ -146,8 +146,8 @@ decides what you have to change*:
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
-> USER=<their-entra-object-id>; TIER=<sg-vitally-readers|editors|admins object id>
-> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$count=true&\$filter=id eq '$USER'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
+> SUBJECT=<their-entra-object-id>; TIER=<sg-vitally-readers|editors|admins object id>
+> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$count=true&\$filter=id eq '$SUBJECT'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
 > ```
 >
 > `1` = direct member, `0` = inherited. **Both can be true of the same person**, so a `1` does not
@@ -158,8 +158,13 @@ decides what you have to change*:
 > path-independent check** that they are actually out:
 >
 > ```bash
-> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/transitiveMembers?\$count=true&\$filter=id eq '$USER'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
+> export MSYS_NO_PATHCONV=1
+> TIER=<sg-vitally-readers|editors|admins object id>; SUBJECT=<their-entra-object-id>
+> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/transitiveMembers?\$count=true&\$filter=id eq '$SUBJECT'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
 > ```
+>
+> (`SUBJECT`, not `USER` — most shells already define `USER` as your own login name, so reusing it
+> silently queries for a user id that is really a username and reports a confident `0`.)
 >
 > `0` from **that** query is the only thing that means revoked — it is the same lookup the server
 > itself makes, so it answers the question the server will answer. Repeat it for each tier group they

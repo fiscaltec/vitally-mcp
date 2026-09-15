@@ -23,8 +23,10 @@ namespace VitallyMcp;
 /// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/> decides whether it can be served
 /// without asking Graph at all, and <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>
 /// decides whether it may still be served as a <i>fallback</i> after a Graph call has failed. Only
-/// when neither applies does the method return <c>null</c>, leaving the authorizer to fall through to
-/// the token claim.</para>
+/// when neither applies does the method return <c>null</c> — which, with
+/// <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> on, means the authorizer <b>denies</b>.
+/// #108 removed the fall-through to the token claim, so the order is fresh Graph → stale set →
+/// deny.</para>
 ///
 /// <para>The two thresholds are kept deliberately separate. Retaining a copy for an hour must not
 /// stretch the live check's own cache from a minute to an hour — that would stop revocations
@@ -112,10 +114,10 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         }
         catch (Exception ex)
         {
-            // Fail-degraded, in two steps. Prefer this caller's last known-good tier, so a Graph
-            // outage does not revoke someone whose membership was confirmed minutes ago; only when
-            // there is no usable copy does the authorizer fall through to the token claim (which is
-            // empty post-cutover, hence #106). Never cache the failure itself.
+            // Fail-degraded, then closed. Prefer this caller's last known-good tier, so a Graph
+            // outage does not revoke someone whose membership was confirmed minutes ago; when there
+            // is no usable copy this returns null and the authorizer denies (#108 removed the
+            // token-claim tier that used to sit below). Never cache the failure itself.
             // Read the clock again: `now` predates the attempt, and a Graph timeout can burn the
             // whole client timeout before arriving here. Both the decision and the reported age must
             // be as of failure time, or a lookup that began inside the window could be served after

@@ -10,10 +10,22 @@ registration or the entitlement wiring moves.
 **Nothing here touches production.** Staging is a separate Container App with its own configuration,
 and none of the steps below reach production whatever state it is in.
 
-⚠️ **Staging reads the production `vitally-shared` Vitally key.** There is one Vitally tenant and its
-API keys are global, so its write and delete tools mutate **real customer data**. `Authorization:ReadOnly`
-is deliberately not set, because step 4 needs the write tools visible. Pick a harmless target if you
-exercise one at all — reading the tool list is enough for every check below.
+⚠️ **Staging reads the production `vitally-shared` Vitally key**, so its write and delete tools
+mutate **real customer data**. There is one Vitally tenant, no sandbox, and no read-scoped API key
+available (checked 2026-09-15).
+
+`Authorization__ReadOnly=true` is therefore staging's standing guard and is set in
+`containerapps-staging.tf`. **Step 4 is the one exception:** it needs the write tools visible to
+prove a reader is denied one, so unset the variable for that step and **put it back immediately
+after**:
+
+```bash
+az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --remove-env-vars Authorization__ReadOnly   # before step 4
+az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --set-env-vars Authorization__ReadOnly=true # after step 4
+```
+
+Every other check below needs only the tool *list*, which the guard does not affect for read tools —
+so leave it on for steps 1, 2, 3 and 5.
 
 ## Already verified, so you can skip it
 

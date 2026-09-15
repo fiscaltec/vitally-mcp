@@ -906,7 +906,8 @@ Revisit if scoped keys ever ship; a read-only key at the boundary beats any swit
 
 **So `Authorization__ReadOnly=true` is staging's guard, and it is the one live use for that switch.**
 Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
-write tools to prove a reader is denied one. It is currently unset on both targets.
+write tools to prove a reader is denied one. Live state: **`true` on staging** (and set in
+`containerapps-staging.tf`, so a recreate inherits it), **unset on production**.
 
 **The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
 DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from

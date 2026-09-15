@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop**, **Claude Code**, **VS Code**, and **Cursor**.
 
-Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.0 / RFC 9728). Users connect by URL — no install, no executable, no per-user secrets to distribute.
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.0 / RFC 9728) — production reaching it through Auth0 federation until the #108 configuration flip, staging directly. Users connect by URL — no install, no executable, no per-user secrets to distribute.
 
 [![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
 
