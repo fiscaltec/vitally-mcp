@@ -151,6 +151,17 @@ resource "azurerm_container_app" "staging" {
       # Same tier groups as production. Entitlement is resolved live from Graph transitiveMembers
       # using only the `oid` claim, so it is identity-provider-independent and needs no staging
       # variant — which is also why staging can be moved to Entra without touching these.
+      # Staging shares the PRODUCTION Vitally API key — there is one Vitally tenant, no sandbox, and
+      # no read-scoped key available (checked 2026-09-15) — so its write and delete tools mutate real
+      # customer data. This switch is the only thing preventing that, which makes it part of the
+      # recreate recipe rather than a post-deploy step someone has to remember.
+      #
+      # Unset it for the tier-enforcement acceptance test, which has to see the write tools to prove
+      # a reader is denied one, then put it back. See docs/runbooks/read-only-and-rbac-rollout.md.
+      env {
+        name  = "Authorization__ReadOnly"
+        value = "true"
+      }
       env {
         name  = "Authorization__LiveGroupCheck"
         value = "true"

@@ -150,8 +150,20 @@ decides what you have to change*:
 > az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$count=true&\$filter=id eq '$USER'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
 > ```
 >
-> `1` = direct member, use the first row. `0` while they still have access = inherited, use the
-> second.
+> `1` = direct member, `0` = inherited. **Both can be true of the same person**, so a `1` does not
+> mean the direct membership is their only route — removing it can leave a department path intact and
+> the account still authorised.
+>
+> So do not stop at the count. Clear every path the table gives you, then **confirm with a
+> path-independent check** that they are actually out:
+>
+> ```bash
+> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/transitiveMembers?\$count=true&\$filter=id eq '$USER'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
+> ```
+>
+> `0` from **that** query is the only thing that means revoked — it is the same lookup the server
+> itself makes, so it answers the question the server will answer. Repeat it for each tier group they
+> might hold.
 >
 > The query filters **server-side** on the user id rather than fetching the member list and searching
 > it. That matters during a revocation: `/members` is paginated, so reading only the first page would

@@ -37,6 +37,11 @@ standing between that and an accident is `Authorization__ReadOnly`.
 | running the tier-enforcement test specifically | **unset** — the test has to see the write tools to prove a reader is denied one |
 | torn down | n/a, and this is the strongest control of the three |
 
+**It is set in `infra/terraform/containerapps-staging.tf`, not applied by hand.** Staging is
+recreated from that capture, so a guard that lived only in someone's memory would be absent from
+every fresh spin-up — which is exactly when nobody is thinking about it. Unsetting it for a tier test
+is the deliberate act; having it on is the default the recipe gives you.
+
 Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
 staging, and worth knowing before doing it anywhere else.
 

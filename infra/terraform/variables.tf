@@ -103,9 +103,15 @@ variable "entra_group_admin" {
 }
 
 # ---- Staging target (#112) ----
-# Everything the staging Container App does NOT share with production. The rest — region, vault,
-# managed identity, shared Auth0 client, tier group ids — is deliberately the same, so a staging
-# failure points at what changed rather than at the environment.
+# Everything the staging Container App does NOT share with production. The rest — region, vault and
+# its `vitally-shared` secret, managed identity, ACR, Container Apps Environment and the
+# `sg-vitally-*` tier group ids — is deliberately the same, so a staging failure points at what
+# changed rather than at the environment.
+#
+# The identity provider is NOT shared while #108 is half-applied: staging is on the Entra app
+# registration, production is still on the Auth0 client, so the client id, upstream scope and client
+# secret each have a `staging_*` variable below holding a different value. They reunify when
+# production flips.
 variable "staging_app_name" {
   type        = string
   description = "Staging Container App name. Deliberately outside the name_prefix convention: it is a second app inside the production RG and Container Apps Environment, not a second environment."
