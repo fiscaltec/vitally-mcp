@@ -204,7 +204,11 @@ import {
   to = azuread_application_pre_authorized.self
   id = "568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4/preAuthorizedApplication/c3812e7d-a413-4169-b57e-803326611ba3"
 }
-# The seven Gate 1 assignments, keyed by display name to match the for_each in entra.tf.
+# The nine Gate 1 assignments, keyed by display name to match the for_each in entra.tf.
+#
+# Every entry in `entra_gate1_group_object_ids` needs one of these, or a plan reads that instance as
+# unmanaged and proposes creating an assignment that already exists. Development and Data Science
+# were added after the original seven (see the drift note in entra.tf) and are imported below.
 import {
   to = azuread_app_role_assignment.gate1["Product Department"]
   id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/3VgmAS85hE2vB_l5N_OiPq7WKQozEDtBq7rpU50iCv0"
@@ -232,4 +236,12 @@ import {
 import {
   to = azuread_app_role_assignment.gate1["Service Delivery Department"]
   id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/gVhg6QD0o0Se4PXfXqA3-CW9Lh2CgwBFsYfhlP7bVqM"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Development Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/CeXzv5plykG3Ujxml2jy66ls3YSRDodJvdt4F32HrXc"
+}
+import {
+  to = azuread_app_role_assignment.gate1["Data Science Department"]
+  id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/Fcng-KaKYkq2-YLz7IcB6j5bm_KkIdJFryeAk792K5Q"
 }
