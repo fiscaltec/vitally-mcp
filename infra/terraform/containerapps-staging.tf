@@ -155,11 +155,22 @@ resource "azurerm_container_app" "staging" {
       # variant — which is also why staging can be moved to Entra without touching these.
       # Staging shares the PRODUCTION Vitally API key — there is one Vitally tenant, no sandbox, and
       # no read-scoped key available (checked 2026-09-15) — so its write and delete tools mutate real
-      # customer data. This switch is the only thing preventing that, which makes it part of the
-      # recreate recipe rather than a post-deploy step someone has to remember.
+      # customer data. This switch is the only thing preventing that.
+      #
+      # BUT THIS FILE DOES NOT APPLY IT. infra/terraform/ is a back-filled as-built capture and
+      # `terraform apply` is never run here — staging is stood up through deploy.yml and the
+      # `az containerapp` commands in CLAUDE.md. So recording it here does NOT make a recreated app
+      # come up guarded: it starts on the application default, false. Set it out of band as part of
+      # the spin-up and then verify it:
+      #
+      #   az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+      #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
+      #
+      # Empty output means unguarded, not "defaulted to safe".
       #
       # Unset it for the tier-enforcement acceptance test, which has to see the write tools to prove
-      # a reader is denied one, then put it back. See docs/runbooks/read-only-and-rbac-rollout.md.
+      # a reader is denied one, then put it back — under the EXIT trap in
+      # docs/runbooks/entra-cutover-staging-validation.md, so an interrupted run cannot leave it off.
       env {
         name  = "Authorization__ReadOnly"
         value = "true"

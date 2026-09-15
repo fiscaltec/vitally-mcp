@@ -21,12 +21,29 @@ and all 93) cannot be observed — an admin would see the 56-tool reader catalog
 report a failure that is really the guard working. Unset it before step 3 and **put it back
 immediately after step 4**:
 
-```bash
-# BEFORE step 3 — steps 3 and 4 both need the write tools visible
-az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --remove-env-vars Authorization__ReadOnly
+**Do not unset it in one command and trust yourself to run the other.** Between those two commands
+staging is writable against real customer data, and anything that ends the session in between — a
+failed step, Ctrl-C, closing the terminal, going to lunch — leaves it that way indefinitely. Drive
+it from a shell that restores the guard on **any** exit:
 
-# AFTER step 4 — restore the guard immediately; staging writes reach real customer data
-az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --set-env-vars Authorization__ReadOnly=true
+```bash
+APP=(-n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth)
+guard()   { az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none; }
+unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
+state()   { az containerapp show "${APP[@]}" \
+  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
+
+# Restores on ANY exit of this shell: a failed command, Ctrl-C, or closing the window.
+trap 'guard && echo "guard RESTORED (now: $(state))"' EXIT
+
+unguard && echo "guard REMOVED — run steps 3 and 4 now, then exit this shell"
+```
+
+Keep that shell open for steps 3 and 4 and exit it when they are done. The trap cannot survive the
+machine losing power, so **confirm before you walk away**:
+
+```bash
+state   # must print `true`. Empty output means UNGUARDED, not "defaulted to safe"
 ```
 
 Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool

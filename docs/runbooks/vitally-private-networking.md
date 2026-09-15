@@ -106,8 +106,13 @@ public IP (~£3/mo), scanner Job (pennies, no storage), 2 private DNS zones (~£
 ## As-built (2026-06-09) — deviations from the plan
 - **Naming:** rebuilt the env+app with clean names (`vitally-prod-cae-uksouth` / `vitally-prod-ca-uksouth`,
   no `…2…` suffix). The env infra subnet is **`snet-app`** (10.80.0.64/27), not `snet-aca` — the original
-  `snet-aca` couldn't be reused (occupied by the interim env until it was deleted) so it was removed; subnets
-  are now `snet-app` (env) + `snet-pe` (private endpoints).
+  `snet-aca` couldn't be reused (occupied by the interim env until it was deleted) so it was removed; the
+  subnets built here were `snet-app` (env) + `snet-pe` (private endpoints).
+- **A third subnet was added later, after this runbook was written.** `snet-pe-monitor`
+  (10.80.0.96/27) came with the Azure Monitor Private Link Scope in August 2026 and is modelled in
+  `infra/terraform/ampls.tf`; see `docs/superpowers/specs/2026-08-11-observability-design.md`. So the
+  live VNet has **three** subnets, not the two this section listed — which is what the banner at the
+  top means by reading the phases as a June record rather than a current inventory.
 - **Scanner:** implemented as a **Container Apps Job** `vitally-prod-secscan-uksouth` (cron `0 8 * * 1`),
   **not** a Function. Image `python:3-slim`; gets a token from the Container Apps identity endpoint
   (`IDENTITY_ENDPOINT`/`IDENTITY_HEADER`) and calls the **Key Vault REST API** directly (no Azure CLI).

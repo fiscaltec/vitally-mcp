@@ -4,9 +4,13 @@
 > `Authorization__LiveGroupCheck=true` with all three group ids set, on production and staging.
 > Steps 1–3 are a record of how it was done, not work outstanding.
 >
-> `Authorization__ReadOnly` is **`true` on staging and unset on production**. Staging's is also in
-> `containerapps-staging.tf`, so a recreate brings it up guarded rather than open; unset it only for
-> the tier-enforcement test and put it back after.
+> `Authorization__ReadOnly` is **`true` on staging and unset on production**. Unset it only for the
+> tier-enforcement test, and put it back after.
+>
+> ⚠️ **A recreate does NOT bring staging up guarded.** `containerapps-staging.tf` records the
+> setting but nothing applies it — `terraform apply` is never run here — so a fresh app starts on
+> the application default `false`, writable against the shared production Vitally tenant. Set it and
+> verify it after every recreate; see the verification command below.
 
 ## `Authorization__ReadOnly` — what it is for now
 

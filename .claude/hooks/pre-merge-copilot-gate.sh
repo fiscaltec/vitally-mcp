@@ -83,24 +83,38 @@ facts=$(gh pr view "$pr" --json headRefOid,headRefName,author,reviewRequests 2>/
 author=$(printf '%s' "$facts" | jq -r '.author.login // empty')
 head=$(printf '%s' "$facts" | jq -r '.headRefOid // empty')
 prbranch=$(printf '%s' "$facts" | jq -r '.headRefName // empty')
-[ -n "$head" ] || deny "could not read the head commit of PR #$pr (failing closed)"
+apihead=$head
+[ -n "$apihead" ] || deny "could not read the head commit of PR #$pr (failing closed)"
 
 # `headRefOid` LAGS after a push — CLAUDE.md records it still naming the previous
-# commit seconds after one on #122. Trusting it alone is this gate's worst failure
-# mode, and it fails OPEN: right after a push the field still names the commit
-# Copilot already reviewed, so the comparison below matches and a newly pushed,
-# UNREVIEWED commit merges — precisely the #117 mistake this hook was ported to
-# stop. When the PR's branch is the one checked out, git is authoritative and
-# fresh, so cross-check and deny on any disagreement rather than picking a winner.
-# A different branch checked out means no local reference to compare against, so
-# the API value stands — note the residual risk if you merge another PR from here.
-localbranch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || localbranch=""
-if [ -n "$prbranch" ] && [ "$prbranch" = "$localbranch" ]; then
-	localhead=$(git rev-parse HEAD 2>/dev/null) \
-		|| deny "could not resolve the local HEAD to cross-check PR #$pr (failing closed)"
-	[ "$localhead" = "$head" ] \
-		|| deny "PR #$pr reports head $head but the local branch is at $localhead — the PR API lags after a push, and the older value would match an already-reviewed commit. Wait for it to catch up, then re-check (failing closed)"
+# commit seconds after one on #122. Trusting it is this gate's worst failure mode
+# and it fails OPEN: in that window the field names the commit Copilot already
+# reviewed, so the comparison below matches and a newly pushed, UNREVIEWED commit
+# merges — precisely the #117 mistake this hook was ported to stop.
+#
+# So resolve the head from a source that does not lag, and prefer `git ls-remote`:
+# it asks the server for the ref directly, so it is authoritative whatever branch
+# happens to be checked out. Scoping the fix to "the PR branch is checked out"
+# would leave the hole open for every merge driven from another branch, which is
+# the normal way a second PR gets merged. Fall back to the local HEAD only when
+# the checkout IS the PR branch (a fork PR has no ref on origin), and fail closed
+# when neither is available rather than quietly trusting the lagging value.
+head=""
+if [ -n "$prbranch" ]; then
+	head=$(git ls-remote origin "refs/heads/$prbranch" 2>/dev/null | awk 'NR==1 {print $1}') || head=""
 fi
+if [ -z "$head" ]; then
+	localbranch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || localbranch=""
+	if [ -n "$prbranch" ] && [ "$prbranch" = "$localbranch" ]; then
+		head=$(git rev-parse HEAD 2>/dev/null) || head=""
+	fi
+fi
+[ -n "$head" ] || deny "could not resolve a non-lagging head for PR #$pr — no ref on origin and the checkout is not its branch, so the only value available is the one known to lag (failing closed)"
+
+# Disagreement means the API has not caught up. Deny rather than proceeding on the
+# fresh value: the operator waits seconds, and the message names both commits.
+[ "$apihead" = "$head" ] \
+	|| deny "PR #$pr reports head $apihead but the branch is actually at $head — the PR API lags after a push, and the older value would match an already-reviewed commit. Wait for it to catch up, then re-check (failing closed)"
 pending=$(printf '%s' "$facts" | jq -r '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null')
 
 # Dependabot carve-out. Mind the two forms of the bot's login — the suffix tracks

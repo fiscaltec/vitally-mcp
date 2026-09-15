@@ -236,6 +236,12 @@ adaptation, resolving owner/repo at runtime.
 Caveats worth knowing before trusting it:
 
 - It guards **only Claude Code's own tool calls** — a merge from the GitHub UI is unaffected.
+- **It resolves the head with `git ls-remote`, not from the PR API.** `headRefOid` lags after a push
+  (see the warning above), and a gate that trusts it fails *open* — the stale value names the commit
+  Copilot already reviewed. `ls-remote` asks the git server directly, so it is fresh whatever branch
+  is checked out, which matters because merging a second PR from another branch is normal. The
+  consequence to know: **a PR whose branch is not on `origin` — a fork — is denied**, because the
+  only head available is the one known to lag. Fail-closed by design; Dependabot is exempt earlier.
 - A newly added hook needs `/hooks` opened once (or a restart) to activate.
 - **Run `gh pr merge` as a standalone command — no pipes, no `;`, no `&&`.** The hook resolves the PR
   by counting non-flag positional tokens after the subcommand, so a chained form turns every
