@@ -1,8 +1,14 @@
 # Copy to terraform.tfvars (gitignored) and fill in the secrets, OR supply via environment:
 #   export TF_VAR_oauth_shared_client_secret=...
+#   export TF_VAR_staging_oauth_shared_client_secret=...
 #   export TF_VAR_teams_webhook_url=...
 #
 # All non-secret values have sensible defaults in variables.tf.
+#
+# The two client secrets are DIFFERENT while the #108 cutover is half-applied: production still
+# signs in through Auth0, staging has been on Entra since 2026-09-03. They collapse back to one
+# value when production flips.
 
-oauth_shared_client_secret = "<Auth0 shared app client secret>"
-teams_webhook_url          = "<Teams Power Automate Workflows webhook URL>"
+oauth_shared_client_secret         = "<Auth0 shared app client secret — PRODUCTION>"
+staging_oauth_shared_client_secret = "<Entra app client secret, Key Vault 'entra-mcp-client-secret' — STAGING>"
+teams_webhook_url                  = "<Teams Power Automate Workflows webhook URL>"

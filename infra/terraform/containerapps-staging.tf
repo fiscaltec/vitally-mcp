@@ -42,8 +42,12 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # The same Entra app registration as production, so this is the same secret value. Its redirect
-  # URIs carry both origins' /oauth/callback; the proxy's callback is fixed per origin.
+  # NOT the same value as production's, despite the identical Container App secret name. Staging
+  # flipped to Entra on 2026-09-03 and production has not, so this holds the *Entra* app's secret
+  # while `containerapps.tf` holds the *Auth0* client's. Handing production's secret to staging (or
+  # the reverse) is a silent authentication failure at the token exchange, not a startup error.
+  # Reunify the two variables once production flips — the Entra registration's redirect URIs already
+  # carry both origins' /oauth/callback, so one secret will serve both again.
   secret {
     name  = "oauth-shared-client-secret"
     value = var.staging_oauth_shared_client_secret
