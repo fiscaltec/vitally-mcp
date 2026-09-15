@@ -84,8 +84,8 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > else
 >   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
 >   if grep -q '^User' gate-auth0.txt gate-entra.txt; then
->     echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each by its assignment id (4th column):"
->     grep -h '^User' gate-auth0.txt gate-entra.txt | awk -F'	' '{print "  "$3" -> assignment id "$4}'
+>     echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each with the command printed for it:"
+>     for pair in "gate-auth0.txt:$AUTH0" "gate-entra.txt:$ENTRA"; do awk -F'	' -v sp="${pair##*:}" '$1=="User"{print "  "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' "${pair%%:*}"; done
 >     rc=1
 >   else
 >     echo "no user assignments — Gate 1 is group-driven"
@@ -112,7 +112,12 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   reported health while finding a problem: `… || echo "DRIFT"` succeeds whatever it found;
 >   `grep -c '^User' # must be 0` is inverted, because `grep` exits **0 when it finds** a match, so
 >   the unsafe result was the successful one; and a second `if` after the first silently overwrites
->   `$?`, so a real DRIFT followed by a clean user check exits 0. Hence the `rc` accumulator and the
+>   `$?`, so a real DRIFT followed by a clean user check exits 0. **And it prints a whole delete
+>   command per row rather than a bare assignment id**, because the two files come from two
+>   different service principals: `grep -h` discards which file a row came from, so a reader
+>   pasting the id into the delete command further down this runbook — which hardcodes the
+>   `Vitally MCP` SP — would target the wrong app for anything found in `gate-auth0.txt`, and
+>   leave the `User` row in place having been told it was removed. Hence the `rc` accumulator and the
 >   closing `[ "$rc" -eq 0 ]`, which sets the status without exiting an interactive shell.
 > - **It re-sorts after projecting.** Strictly redundant — a whole-line sort is already dominated by
 >   type and id, which precede the name — but it makes rename-safety a local property of the

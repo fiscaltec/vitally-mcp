@@ -83,24 +83,27 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    > Auth0 app here is what caused two departments to be onboarded one-sidedly; each would have lost
    > access entirely at the cutover. See `ACCESS.md` (canonical) for the full model, and
    > `docs/runbooks/entra-app-registration.md` for the parity check.
-3. **Auth0 (alternative/auxiliary — the token-claim fallback):** a post-login Action
-   (`Vitally MCP claims`) maps Entra group membership to the `vitally:*` permissions, written to the
-   namespaced `Authorization:CustomPermissionsClaim`. This path runs only when the live Graph lookup
-   is unavailable. **Nested-group caveat:** the Action maps `event.user.group_ids` /
-   `event.user.groups` supplied by the Auth0 Entra (waad) connection; those are **direct** memberships
-   unless Entra is configured to emit transitive security-group memberships in the token. So for the
-   fallback path to honour nested groups too, either enable the transitive/"all (security) groups"
-   groups claim on the Entra app registration feeding the waad connection, or have the Action resolve
-   transitive membership via Graph. The **live check (step 2) already handles nesting** and is the
-   production path.
+3. **Auth0 token claim — retained configuration, NOT a fallback.** The Auth0 post-login Action
+   `Vitally MCP claims` maps Entra group membership to the `vitally:*` permissions and writes them
+   to the namespaced `Authorization:CustomPermissionsClaim`. **Nothing consults that claim on any
+   deployed target, and nothing has since #125 deployed.** With `LiveGroupCheck=true` — set
+   everywhere — the order is **fresh Graph → stale Graph → deny**, and `ToolAuthorizer` has no
+   route from the live mode to the claim mode, including when the resolver is absent, which
+   denies. So during a Graph outage this claim authorises nobody. What covers an outage is
+   `LiveGroupStaleSeconds` (default 1 h) serving each caller's last known-good tier; past that,
+   calls are denied.
 
-   > ⚠️ **This is no longer a fallback, and has not been since #125 deployed.** With
-   > `LiveGroupCheck=true` — set on every deployed target — the order is **fresh Graph → stale Graph
-   > → deny**. `ToolAuthorizer` never consults a token claim in that mode, so the Action described in
-   > this step cannot authorise anyone during a Graph outage. What covers an outage is
-   > `LiveGroupStaleSeconds` (default 1 h) serving each caller's last known-good tier; past that the
-   > call is denied. Read the rest of this step as a description of configuration that still exists
-   > for the rollback window, not as a path that runs.
+   It is kept solely so an Auth0 rollback restores a working *sign-in* path, and it goes with the
+   rest of the Auth0 configuration when that is retired. Do not reinstate it as a safety net —
+   a fall-through that can only ever deny reads like a working fallback and behaves like a silent
+   denial, which is why #108 removed it.
+
+   > **If it is ever revived, it has a nested-group defect to fix first.** The Action reads
+   > `event.user.group_ids` / `event.user.groups` from the Auth0 Entra (waad) connection, and those
+   > are **direct** memberships. Every tier but `sg-vitally-admins` is granted by nesting, so the
+   > claim would under-grant almost everyone. Either emit transitive security-group memberships on
+   > the Entra app registration feeding the waad connection, or have the Action resolve
+   > `transitiveMembers` via Graph — which is exactly what step 2's live check already does.
 4. **Verify on the live revision:** with a reader token, a write returns the RBAC denial; with an
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
    denials appear in the audit log — keyed by the caller's Entra **object id** (the `oid` claim, not

@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop**, **Claude Code**, **VS Code**, and **Cursor**.
 
-Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.0 / RFC 9728) — production reaching it through Auth0 federation until the #108 configuration flip, staging directly. Users connect by URL — no install, no executable, no per-user secrets to distribute.
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.1 / RFC 9728) — production reaching it through Auth0 federation until the #108 configuration flip, staging directly. Users connect by URL — no install, no executable, no per-user secrets to distribute.
 
 [![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
 
@@ -14,7 +14,7 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
 - **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
 - **Streamable HTTP transport** (MCP 2026-07-28) in stateless mode — easy to scale horizontally, no sticky sessions required.
-- **OAuth 2.0 protection** against Microsoft Entra — reached via Auth0 federation on production until the #108 configuration flip, directly on staging. `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
+- **OAuth 2.1 protection** against Microsoft Entra — reached via Auth0 federation on production until the #108 configuration flip, directly on staging. `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
 
 ## Using the server (FISCAL users)
 
@@ -157,7 +157,7 @@ The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget
 
 ### OAuth proxy
 
-When `OAuth:SharedClientId` is set the server runs an OAuth 2.0 proxy in front of the upstream identity provider. It serves:
+When `OAuth:SharedClientId` is set the server runs an OAuth 2.1 proxy in front of the upstream identity provider — it advertises `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code", "refresh_token"]` and `code_challenge_methods_supported: ["S256"]`, and offers no implicit or password grant. It serves:
 
 | Endpoint | Purpose |
 |---|---|

@@ -88,9 +88,12 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         if (groupIds.Length == 0)
         {
             // Nothing to check against. Returns null like any other unresolvable case, which with
-            // LiveGroupCheck on means the authorizer denies — ToolAuthorizationOptions.Validate
-            // refuses that combination at boot, so reaching here means the options were built
-            // in code rather than bound from configuration.
+            // LiveGroupCheck on means the authorizer denies. Unreachable on a configuration-bound
+            // server, by two separate routes: with Authorization:Enabled=true, Validate() refuses
+            // LiveGroupCheck with no group ids at boot; with Enabled=false it returns before
+            // reaching that check, but ToolAuthorizer then bypasses and never calls a resolver at
+            // all. So arriving here means an options instance built in code — a test, or a future
+            // call site resolving permissions outside ToolAuthorizer.
             return null;
         }
 

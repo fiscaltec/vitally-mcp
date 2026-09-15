@@ -1,6 +1,14 @@
 # Runbook: Vitally MCP — Private Networking Migration
 
 **Status:** ✅ COMPLETED & VALIDATED 2026-06-09 · **Author:** Infra · **Date:** 2026-06-05
+
+> ⚠️ **This is the plan as written in June 2026, kept as the record of why the estate is shaped
+> this way. It is not a procedure — read every phase in the past tense.** Where the build diverged
+> from the plan, the *As-built* section at the bottom is authoritative. Two divergences reach into
+> the phases below: the scanner was built as the Container Apps **Job** `vitally-prod-secscan-uksouth`,
+> **not** the timer Function the phases describe, and the live subnets are `snet-app` / `snet-pe` /
+> `snet-pe-monitor` — `snet-aca` and `snet-func` were never built (verified against the live VNet
+> on 2026-09-15).
 **Goal:** Move Key Vault and ACR off the public internet via a VNet-integrated Container Apps
 environment + private endpoints, as a reusable *private-by-default* standard.
 
@@ -22,7 +30,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | VNet | `vitally-prod-vnet-uksouth` | `10.80.0.0/23` |
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
-| Subnet (func) | `snet-func` | `10.80.0.48/28`, delegation per Functions Flex VNet-integration (confirm at create) |
+| ~~Subnet (func)~~ | ~~`snet-func`~~ | **Never built** — the scanner became a Container Apps Job, which needs no subnet of its own |
 | NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
@@ -47,10 +55,6 @@ zones linked to the VNet. No effect on the running service.
 
 ### Phase 3 — New environment + app + scanner (zero impact)
 
-> **Historical plan steps.** This phase was executed in June 2026 and the scanner was built as a
-> Container Apps **Job** (`vitally-prod-secscan-uksouth`), not the timer Function described below.
-> Read the Function steps as the plan of record, not as instructions — following them provisions a
-> workload that does not exist in the as-built estate.
 - Create VNet-integrated workload-profiles env (`…cae2…`), external ingress.
 - Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the
   `oauth-shared-client-secret`, scale 0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
@@ -62,7 +66,8 @@ zones linked to the VNet. No effect on the running service.
 ### Phase 4 — Validate new app on temp FQDN (zero impact)
 - Confirm the new app resolves KV/ACR via the **private endpoints** (private DNS makes it use the
   PE even while public is still on), pulls its image, and is healthy (`/health`).
-- Confirm the Function run reads KV and (force-test) posts to Teams.
+- Confirm the scanner run reads KV and (force-test) posts to Teams. *(As-built this is the Job:
+  `az containerapp job start -n vitally-prod-secscan-uksouth -g vitally-prod-rg-uksouth`.)*
 
 ### Phase 5 — Cutover (short planned interruption)
 - Pre-lower DNS TTL on `vitally.fiscaltec.com`.
@@ -74,7 +79,8 @@ zones linked to the VNet. No effect on the running service.
 
 ### Phase 6 — Lock down + decommission
 - Set **KV `publicNetworkAccess=Disabled`** and **ACR public access disabled**.
-- Confirm app + Function still work (now fully private).
+- Confirm app + scanner still work (now fully private) — the Job, per *As-built*. There is no
+  Function to confirm here or to delete below.
 - Delete the old env, old app, and the Consumption Logic App + its O365 leftovers.
 
 ## Rollback
