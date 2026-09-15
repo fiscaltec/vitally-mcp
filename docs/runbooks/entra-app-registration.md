@@ -148,7 +148,10 @@ GROUP=<new-group-object-id>
 rc=0
 for SP in "$ENTRA_SP" "$AUTH0_SP"; do
   echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
-  if az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json -o none; then
+  existing=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv)
+  if [ "$existing" != "0" ]; then
+    echo "already assigned on $SP"
+  elif az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json -o none; then
     echo "assigned on $SP"
   else
     echo "FAILED on $SP — the apps are now out of parity; fix before stopping"; rc=1
@@ -158,7 +161,11 @@ rm -f body.json
 [ "$rc" -eq 0 ]
 ```
 
-**The loop covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is still the
+**It is idempotent on purpose**, so it doubles as the drift repair: a group already assigned to one
+app is skipped rather than re-POSTed, because Graph refuses a duplicate assignment and a naive loop
+would report the apps out of parity in the very state it had just fixed.
+
+**And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is still the
 live production sign-in gate until the #108 configuration flip is applied, and the rollback path for
 a period after it; `Vitally MCP` gates staging now and production after. Omitting either locks the
 new department out of that one, silently, until it is the app being used — which is exactly how

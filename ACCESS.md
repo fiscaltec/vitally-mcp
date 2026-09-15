@@ -127,16 +127,34 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 - **Revoking** access takes effect within ~60s of removing the user from the group — no reconnect required.
 - **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
 
-> **Urgent revocation:** the fast control is **removing the user from the `sg-vitally-*` group** —
-> normally effective within the ~60s live-membership window, on production and staging alike, and it
-> is what actually stops them using the server.
+> **Urgent revocation — check *how* they hold the tier first.** Membership is evaluated
+> **transitively**, so most people are not direct members of any `sg-vitally-*` group: they inherit
+> the tier from a department group nested inside one. **Removing such a user from the `sg-vitally-*`
+> group does nothing** — they were never in it.
 >
-> **The ~60s is the healthy case, not a guarantee.** If Microsoft Graph is unreachable the server
-> serves each caller's last known-good tier for up to `Authorization:LiveGroupStaleSeconds`
-> (**1 hour** by default) rather than denying everyone, so a revoked user can retain access for that
-> long during a Graph outage. That trade is deliberate — see the entitlement section in `CLAUDE.md` —
-> but for a genuinely compromised account, treat an hour as the worst case and escalate to disabling
-> the Entra account itself, which stops new tokens and is not subject to this window.
+> ```bash
+> export MSYS_NO_PATHCONV=1
+> USER=<their-entra-object-id>; TIER=<sg-vitally-readers|editors|admins object id>
+> az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$select=id" --query "length(value[?id=='$USER'])" -o tsv
+> ```
+>
+> `1` means a direct member — remove them from the tier group. `0` with access still working means
+> they inherit it: **remove them from the department group** that is nested in the tier (or un-nest
+> that department, which revokes the whole department and is usually not what you want for one
+> person).
+>
+> Either way the change takes effect within the ~60s live-membership window in the healthy case.
+>
+> **That ~60s is not a guarantee.** If Microsoft Graph is unreachable the server serves each caller's
+> last known-good tier for up to `Authorization:LiveGroupStaleSeconds` (**1 hour** by default) rather
+> than denying everyone — so a revoked user can retain access for that long during a Graph outage.
+> The trade is deliberate; see the entitlement section in `CLAUDE.md`.
+>
+> **Disabling the Entra account does not bypass that window either.** It blocks new sign-ins and
+> refreshes, but this server validates bearer tokens locally, so a token already issued stays valid
+> until it expires and can still be served the retained stale entitlement. For a genuinely
+> compromised account, do all three — remove the correct group membership, disable the account, and
+> revoke sessions — and treat the token lifetime plus the stale window as the worst case.
 >
 > Revoking their IdP session does **not** cut off an access token they already hold: this server
 > validates the bearer token locally against the provider's signing keys, so an issued token stays
