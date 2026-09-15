@@ -77,13 +77,19 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
 > Q='value[].[principalType,principalId,principalDisplayName]'
 > page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
-> fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName]|@tsv' | sort > "$2"; }
+> fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName,.id]|@tsv' | sort > "$2"; }
 > rc=0
 > if ! fetch "$AUTH0" gate-auth0.txt || ! fetch "$ENTRA" gate-entra.txt || [ ! -s gate-auth0.txt ] || [ ! -s gate-entra.txt ]; then
 >   echo "NOT ASSESSED — a lookup failed or returned nothing"; rc=1
 > else
 >   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
->   if grep -q '^User' gate-auth0.txt gate-entra.txt; then echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven"; grep -h '^User' gate-auth0.txt gate-entra.txt; rc=1; else echo "no user assignments — Gate 1 is group-driven"; fi
+>   if grep -q '^User' gate-auth0.txt gate-entra.txt; then
+>     echo "USER ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each by its assignment id (4th column):"
+>     grep -h '^User' gate-auth0.txt gate-entra.txt | awk -F'	' '{print "  "$3" -> assignment id "$4}'
+>     rc=1
+>   else
+>     echo "no user assignments — Gate 1 is group-driven"
+>   fi
 > fi
 > [ "$rc" -eq 0 ]   # final status: 0 only if parity held AND no user row was found
 > ```
@@ -112,8 +118,9 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   type and id, which precede the name — but it makes rename-safety a local property of the
 >   comparison rather than something a reader has to derive from field order, and it survives someone
 >   later reordering the `jq` projection.
-> - **It compares object ids only** (`cut -f1,2` — type and id), keeping the display name in the
->   files for reading but out of the comparison. Two reasons: Entra display names are not unique, so
+> - **It compares object ids only** (`cut -f1,2` — type and id), keeping the display name *and the
+>   assignment id* in the files for reading but out of the comparison. The assignment id is what the
+>   deletion command below needs, so a `User` finding is actionable without a second Graph query. Two reasons: Entra display names are not unique, so
 >   a name-based comparison reads as parity while Gate 1 points at a different group entirely; and
 >   Graph snapshots `principalDisplayName` onto the assignment when it is created, so renaming a
 >   department makes the two apps disagree on the name while the same principal is assigned to both —

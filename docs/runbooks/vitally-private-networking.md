@@ -23,7 +23,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
 | Subnet (func) | `snet-func` | `10.80.0.48/28`, delegation per Functions Flex VNet-integration (confirm at create) |
-| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for app/func → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
+| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
 | KV private endpoint | `vitally-prod-pe-kv-uksouth` | in `snet-pe` |
@@ -46,6 +46,11 @@ zones linked to the VNet. No effect on the running service.
 - **Leave `publicNetworkAccess=Enabled` on both** so the current app + CI keep working.
 
 ### Phase 3 — New environment + app + scanner (zero impact)
+
+> **Historical plan steps.** This phase was executed in June 2026 and the scanner was built as a
+> Container Apps **Job** (`vitally-prod-secscan-uksouth`), not the timer Function described below.
+> Read the Function steps as the plan of record, not as instructions — following them provisions a
+> workload that does not exist in the as-built estate.
 - Create VNet-integrated workload-profiles env (`…cae2…`), external ingress.
 - Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the
   `oauth-shared-client-secret`, scale 0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
