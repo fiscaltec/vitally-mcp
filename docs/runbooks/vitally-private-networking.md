@@ -30,7 +30,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | ACR private endpoint | `vitally-prod-pe-acr-uksouth` | in `snet-pe`; requires ACR Premium |
 | New env | `vitally-prod-cae2-uksouth` | workload-profiles, VNet `snet-aca`, **external** ingress |
 | New app | `vitally-prod-ca2-uksouth` | same identity/image/env/secrets/scale as current |
-| Scanner func | `vitally-prod-func-secretscan-uksouth` (+ storage) | timer; replaces the Logic App scanner |
+| Scanner | ~~`vitally-prod-func-secretscan-uksouth` (Function + storage)~~ — **built instead as the Container Apps Job `vitally-prod-secscan-uksouth`**, no storage account | scheduled; replaces the Logic App scanner |
 
 *(The `…ca2…`/`…cae2…` names are because the old + new run in parallel during cutover; optional later cleanup.)*
 
@@ -50,6 +50,7 @@ zones linked to the VNet. No effect on the running service.
 - Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the
   `oauth-shared-client-secret`, scale 0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
 - Deploy the timer Function (`…func-secretscan…`) with VNet integration; port the scan logic
+  *(as-built: a Container Apps Job on `python:3-slim`, not a Function — see the table above)*
   (list secrets via MI → filter ≤30 days → POST Adaptive Card to the Teams webhook). Grant its MI
   **Key Vault Reader**. Retire the Consumption Logic App after validation.
 

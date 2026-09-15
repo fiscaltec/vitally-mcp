@@ -253,7 +253,8 @@ through the user-assigned managed identity (`Key Vault Secrets User`) — the sa
 | Expires | **2027-03-01T13:18:59Z** — 180 days (both the Entra credential and the Key Vault secret) |
 | Key Vault secret | `entra-mcp-client-secret`, tagged `purpose=OAuth:SharedClientSecret`, `appId`, `issue=107` |
 
-**180 days is the standard**, as asserted by `infra/terraform/scan/run.py`'s Teams card ("rotate per
+**180 days is the convention** — note *convention*, not an enforced rule. `infra/terraform/scan/run.py`
+warns on any secret within **30 days** of expiry and its Teams card repeats the wording ("rotate per
 the 180-day standard"). Nothing in the vault followed it until 2026-09-02, when both secrets were
 brought into line: `vitally-shared` was moved from 2027-08-31 to **2027-02-14** (180 days from its
 own creation on 2026-08-18, not from the day it was changed), and this secret was **reissued** at

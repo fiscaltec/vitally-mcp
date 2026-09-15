@@ -95,9 +95,11 @@ resource "azurerm_container_app" "staging" {
         name  = "Vitally__Region"
         value = "EU"
       }
-      # Deliberately the production vault and the production `vitally-shared` secret: there is only
-      # one Vitally tenant and its API keys are global, so there is no staging key to point at. That
-      # means staging writes reach real Vitally data — see the note in CLAUDE.md.
+      # Deliberately the production vault and the production `vitally-shared` secret. Vitally does
+      # allow additional API keys per environment, but offers no read-scoped key (checked
+      # 2026-09-15), so a separate staging key would carry the same write access to the same single
+      # tenant — it would buy revocability, not safety. Hence staging writes reach real Vitally data,
+      # and `Authorization__ReadOnly` below is what guards it. See CLAUDE.md.
       env {
         name  = "Vitally__KeyVaultUri"
         value = "https://${azurerm_key_vault.secret.name}.vault.azure.net/"

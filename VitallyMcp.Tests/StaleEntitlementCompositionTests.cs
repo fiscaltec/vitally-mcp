@@ -76,10 +76,11 @@ public class StaleEntitlementCompositionTests
     public async Task GraphOutage_DeniesEvenACallerWhoseTokenClaimGrantsTheTier()
     {
         // The cutover half of the same story (#108). Before it, exhausting the stale window fell
-        // through to the Auth0 post-login Action's `permissions` claim; the Action is gone, so the
-        // claim is permanently absent and that tier was removed rather than left reading like a
-        // working fallback. This principal carries the claim anyway — a version that still consulted
-        // it would show the full tool list here.
+        // through to the Auth0 post-login Action's `permissions` claim. #108 removed that
+        // fall-through — see ToolAuthorizer's class remarks for what that did and did not change
+        // about the Action itself, which is the sort of detail that goes stale when restated.
+        // What matters here: this principal carries the claim, and a version that still consulted
+        // it would show the full tool list.
         using var harness = new Harness(memberOf: [AdminGroup], tokenPermissions:
             ["vitally:read", "vitally:write", "vitally:delete"]);
 
