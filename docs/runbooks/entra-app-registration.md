@@ -142,19 +142,30 @@ Gate 2 is IdP-independent — it survives the cutover untouched.
 
 ```bash
 export MSYS_NO_PATHCONV=1   # Git Bash mangles the URL path otherwise
-SP=7904188d-4b34-4651-bf0f-6941fbcf6a8b
+ENTRA_SP=7904188d-4b34-4651-bf0f-6941fbcf6a8b   # Vitally MCP
+AUTH0_SP=3dff0dcd-ebe1-496e-b47f-e5e4e736a548   # FISCAL IT Auth0
 GROUP=<new-group-object-id>
-echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
-az rest --method post \
-  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" \
-  --headers "Content-Type=application/json" --body @body.json
+rc=0
+for SP in "$ENTRA_SP" "$AUTH0_SP"; do
+  echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
+  if az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json -o none; then
+    echo "assigned on $SP"
+  else
+    echo "FAILED on $SP — the apps are now out of parity; fix before stopping"; rc=1
+  fi
+done
+rm -f body.json
+[ "$rc" -eq 0 ]
 ```
 
-Add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` in the same change, **and do
-the equivalent on `FISCAL IT Auth0`** — which is still the live production sign-in gate until the
-#108 configuration flip is applied, and the rollback path for a period after it. Omitting either app
-locks the new department out of one of them, silently, until that app is the one being used. That is
-exactly how Development and Data Science were missed.
+**The loop covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is still the
+live production sign-in gate until the #108 configuration flip is applied, and the rollback path for
+a period after it; `Vitally MCP` gates staging now and production after. Omitting either locks the
+new department out of that one, silently, until it is the app being used — which is exactly how
+Development and Data Science were missed, both times by following a procedure that named one app.
+
+Then add it to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf` and run the parity check
+above in the same change.
 
 Verify at any time:
 

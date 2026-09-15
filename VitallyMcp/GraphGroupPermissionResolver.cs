@@ -136,7 +136,18 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
                 return lastKnownGood.Permissions;
             }
 
-            _logger.LogWarning(ex, "Live group permission lookup failed for {UserObjectId}; falling back to token claim.", userObjectId);
+            // Deliberately does NOT say "falling back to the token claim". It used to, and that became
+            // false when #108 removed the claim tier: with LiveGroupCheck on — every deployed target —
+            // ToolAuthorizer denies on this null. A log line promising a fallback during the one incident
+            // where it matters would send whoever is reading it looking for a tier that cannot engage.
+            // The caller decides and logs the outcome; this line reports only what happened here.
+            _logger.LogWarning(
+                ex,
+                "Live group permission lookup failed for {UserObjectId} and no usable retained set exists "
+                + "(stale window {StaleLimitSeconds}s). Returning no result; with Authorization:LiveGroupCheck "
+                + "enabled the caller will be denied.",
+                userObjectId,
+                _options.LiveGroupStaleSeconds);
             return null;
         }
     }

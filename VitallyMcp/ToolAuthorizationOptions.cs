@@ -63,8 +63,9 @@ public class ToolAuthorizationOptions
     ///
     /// On a Graph failure the caller's last known-good permission set is served for up to
     /// <see cref="LiveGroupStaleSeconds"/>; when there is no such copy the call is <b>denied</b>.
-    /// There is no third tier — the token claim was removed at the #108 cutover, once the Auth0
-    /// Action that minted it was retired and it could only ever have denied anyway. Never
+    /// There is no third tier: #108 removed the fall-through to the token claim. Note that is a
+    /// change to what this server <i>reads</i>, not to what the provider mints — the Auth0 Action
+    /// still exists and still runs, so a rollback to Auth0 does not restore the tier. Never
     /// fail-open: an empty set denies just as a missing one does. Requires the server's managed
     /// identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
     /// </summary>

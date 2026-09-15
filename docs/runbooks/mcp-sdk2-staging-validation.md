@@ -1,8 +1,9 @@
 # Runbook: MCP SDK 2.0 staging validation
 
 > ⚠️ **Historical record, executed 2026-08-12 — do not follow this to stand staging up today.**
-> Staging is now a persistent-scaffolding, on-demand Container App (#112) and is recreated by the two
-> `az containerapp hostname` commands in CLAUDE.md, not by the portal steps below. The Auth0 client
+> Staging is now a persistent-scaffolding, on-demand Container App (#112): recreate the app itself
+> from `infra/terraform/containerapps-staging.tf`, then bind its hostname with the two
+> `az containerapp hostname` commands in CLAUDE.md. Not by the portal steps below. The Auth0 client
 > creation in step 2.5 is superseded by the Entra app registration (`entra-app-registration.md`), and
 > the current identity-change checklist is `entra-cutover-staging-validation.md`. Kept because the
 > Layer 2/3 evidence it records is still the basis for the SDK 2.0 adoption sign-off.
