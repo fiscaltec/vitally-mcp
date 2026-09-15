@@ -128,8 +128,15 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 - **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
 
 > **Urgent revocation:** the fast control is **removing the user from the `sg-vitally-*` group** —
-> that takes effect within the ~60s live-membership window, on production and staging alike, and it
+> normally effective within the ~60s live-membership window, on production and staging alike, and it
 > is what actually stops them using the server.
+>
+> **The ~60s is the healthy case, not a guarantee.** If Microsoft Graph is unreachable the server
+> serves each caller's last known-good tier for up to `Authorization:LiveGroupStaleSeconds`
+> (**1 hour** by default) rather than denying everyone, so a revoked user can retain access for that
+> long during a Graph outage. That trade is deliberate — see the entitlement section in `CLAUDE.md` —
+> but for a genuinely compromised account, treat an hour as the worst case and escalate to disabling
+> the Entra account itself, which stops new tokens and is not subject to this window.
 >
 > Revoking their IdP session does **not** cut off an access token they already hold: this server
 > validates the bearer token locally against the provider's signing keys, so an issued token stays

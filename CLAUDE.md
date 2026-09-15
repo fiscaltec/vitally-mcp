@@ -527,7 +527,7 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > single `oauth_audience` variable. #108 split that variable, which is what makes the difference
 > structural rather than a convention someone has to remember.
 >
-> | | Auth0 (until 2026-09-03) | Entra (now) |
+> | | Auth0 posture (production today) | Entra posture (staging today; production after the flip) |
 > |---|---|---|
 > | `OAuth:Audience` — validated against JWT `aud` | `https://vitally.fiscaltec.com/` | `https://vitally.fiscaltec.com` — **no slash**, Entra refuses to register one on `identifierUris` |
 > | `OAuth:Resource` — published in RFC 9728, and validated against | `https://vitally.fiscaltec.com/` | `https://vitally.fiscaltec.com/` — **unchanged**, Claude Code normalises to it |

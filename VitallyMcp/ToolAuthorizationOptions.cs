@@ -1,10 +1,12 @@
 namespace VitallyMcp;
 
 /// <summary>
-/// Server-side authorisation policy for Vitally tool calls. Maps the HTTP verb of each Vitally
-/// API call to a required permission, which is checked against the caller's JWT. This is the
-/// hard backstop behind the advisory <c>ReadOnly</c>/<c>Destructive</c> tool flags — those flags
-/// only guide MCP clients; this enforces access regardless of what the client does.
+/// Server-side authorisation policy for Vitally tool calls. Maps the HTTP verb of each Vitally API
+/// call to a required permission, then resolves whether the caller holds it — from their live Entra
+/// group membership when <see cref="LiveGroupCheck"/> is on (every deployed target), and from the
+/// token's claims only when it is off. This is the hard backstop behind the advisory
+/// <c>ReadOnly</c>/<c>Destructive</c> tool flags — those flags only guide MCP clients; this enforces
+/// access regardless of what the client does.
 ///
 /// The permission strings are internal names, not something an identity provider issues: with
 /// <see cref="LiveGroupCheck"/> on they are produced by mapping Entra group membership to tiers in
