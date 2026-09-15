@@ -69,7 +69,7 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > ```bash
 > export MSYS_NO_PATHCONV=1
 > for SP in 3dff0dcd-ebe1-496e-b47f-e5e4e736a548 7904188d-4b34-4651-bf0f-6941fbcf6a8b; do
->   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" >     --query "value[].principalDisplayName" -o tsv | sort
+>   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --query "value[].principalDisplayName" -o tsv | sort
 > done
 > ```
 >
