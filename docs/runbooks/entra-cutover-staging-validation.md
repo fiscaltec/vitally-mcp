@@ -15,17 +15,19 @@ mutate **real customer data**. There is one Vitally tenant, no sandbox, and no r
 available (checked 2026-09-15).
 
 `Authorization__ReadOnly=true` is therefore staging's standing guard and is set in
-`containerapps-staging.tf`. **Step 4 is the one exception:** it needs the write tools visible to
-prove a reader is denied one, so unset the variable for that step and **put it back immediately
-after**:
+`containerapps-staging.tf`. **Steps 3 and 4 are the exception.** The guard hides every destructive
+tool from *every* tier, so with it on, step 3's editor and admin expectations (`Create_`/`Update_`,
+and all 93) cannot be observed — an admin would see the 56-tool reader catalogue and the check would
+report a failure that is really the guard working. Unset it before step 3 and **put it back
+immediately after step 4**:
 
 ```bash
 az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --remove-env-vars Authorization__ReadOnly   # before step 4
 az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --set-env-vars Authorization__ReadOnly=true # after step 4
 ```
 
-Every other check below needs only the tool *list*, which the guard does not affect for read tools —
-so leave it on for steps 1, 2, 3 and 5.
+Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool
+catalogue — so leave the guard on for those.
 
 ## Already verified, so you can skip it
 

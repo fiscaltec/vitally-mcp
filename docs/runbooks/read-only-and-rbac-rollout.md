@@ -103,7 +103,10 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    > for the rollback window, not as a path that runs.
 4. **Verify on the live revision:** with a reader token, a write returns the RBAC denial; with an
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
-   denials appear in the audit log (`LogDenied`, keyed by the caller's Entra **object id** — the
-   `oid` claim, not `sub`; see `CallerIdentity` and #127).
+   denials appear in the audit log — keyed by the caller's Entra **object id** (the `oid` claim, not
+   `sub`; see `CallerIdentity` and #127). Expect **`LogToolCallDenied`**, not `LogDenied`: the SDK
+   authorisation filter rejects an out-of-tier call at the per-tool `[Authorize]` checkpoint, before
+   `VitallyService.SendAsync` runs, and `LogDenied` is only reached from inside `SendAsync`. Looking
+   for the wrong event is indistinguishable from the denial not being audited at all.
 5. Once verified, `Authorization__ReadOnly` can be removed from editor/admin deployments while
    read-only stays the default for view-only consumers.

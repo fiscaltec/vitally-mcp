@@ -155,7 +155,10 @@ for SP in "$ENTRA_SP" "$AUTH0_SP"; do
     echo "LOOKUP FAILED on $SP — cannot tell whether it is assigned; stopping"; rc=1; continue
   fi
   if [ "$existing" != "0" ]; then
-    echo "already assigned on $SP"
+    # Print the existing id too: the Terraform import step below needs it, and the common reason to
+    # re-run this loop is repairing drift, where at least one app is already assigned.
+    echo -n "already assigned on $SP — id: "
+    az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv || { echo "could not read its id"; rc=1; }
   elif az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
     echo "  ^ assignment id on $SP — needed for the import block below"
   else
@@ -179,8 +182,9 @@ Development and Data Science were missed, both times by following a procedure th
 Then, **in the same change**:
 
 1. Add the group to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf`.
-2. Add a matching `import` block to `infra/terraform/imports.tf`, using the assignment id the POST
-   printed above — the `gate1` resource is `for_each` over that map, so a map entry without an
+2. Add a matching `import` block to `infra/terraform/imports.tf`, using **the id printed for
+   `$ENTRA_SP`** — the loop prints one per app, and the Auth0 one does not belong to
+   `azuread_app_role_assignment.gate1`, which models only the Entra registration — the `gate1` resource is `for_each` over that map, so a map entry without an
    import reads as unmanaged and a plan would propose creating an assignment that already exists:
 
    ```hcl
@@ -190,11 +194,14 @@ Then, **in the same change**:
    }
    ```
 
-   (If you lost the id, re-read it — the service-principal id is spelled out because this command
-   is meant to work pasted on its own:
+   (If you lost the id, re-read it — keyed on the group's **object id**, not its display name:
+   Graph snapshots `principalDisplayName` when the assignment is created, so a renamed department
+   returns nothing and duplicate names return the wrong row. The service-principal id is spelled out
+   because this command is meant to work pasted on its own:
 
    ```bash
-   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo" --query "value[?principalDisplayName=='<Department name>'].id" -o tsv
+   GROUP=<the department group's object id>
+   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv
    ```
    )
 3. Run the parity check above.

@@ -87,7 +87,11 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         var groupIds = _options.ConfiguredGroupIds.ToArray();
         if (groupIds.Length == 0)
         {
-            return null; // Nothing to check against — let the caller fall back to the claim.
+            // Nothing to check against. Returns null like any other unresolvable case, which with
+            // LiveGroupCheck on means the authorizer denies — ToolAuthorizationOptions.Validate
+            // refuses that combination at boot, so reaching here means the options were built
+            // in code rather than bound from configuration.
+            return null;
         }
 
         try

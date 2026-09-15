@@ -47,10 +47,18 @@ variable "oauth_authority" {
   default     = "https://fiscal-it.uk.auth0.com/"
 }
 
-# oauth_audience and oauth_resource are NOT the same value and must not be reconciled. Audience is
-# validated against the token `aud` and follows the Entra App ID URI, which cannot carry a trailing
-# slash (Entra refuses to register one on identifierUris). Resource is published in the RFC 9728
-# document and keeps the slash, because that is the form Claude Code normalises to and then compares.
+# oauth_audience and oauth_resource are NOT the same value and must not be reconciled — though note
+# the reason differs by provider, and production is still on Auth0.
+#
+#   Auth0 (production today): the Resource Server identifier carries a trailing slash, so Audience
+#     and Resource happen to look identical. That coincidence is what made them one variable
+#     originally, and is why they are two now.
+#   Entra (staging today, production at the flip): Audience follows the App ID URI, which cannot
+#     carry a trailing slash — Entra refuses to register one on identifierUris — while Resource keeps
+#     it. The no-slash rule is Entra's, not a general one; do not "correct" the live Auth0 value.
+#
+# Resource is published in the RFC 9728 document and keeps the slash either way, because that is the
+# form Claude Code normalises to and then compares.
 # OAuthOptions.IsResourceIndicatorAllowed tolerates exactly one slash of difference, which is what
 # lets the two forms name one resource.
 variable "oauth_audience" {
