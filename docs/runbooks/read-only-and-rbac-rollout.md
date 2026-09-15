@@ -47,8 +47,8 @@ than one person's memory — which is exactly what is absent at a fresh spin-up,
 thinking about it. Unsetting it for a tier test is the deliberate act; having it on is the default
 the recipe describes.
 
-⚠️ **The file sets it; nothing applies the file.** `containerapps-staging.tf` does carry
-`Authorization__ReadOnly = "true"` (lines 163–166) — but `infra/terraform/` is a back-filled
+⚠️ **The file sets it; nothing applies the file.** `containerapps-staging.tf` does carry an
+`Authorization__ReadOnly = "true"` env block (grep for it; line numbers move) — but `infra/terraform/` is a back-filled
 as-built capture and **`terraform apply` is never run here**; staging is stood up through
 `deploy.yml` plus the `az containerapp` commands in CLAUDE.md. So it is a recipe to follow and
 keep in step, not a mechanism that enforces anything, and a fresh app comes up on the application

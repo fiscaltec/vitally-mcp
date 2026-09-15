@@ -23,28 +23,53 @@ immediately after step 4**:
 
 **Do not unset it in one command and trust yourself to run the other.** Between those two commands
 staging is writable against real customer data, and anything that ends the session in between — a
-failed step, Ctrl-C, closing the terminal, going to lunch — leaves it that way indefinitely. Drive
-it from a shell that restores the guard on **any** exit:
+failed step, Ctrl-C, closing the terminal, going to lunch — leaves it that way indefinitely, with
+nothing anywhere to notice. Two independent restores, because neither alone is enough:
 
 ```bash
 APP=(-n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth)
-guard()   { az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none; }
-unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
+RG=vitally-prod-rg-uksouth; CA=vitally-staging-ca-uksouth
+
 state()   { az containerapp show "${APP[@]}" \
   --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
+unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
 
-# Restores on ANY exit of this shell: a failed command, Ctrl-C, or closing the window.
-trap 'guard && echo "guard RESTORED (now: $(state))"' EXIT
+# Retries, then VERIFIES, then shouts. `az … && echo "restored"` is not a restore: a single
+# failed call would be swallowed by the && and the shell would exit looking successful.
+guard() {
+  for _ in 1 2 3; do
+    az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none && break
+    sleep 5
+  done
+  if [ "$(state)" = "true" ]; then
+    echo "guard RESTORED"
+  else
+    echo "!!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
+    echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
+  fi
+}
 
-unguard && echo "guard REMOVED — run steps 3 and 4 now, then exit this shell"
+# (a) This shell. EXIT alone is not enough: Ctrl-C at an interactive prompt does not exit the
+#     shell, and without `set -e` a failed step does not either — so trap the signals too.
+trap guard EXIT INT TERM HUP
+
+# (b) A detached failsafe, because (a) dies with the terminal, the SSH session or the laptop.
+#     Restores unconditionally after 30 minutes whatever happened here.
+unguard && nohup bash -c "sleep 1800; az containerapp update -n $CA -g $RG \
+  --set-env-vars Authorization__ReadOnly=true -o none" >/dev/null 2>&1 &
+echo "guard REMOVED — failsafe PID $!; run steps 3 and 4 now, then exit this shell"
 ```
 
-Keep that shell open for steps 3 and 4 and exit it when they are done. The trap cannot survive the
-machine losing power, so **confirm before you walk away**:
+Keep that shell open for steps 3 and 4, then exit it. **Neither mechanism survives the machine
+losing power, so the check is not optional — run it before you walk away, from any shell:**
 
 ```bash
-state   # must print `true`. Empty output means UNGUARDED, not "defaulted to safe"
+az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
 ```
+
+It must print `true`. **Empty output means UNGUARDED**, not "defaulted to safe" — the application
+default is `false`.
 
 Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool
 catalogue — so leave the guard on for those.

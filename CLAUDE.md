@@ -236,12 +236,14 @@ adaptation, resolving owner/repo at runtime.
 Caveats worth knowing before trusting it:
 
 - It guards **only Claude Code's own tool calls** — a merge from the GitHub UI is unaffected.
-- **It resolves the head with `git ls-remote`, not from the PR API.** `headRefOid` lags after a push
-  (see the warning above), and a gate that trusts it fails *open* — the stale value names the commit
-  Copilot already reviewed. `ls-remote` asks the git server directly, so it is fresh whatever branch
-  is checked out, which matters because merging a second PR from another branch is normal. The
-  consequence to know: **a PR whose branch is not on `origin` — a fork — is denied**, because the
-  only head available is the one known to lag. Fail-closed by design; Dependabot is exempt earlier.
+- **It resolves the head from `refs/pull/N/head` via `git ls-remote`, not from the PR API.**
+  `headRefOid` lags after a push (see the warning above), and a gate that trusts it fails *open* —
+  the stale value names the commit Copilot already reviewed. `ls-remote` reads the git server
+  directly, so it neither lags nor cares which branch is checked out, which matters because merging
+  a second PR from another branch is normal. GitHub publishes `refs/pull/N/head` on the base repo
+  for **every** PR including forks, so there is no branch-name path and no local-checkout fallback:
+  an earlier version had both, and the fallback compared an unrelated commit whenever a local branch
+  shared a fork PR's branch name. If that ref cannot be read, the gate denies.
 - A newly added hook needs `/hooks` opened once (or a restart) to activate.
 - **Run `gh pr merge` as a standalone command — no pipes, no `;`, no `&&`.** The hook resolves the PR
   by counting non-flag positional tokens after the subcommand, so a chained form turns every
@@ -942,8 +944,8 @@ Revisit if scoped keys ever ship; a read-only key at the boundary beats any swit
 Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
 write tools to prove a reader is denied one. Live state: **`true` on staging**, **unset on production**.
 
-⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it
-(`Authorization__ReadOnly = "true"`, lines 163–166), but `infra/terraform/` is an as-built
+⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it — grep the file for
+`Authorization__ReadOnly` rather than a line number, which moves — but `infra/terraform/` is an as-built
 capture and **`terraform apply` is never run here** — staging is stood up through `deploy.yml`
 and `az containerapp`. So a fresh app comes up on the application default, `false`, writing to
 the shared production Vitally tenant until someone sets the variable. Set it as part of the
