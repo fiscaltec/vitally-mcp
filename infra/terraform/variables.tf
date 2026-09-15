@@ -154,8 +154,11 @@ variable "staging_oauth_resource" {
   default     = "https://vitally-staging.fiscaltec.com/"
 }
 
-# Shared with production until #108: after the staging flip these diverge, so staging carries its
-# own. Reunify them only once production is on Entra too.
+# These are STAGING's OAuth client, and they are NOT the production values above: staging flipped to
+# the Entra app registration on 2026-09-03 while production is still on the Auth0 client. That is the
+# current split, not a future one — do not feed `oauth_shared_client_id` / `oauth_shared_client_secret`
+# to the staging app, which would point staging back at Auth0 while its authority says Entra.
+# These variables and the production ones reunify only once production flips too.
 variable "staging_oauth_shared_client_id" {
   type        = string
   description = "Shared OAuth client_id for STAGING — the Entra app registration appId (#107), since staging flipped on 2026-09-03."

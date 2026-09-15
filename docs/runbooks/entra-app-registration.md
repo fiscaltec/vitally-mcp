@@ -157,22 +157,28 @@ GROUP=<new-group-object-id>
 # Surveying and mutating in one pass is how a half-applied onboarding happens: if the first lookup
 # fails and the loop carries on, the group gets assigned to the second app only, which is precisely
 # the one-sided drift this procedure exists to prevent.
-count_for() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" --query "length(value[?principalId=='$GROUP'])" -o tsv; }
-have_entra=$(count_for "$ENTRA_SP") || have_entra=""
-have_auth0=$(count_for "$AUTH0_SP") || have_auth0=""
-if [ -z "$have_entra" ] || [ -z "$have_auth0" ]; then
+# `assignments` holds the same no-truncation standard as the parity check above: `az rest` does not
+# follow `@odata.nextLink`, and a truncated page would read as "not assigned" — so this would POST a
+# duplicate, or leave the apps inconsistent, in the one state it cannot actually assess.
+assignments() { local j; j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json) || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED on $1 — this snippet does not follow @odata.nextLink" >&2; return 1; }; echo "$j"; }
+# Returns the existing assignment id, or the string `none`. Empty means the LOOKUP failed, which is a
+# different answer and must not be read as absence. The id comes from this same survey rather than a
+# second call, so what phase 2 prints is what phase 1 actually saw.
+id_for() { local j; j=$(assignments "$1") || return 1; echo "$j" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "none"'; }
+entra_id=$(id_for "$ENTRA_SP") || entra_id=""
+auth0_id=$(id_for "$AUTH0_SP") || auth0_id=""
+if [ -z "$entra_id" ] || [ -z "$auth0_id" ]; then
   echo "LOOKUP FAILED — NEITHER app has been changed. Fix access and re-run."
   false
 else
   # PHASE 2 — both states known, so a failure here is a real failure rather than an unknown.
   rc=0
-  for pair in "$ENTRA_SP:$have_entra" "$AUTH0_SP:$have_auth0"; do
-    SP=${pair%%:*}; have=${pair##*:}
-    if [ "$have" != "0" ]; then
-      # Print the existing id: the Terraform import step below needs it, and the common reason to
+  for pair in "$ENTRA_SP:$entra_id" "$AUTH0_SP:$auth0_id"; do
+    SP=${pair%:*}; existing=${pair##*:}
+    if [ "$existing" != "none" ]; then
+      # Surface the existing id: the Terraform import step below needs it, and the common reason to
       # re-run this is repairing drift, where at least one app is already assigned.
-      echo -n "already assigned on $SP — id: "
-      az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv || { echo "could not read its id"; rc=1; }
+      echo "already assigned on $SP — id: $existing"
     else
       echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
       if az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
@@ -218,8 +224,9 @@ Then, **in the same change**:
    because this command is meant to work pasted on its own:
 
    ```bash
+   export MSYS_NO_PATHCONV=1
    GROUP=<the department group's object id>
-   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" --query "value[?principalId=='$GROUP'].id|[0]" -o tsv
+   j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json)      && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]      && echo "$j" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "NOT ASSIGNED"'      || echo "NOT ASSESSED — the lookup failed or the collection is paginated; this is not 'no assignment'"
    ```
    )
 3. Run the parity check above.
@@ -228,10 +235,17 @@ Verify at any time:
 
 ```bash
 export MSYS_NO_PATHCONV=1
-az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo" --query "value[].{p:principalDisplayName,t:principalType}" -o tsv
+j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignedTo?\$top=999" -o json)   && [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ]   && echo "$j" | jq -r '.value[]|[.principalDisplayName,.principalType]|@tsv'   || echo "NOT ASSESSED — the lookup failed or the collection is paginated"
 ```
 
 The result should be **nine Group rows and nothing else**. A `User` row is drift — see below.
+
+**Every read of `appRoleAssignedTo` in this runbook guards `@odata.nextLink`, and that is a rule
+rather than a flourish.** `az rest` does not follow it, so a truncated page is indistinguishable from
+a short one: this survey would silently under-report the gate, and the onboarding loop above would
+read a group on a later page as unassigned. Counting nine rows here does not protect you — the count
+is the thing that would be wrong. `$top=999` makes truncation unreachable at nine groups; the guard
+is what keeps the answer honest if that ever stops being true.
 
 ## Admin consent
 
