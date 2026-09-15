@@ -47,8 +47,10 @@ data "azuread_service_principal" "msgraph" {
 #
 # Both would have been signed out at the #108 cutover with AADSTS50105. The second is the
 # informative one: the first was fixed by correcting this list and the runbook, and it happened
-# again twelve days later anyway. Onboarding naturally touches whichever app is *live*, so the
-# inert one is missed every time — documentation cannot fix that, and #134 tracks a check that can.
+# again twelve days later anyway — because ACCESS.md, the procedure admins actually follow, told
+# them to assign a department to `FISCAL IT Auth0` and named no other app. Both departments were
+# onboarded exactly as documented. ACCESS.md is corrected alongside this; #134 tracks a check, since
+# the lesson of the first attempt is that a correct document is not by itself a control.
 #
 # Until then: diff the two apps immediately before any cutover or rollback, and never trust either
 # document. Once Auth0 is retired the cross-check is gone and this becomes the only record.

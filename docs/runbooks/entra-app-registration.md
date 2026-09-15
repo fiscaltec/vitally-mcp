@@ -57,21 +57,34 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > | 2026-09-03 | `Development Department` (15 members) | `AADSTS50105` — total loss of access |
 > | 2026-09-15 | `Data Science Department` (2 members) | the same |
 >
-> Both groups are nested in `sg-vitally-readers`, so both had working access at the time. The first
-> was fixed by correcting this list *and* this warning — **and it happened again twelve days later
-> anyway.** Onboarding a department naturally touches whichever app is currently *live*; the inert
-> one is invisible at that moment, so prose here cannot prevent it. #134 tracks a check that can.
+> Both groups had working access at the time, via **both** mechanisms — assigned directly to
+> `FISCAL IT Auth0` for Gate 1, *and* nested in `sg-vitally-readers` for Gate 2. Those are separate
+> and the distinction matters here: the nesting is what gave them a tier, the direct assignment is
+> what let them sign in at all, and it is only the second that the Entra app was missing.
 >
-> Until that exists: **derive this list from `FISCAL IT Auth0`'s live assignments, never from a
-> document**, and diff the two immediately before any cutover *or rollback* — parity matters in both
-> directions while both apps exist:
+> The first occurrence was fixed by correcting this list *and* this warning — **and it happened again
+> twelve days later anyway.** The reason is not forgetfulness: `ACCESS.md` told admins to assign a
+> department to `FISCAL IT Auth0`, and named no other app, so both departments were onboarded exactly
+> as documented. That procedure is corrected in the same change as this note; #134 tracks a check so
+> the next divergence is caught by something other than a document.
+>
+> **Derive this list from the live assignments, never from a document**, and compare the two apps
+> immediately before any cutover *or rollback* — parity matters in both directions while both exist:
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
-> for SP in 3dff0dcd-ebe1-496e-b47f-e5e4e736a548 7904188d-4b34-4651-bf0f-6941fbcf6a8b; do
->   az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --query "value[].principalDisplayName" -o tsv | sort
-> done
+> AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
+> Q='value[].[principalType,principalId,principalDisplayName]'
+> az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$AUTH0/appRoleAssignedTo" --query "$Q" -o tsv | sort > gate-auth0.txt
+> az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ENTRA/appRoleAssignedTo" --query "$Q" -o tsv | sort > gate-entra.txt
+> diff gate-auth0.txt gate-entra.txt && echo "PARITY OK" || echo "DRIFT — lines above are the difference"
+> grep -c '^User' gate-auth0.txt gate-entra.txt   # must be 0 and 0 — Gate 1 stays group-driven
 > ```
+>
+> It compares **object ids**, not display names: Entra display names are not unique, so a
+> name-only comparison would read as parity while Gate 1 pointed at a different group entirely. And
+> it runs an actual `diff` rather than printing two lists to be eyeballed — an earlier version of
+> this snippet did the latter, which is how a check that looks like a check fails to be one.
 >
 > Once Auth0 is retired that cross-check disappears, so the list here becomes the only record —
 > another reason not to retire it early.

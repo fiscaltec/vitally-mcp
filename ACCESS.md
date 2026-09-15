@@ -81,17 +81,29 @@ live source of truth — verify there if in doubt):
 
 ### Signing in is gated too (department group)
 
-Before a permission tier even applies, you must be able to **authenticate**. Sign-in is
-gated by the Auth0 → Entra federation app **"FISCAL IT Auth0"** (an Entra enterprise
-application): only users whose **department group** is assigned to that app can sign in. If
+Before a permission tier even applies, you must be able to **authenticate**. Sign-in is gated by an
+Entra enterprise application: only users whose **department group** is assigned to it can sign in. If
 your department isn't assigned, the Microsoft sign-in fails and you never reach the server —
 regardless of any `sg-vitally-*` membership.
 
-So access requires **both**: your department assigned to **"FISCAL IT Auth0"** (sign-in),
-**and** membership of an `sg-vitally-*` group (permission tier). The current list of assigned
-departments is maintained in the IT helpdesk article
-*Vitally MCP – access & administration (IT)* and can be verified live in
-Entra → Enterprise applications → **FISCAL IT Auth0** → Users and groups.
+> ⚠️ **There are currently two such apps, and a department must be assigned to BOTH.**
+>
+> | App | Role |
+> |---|---|
+> | **Vitally MCP** | the Entra app the server is moving to |
+> | **FISCAL IT Auth0** | the Auth0 federation app, retained as the rollback path |
+>
+> Assigning only one is the single most common way to break access here, and it has happened twice —
+> because this page used to name only *FISCAL IT Auth0*. A department assigned to just one app works
+> perfectly **until** the server is switched to the other, and then that whole department is refused
+> at sign-in with `AADSTS50105`. Neither app tells you the other is missing.
+>
+> Assign to both until IT confirms the Auth0 app has been retired, at which point this note goes.
+
+So access requires **both**: your department assigned to the sign-in app(s) above, **and** membership
+of an `sg-vitally-*` group (permission tier). The assigned departments can be verified live in
+Entra → Enterprise applications → *(each app)* → Users and groups, which is the authority — the IT
+helpdesk article *Vitally MCP – access & administration (IT)* is a copy and has been wrong before.
 
 > **Direct assignment only (important).** The app requires assignment
 > (`appRoleAssignmentRequired = true`), and Entra honours only **direct** members of an
@@ -106,7 +118,7 @@ Entra → Enterprise applications → **FISCAL IT Auth0** → Users and groups.
 
 **As a user:** request membership of the group for the tier you need (most people need `sg-vitally-readers`) from the **IT & Security team**. Once added, you have access within about a minute — no need to reconnect or sign in again.
 
-**As an admin (granting/changing access):** first confirm the person's **department group is assigned to the "FISCAL IT Auth0" enterprise application** (Entra → Enterprise applications → FISCAL IT Auth0 → Users and groups) so they can sign in — assign that department group to the app if it isn't already listed. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
+**As an admin (granting/changing access):** first confirm the person's **department group is assigned to *both* sign-in apps** — Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under **FISCAL IT Auth0** — so they can sign in whichever app is live. Assign the department group to either app it is not already listed on; see the warning above for why missing one is invisible until it is not. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
 
 - **Granting** a tier takes effect within ~60s of adding the user to the group.
 - **Changing** tier = move the user to a different group (e.g. readers → editors).
