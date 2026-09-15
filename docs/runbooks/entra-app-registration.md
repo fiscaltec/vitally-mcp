@@ -78,7 +78,13 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > Q='value[].[principalType,principalId,principalDisplayName]'
 > page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
 > fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName]|@tsv' | sort > "$2"; }
-> fetch "$AUTH0" gate-auth0.txt && fetch "$ENTRA" gate-entra.txt && [ -s gate-auth0.txt ] && [ -s gate-entra.txt ] && { diff gate-auth0.txt gate-entra.txt && echo "PARITY OK" || echo "DRIFT — lines above are the difference"; } || echo "NOT ASSESSED — a lookup failed or returned nothing"
+> if ! fetch "$AUTH0" gate-auth0.txt || ! fetch "$ENTRA" gate-entra.txt || [ ! -s gate-auth0.txt ] || [ ! -s gate-entra.txt ]; then
+>   echo "NOT ASSESSED — a lookup failed or returned nothing"; false
+> elif diff <(cut -f1,2 gate-auth0.txt) <(cut -f1,2 gate-entra.txt); then
+>   echo "PARITY OK"
+> else
+>   echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; false
+> fi
 > grep -c '^User' gate-auth0.txt gate-entra.txt   # must be 0 and 0 — Gate 1 stays group-driven
 > ```
 >
@@ -94,9 +100,17 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 >   one page would compare partial lists and could report parity while missing a group — or a `User`
 >   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
 >   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
->   held to three times now.
-> - **It compares object ids, not display names.** Entra display names are not unique, so a
->   name-only comparison reads as parity while Gate 1 points at a different group entirely.
+>   held to four times now.
+> - **It exits non-zero on both bad outcomes.** Written as `… || echo "DRIFT"` the pipeline succeeds
+>   whatever it found, so anything that scripts this — including a future `scan/run.py` lifting it
+>   wholesale — reads a clean exit and reports health. The `if/elif/else` form is longer and is the
+>   point: the status code says the same thing as the message.
+> - **It compares object ids only** (`cut -f1,2` — type and id), keeping the display name in the
+>   files for reading but out of the comparison. Two reasons: Entra display names are not unique, so
+>   a name-based comparison reads as parity while Gate 1 points at a different group entirely; and
+>   Graph snapshots `principalDisplayName` onto the assignment when it is created, so renaming a
+>   department makes the two apps disagree on the name while the same principal is assigned to both —
+>   a false DRIFT that could block a legitimate cutover.
 > - **It runs an actual `diff`.** The first version printed two sorted lists consecutively for a
 >   human to eyeball, in the document whose entire subject is that this difference gets missed.
 >
@@ -309,12 +323,17 @@ configuration — worth raising after #108 rather than during it.
   a separate object in `identity.tf`.
 - **No implicit grant.** Authorization code + PKCE only.
 
-## The cutover (#108) — done 2026-09-03
+## The cutover (#108) — code deployed 2026-09-03, production flip outstanding
 
-Config-only, as designed. The variable table and the rollback live in **CLAUDE.md**, under *The
-Auth0 → Entra cutover (#108) and its rollback*; the per-target values are in
-`infra/terraform/variables.tf`. What belongs here is what the cutover **learned about this
-registration**, since that is what the next person changing it needs.
+Config-only, as designed — and only half applied. **Staging** was flipped on 2026-09-03 and has run
+Entra since; **production** still signs in through Auth0, because the five `OAuth__*` variables have
+not been set there. The code is deployed to both and is inert without them.
+
+The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → Entra cutover (#108)
+and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is
+what the cutover **learned about this registration**, since that is what the next person changing it
+needs — and those lessons come from the staging flip and the validation against the live tenant, so
+they hold regardless of when production follows.
 
 ### `resource` had to be dropped, not reshaped — and the reason recorded earlier was wrong
 

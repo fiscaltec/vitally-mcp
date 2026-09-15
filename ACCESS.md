@@ -10,7 +10,7 @@ Point your MCP client at:
 https://vitally.fiscaltec.com/mcp
 ```
 
-On first use the client opens a Microsoft sign-in (Auth0 → Microsoft Entra). After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key.
+On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Production currently reaches Entra via Auth0 federation; staging goes to Entra directly, and production will once the #108 switch is made. Either way you sign in with your normal Microsoft account and see the same screen.)
 
 **Claude Code** — run:
 
@@ -120,18 +120,30 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 
 **As a user:** request membership of the group for the tier you need (most people need `sg-vitally-readers`) from the **IT & Security team**. Once added, you have access within about a minute — no need to reconnect or sign in again.
 
-**As an admin (granting/changing access):** first confirm the person's **department group is assigned to *both* sign-in apps** — Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under **FISCAL IT Auth0** — so they can sign in whichever app is live. Assign the department group to either app it is not already listed on; see the warning above for why missing one is invisible until it is not. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
+**As an admin (granting/changing access):** first confirm the person's **department group is assigned to *both* sign-in apps** — Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under **FISCAL IT Auth0** — so they can sign in whichever app is live. Assign the department group to **every** app it is missing from — not just the first one you find; see the warning above for why missing one is invisible until it is not. Then add or remove the person from the relevant `sg-vitally-*` group in Entra. The server re-reads live group membership on each call (cached ~60 seconds), so:
 
 - **Granting** a tier takes effect within ~60s of adding the user to the group.
 - **Changing** tier = move the user to a different group (e.g. readers → editors).
 - **Revoking** access takes effect within ~60s of removing the user from the group — no reconnect required.
 - **Nested groups are supported.** Membership is evaluated *transitively*, so you can grant a tier either by adding the user directly to an `sg-vitally-*` group **or** by nesting a department group inside it (everyone in that department group then inherits the tier).
 
-> **Urgent revocation:** for an immediate cut-off (e.g. a compromised account), remove the user from the group **and** revoke their sign-in session at whichever provider is currently live — Auth0 for production today, Entra for staging, and Entra for both once the switch is made. If in doubt, revoke at both; an extra revocation costs the user one re-authentication, a missed one leaves a live session. That takes effect on their next request rather than waiting for the ~60s window.
+> **Urgent revocation:** the fast control is **removing the user from the `sg-vitally-*` group** —
+> that takes effect within the ~60s live-membership window, on production and staging alike, and it
+> is what actually stops them using the server.
+>
+> Revoking their IdP session does **not** cut off an access token they already hold: this server
+> validates the bearer token locally against the provider's signing keys, so an issued token stays
+> valid until it expires (Entra: roughly 60–90 minutes) no matter what happens to the session.
+> Session revocation stops them signing in *again* and stops refresh, which is still worth doing —
+> at whichever provider is live for that target, or both if unsure — but do it **in addition to**
+> the group removal, not instead of it.
+>
+> An earlier version of this note had these the wrong way round and implied session revocation was
+> the immediate control. It is not.
 
 ## How it's set up (in brief)
 
-- **Sign-in:** Auth0 federates to Microsoft Entra; FISCAL staff sign in with their normal Microsoft account.
+- **Sign-in:** Microsoft Entra — reached via Auth0 federation on production today, directly on staging, and directly on production once the #108 switch is made. FISCAL staff sign in with their normal Microsoft account in every case.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
 - **Auditing:** every action is logged with the acting user, operation and outcome (queryable in Application Insights / Log Analytics).
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.
