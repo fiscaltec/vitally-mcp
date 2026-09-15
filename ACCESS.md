@@ -150,9 +150,14 @@ decides what you have to change*:
 > az rest --method get --url "https://graph.microsoft.com/v1.0/groups/$TIER/members?\$count=true&\$filter=id eq '$SUBJECT'" --headers "ConsistencyLevel=eventual" --query "length(value)" -o tsv
 > ```
 >
-> `1` = direct member, `0` = inherited. **Both can be true of the same person**, so a `1` does not
-> mean the direct membership is their only route — removing it can leave a department path intact and
-> the account still authorised.
+> `1` = direct member. `0` means **not a direct member** — which is not the same as "inherited":
+> `/members` returns direct membership only, so `0` covers both a user who holds the tier through a
+> department *and* one who does not hold it at all. This count alone cannot tell those apart; the
+> transitive query below can, which is why it is not optional.
+>
+> And **a `1` does not mean the direct membership is their only route**. Both can be true of the
+> same person, so removing the direct one can leave a department path intact and the account still
+> authorised.
 >
 > So do not stop at the count. Clear every path the table gives you, then **confirm with a
 > path-independent check** that they are actually out:
@@ -176,8 +181,16 @@ decides what you have to change*:
 > they do not have — leaving them authorised. `$filter` with `ConsistencyLevel: eventual` returns a
 > complete answer whatever the group's size.
 
-Any of these take effect within about **60 seconds**, with no reconnect: the server re-reads live
-group membership on each call rather than trusting the token.
+Any of these take effect within about **60 seconds**, with no reconnect — and the 60 seconds is
+`Authorization:LiveGroupCacheSeconds`, not a round number. The server resolves entitlement from
+live Entra group membership rather than from the token, caching each caller's result for that
+window; a call inside the window is answered from cache, and the next one after it re-reads Graph.
+So a revocation bites at the end of the current window, not on the very next call.
+
+⚠️ **While Graph is unreachable that window is longer.** The last known-good set is served for up
+to `Authorization:LiveGroupStaleSeconds` (default **1 hour**) before calls are denied, so a
+revocation during a Graph outage can take that long. For a compromised account, use the urgent
+procedure below rather than relying on the 60 seconds.
 
 ### Urgent revocation (compromised account)
 

@@ -55,11 +55,16 @@ keep in step, not a mechanism that enforces anything, and a fresh app comes up o
 default of `false`. **After any recreate, set the variable and then verify it:**
 
 ```bash
-az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+REV=$(az containerapp revision list -n $CA -g $RG \
+  --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv)
+az containerapp revision show -n $CA -g $RG --revision "$REV" \
   --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
 ```
 
 Empty output means **unguarded**, not "defaulted to safe" — the application default is `false`.
+It reads the revision *serving traffic* rather than the desired template, which would report the
+new value while the previous writable revision was still answering requests.
 
 Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
 staging, and worth knowing before doing it anywhere else.

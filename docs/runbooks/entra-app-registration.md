@@ -75,7 +75,6 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > export MSYS_NO_PATHCONV=1
 > set -o pipefail   # without this a failed `az rest` is masked by `sort` and the check reports OK
 > AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
-> Q='value[].[principalType,principalId,principalDisplayName]'
 > page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
 > fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName,.id]|@tsv' | sort > "$2"; }
 > rc=0

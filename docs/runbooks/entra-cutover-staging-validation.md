@@ -35,8 +35,14 @@ nothing anywhere to notice. Two independent restores, because neither alone is e
 APP=(-n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth)
 RG=vitally-prod-rg-uksouth; CA=vitally-staging-ca-uksouth
 
-state()   { az containerapp show "${APP[@]}" \
-  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
+# The SERVING value, not the desired one. `az containerapp show` returns the spec you just asked
+# for, so it flips to `true` the instant the update is accepted — while the previous, WRITABLE
+# revision can still be taking every request. Read it off the revision actually carrying traffic.
+serving() { az containerapp revision list "${APP[@]}" \
+  --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv; }
+state()   { local r; r=$(serving) && [ -n "$r" ] || return 1
+  az containerapp revision show "${APP[@]}" --revision "$r" \
+    --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
 unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
 
 # Retries, then VERIFIES, then shouts, then RETURNS A STATUS. Three separate things, and each
@@ -51,10 +57,15 @@ guard() {
     az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none && break
     sleep 10
   done
-  if [ "$(state)" = "true" ]; then
-    echo "$(date -u +%FT%TZ) guard RESTORED"
-    return 0
-  fi
+  # A successful update means the SPEC was accepted, not that the guarded revision is serving.
+  # Poll until it is — up to 5 minutes, which is far longer than a revision swap needs.
+  for _ in $(seq 1 20); do
+    if [ "$(state)" = "true" ]; then
+      echo "$(date -u +%FT%TZ) guard RESTORED (serving revision $(serving))"
+      return 0
+    fi
+    sleep 15
+  done
   echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
   echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
   return 1
@@ -89,12 +100,17 @@ Keep that shell open for steps 3 and 4, then exit it. The failsafe logs its own 
 before you walk away, from any shell:**
 
 ```bash
-az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+REV=$(az containerapp revision list -n $CA -g $RG \
+  --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv)
+az containerapp revision show -n $CA -g $RG --revision "$REV" \
   --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
 ```
 
 It must print `true`. **Empty output means UNGUARDED**, not "defaulted to safe" — the application
-default is `false`.
+default is `false`. This reads the revision that is *serving traffic*, deliberately: a plain
+`az containerapp show` returns the desired template, which reports `true` from the moment the
+update is accepted even while the previous, writable revision is still answering every request.
 
 Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool
 catalogue — so leave the guard on for those.
