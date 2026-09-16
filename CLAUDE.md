@@ -576,8 +576,9 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > | `SharedClientId` | `c3812e7d-a413-4169-b57e-803326611ba3` | *same* |
 > | `SharedClientSecret` | `secretref:entra-oauth-client-secret` | `secretref:oauth-shared-client-secret` — same value, different Container App secret name (see Rollback) |
 >
-> `infra/terraform/variables.tf` carries the same split as `oauth_*` / `staging_oauth_*`. The values
-> production moves to are in *The Auth0 → Entra cutover (#108) and its rollback*.
+> `infra/terraform/variables.tf` still defines these as `oauth_*` / `staging_oauth_*` pairs, now holding
+> the same values — collapsing them is tracked in #102. The Auth0 values these replaced, and the
+> command to revert to them, are in *The Auth0 → Entra cutover and its rollback*.
 
 - `Authority` — the provider's OIDC **issuer** identifier (see the per-target table above; Entra's is `https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0`). It is *not* a prefix the endpoint URLs are built from: `{Authority}/.well-known/openid-configuration` is fetched and the endpoints come from that document. The trailing slash is whatever the provider's own issuer carries — Entra's has none, Auth0's had one.
 - `Audience` — the identifier validated against the JWT `aud`. Under **Entra** that is the App ID URI `https://vitally.fiscaltec.com` — **with NO trailing slash**, because Entra refuses to register a slash-suffixed `identifierUris` value; under **Auth0**, which nothing now uses but a rollback would, it is the Resource Server identifier *with* the slash. Validated against the JWT `aud` claim, though not alone: `OAuthOptions.ValidAudiences` also accepts `SharedClientId`, and that is what a **v2** access token actually carries (a v1 token carries this App ID URI). One registration is both the OAuth client and the API resource, so the two are the same object. See the divergence warning below for why this must not be reconciled with `Resource`.
@@ -1134,12 +1135,17 @@ Five variables per target, and the secret behind the sixth:
 | `OAuth__UpstreamResourceScope` | *(unset)* | `https://vitally.fiscaltec.com/mcp.access` |
 | `OAuth__SharedClientId` | `VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D` | `c3812e7d-a413-4169-b57e-803326611ba3` |
 
-`OAuth__SharedClientSecret` stays a `secretRef` to the Container App secret
-`oauth-shared-client-secret`; what changes is that secret's **value**, which is copied from the Key
-Vault secret `entra-mcp-client-secret`. Reading it needs the two-switch Key Vault window described in
-`docs/runbooks/entra-app-registration.md` — and note the egress IP must be resolved with `curl -4`,
-because this workstation now egresses over IPv6 by default and Key Vault network ACLs are IPv4-only,
-which fails the rule add outright rather than degrading.
+`OAuth__SharedClientSecret` moved to a **new** `secretRef`. Production now points at
+`entra-oauth-client-secret`, added at the flip alongside the retained `oauth-shared-client-secret`
+rather than overwriting it — which is what keeps the rollback free of a Key Vault window. (Staging
+kept the original name and overwrote the value, so only staging would need the window on a rollback.)
+
+Reading `entra-mcp-client-secret` from the vault — needed to stage that value, and again at rotation
+— requires the two-switch Key Vault window described in `docs/runbooks/entra-app-registration.md`.
+Note the egress IP must be resolved with `curl -4`: this workstation egresses over IPv6 by default and
+Key Vault network ACLs are IPv4-only, so the rule add fails outright rather than degrading. Drive the
+window from a shell with a `trap … EXIT INT TERM HUP` that closes it, so an interrupted run cannot
+leave a private vault reachable.
 
 **Order matters in one place only:** deploy the code before flipping the variables. With the scope
 unset the new code is the old behaviour, so the deploy is a no-op and the flip is the whole change.

@@ -10,7 +10,7 @@ Point your MCP client at:
 https://vitally.fiscaltec.com/mcp
 ```
 
-On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Production currently reaches Entra via Auth0 federation; staging goes to Entra directly, and production will once the #108 switch is made. Either way you sign in with your normal Microsoft account and see the same screen.)
+On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Both production and staging go to Entra directly — production since 2026-09-16. You sign in with your normal Microsoft account.)
 
 **Claude Code** — run:
 

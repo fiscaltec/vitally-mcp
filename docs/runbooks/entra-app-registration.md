@@ -1,7 +1,8 @@
 # Entra app registration — Vitally MCP (#107)
 
-The app registration that **will replace** the Auth0 client + Resource Server pair at the #108
-cutover. Live on staging; **production has not been flipped yet.** It is **both** the shared OAuth client and the API resource, because that is what the
+The app registration that **replaced** the Auth0 client + Resource Server pair at the #108 cutover.
+Live on **both** targets — staging since 2026-09-03, production since 2026-09-16. Auth0 is retained as
+the rollback only. It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
@@ -470,7 +471,7 @@ The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → 
 and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is
 what the cutover **learned about this registration**, since that is what the next person changing it
 needs — and those lessons come from the staging flip and the validation against the live tenant, so
-they hold regardless of when production follows.
+they held for the staging flip and still hold now that production has followed.
 
 ### `resource` had to be dropped, not reshaped — and the reason recorded earlier was wrong
 

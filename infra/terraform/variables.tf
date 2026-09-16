@@ -157,11 +157,14 @@ variable "staging_oauth_resource" {
   default     = "https://vitally-staging.fiscaltec.com/"
 }
 
-# These are STAGING's OAuth client, and they are NOT the production values above: staging flipped to
-# the Entra app registration on 2026-09-03 while production is still on the Auth0 client. That is the
-# current split, not a future one — do not feed `oauth_shared_client_id` / `oauth_shared_client_secret`
-# to the staging app, which would point staging back at Auth0 while its authority says Entra.
-# These variables and the production ones reunify only once production flips too.
+# These are STAGING's OAuth client. They now hold the SAME values as the production `oauth_*` ones —
+# both targets point at the Entra app registration, staging since 2026-09-03 and production since
+# 2026-09-16 — and exist separately only because the targets diverged during the migration. Collapsing
+# them is tracked in #102 and deliberately not done here.
+#
+# One asymmetry survives the collapse and must not be lost with it: production holds its secret as
+# the Container App secret `entra-oauth-client-secret`, keeping the retained Auth0 value under
+# `oauth-shared-client-secret` for rollback; staging has only the one name.
 variable "staging_oauth_shared_client_id" {
   type        = string
   description = "Shared OAuth client_id for STAGING — the Entra app registration appId (#107), since staging flipped on 2026-09-03."
@@ -184,6 +187,12 @@ variable "staging_public_base_url" {
 variable "oauth_shared_client_secret" {
   type        = string
   description = "Client secret for PRODUCTION's `oauth_shared_client_id` — the Entra app's, sourced from the Key Vault secret `entra-mcp-client-secret`. Held on the Container App as 'entra-oauth-client-secret'; the retained Auth0 value is still present under 'oauth-shared-client-secret' for rollback."
+  sensitive   = true
+}
+
+variable "auth0_rollback_client_secret" {
+  type        = string
+  description = "The retained AUTH0 client secret, still held on the production Container App as 'oauth-shared-client-secret'. Nothing reads it while both targets run Entra; it exists so a rollback needs no Key Vault window. Remove it, and this variable, when Auth0 is retired (#102)."
   sensitive   = true
 }
 
