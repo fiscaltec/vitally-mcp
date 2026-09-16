@@ -78,10 +78,11 @@ else
 	[ -n "$pr" ] || deny "no PR resolvable for the current branch to gate (failing closed)"
 fi
 
-facts=$(gh pr view "$pr" --json headRefOid,author,reviewRequests 2>/dev/null) \
+facts=$(gh pr view "$pr" --json number,headRefOid,author,reviewRequests 2>/dev/null) \
 	|| deny "could not query PR #$pr (failing closed)"
 author=$(printf '%s' "$facts" | jq -r '.author.login // empty')
-head=$(printf '%s' "$facts" | jq -r '.headRefOid // empty')
+apihead=$(printf '%s' "$facts" | jq -r '.headRefOid // empty')
+prnumber=$(printf '%s' "$facts" | jq -r '.number // empty')
 pending=$(printf '%s' "$facts" | jq -r '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null')
 
 # Dependabot carve-out. Mind the two forms of the bot's login — the suffix tracks
@@ -96,18 +97,128 @@ case "$author" in
 dependabot\[bot\] | app/dependabot) allow ;;
 esac
 
+# The carve-out above is deliberately the FIRST thing after parsing `facts`. It used
+# to sit below head resolution, so a Dependabot PR whose head could not be resolved
+# was denied before the exemption was ever consulted — an exemption that only applies
+# when nothing else went wrong is not an exemption.
+
+# `headRefOid` LAGS after a push — CLAUDE.md records it still naming the previous
+# commit seconds after one on #122. Trusting it is this gate's worst failure mode
+# and it fails OPEN: in that window the field names the commit Copilot already
+# reviewed, so the comparison below matches and a newly pushed, UNREVIEWED commit
+# merges — precisely the #117 mistake this hook was ported to stop.
+#
+# `refs/pull/N/head` is the authoritative answer and `git ls-remote` reads it from
+# the git server itself, so it neither lags nor depends on which branch is checked
+# out. GitHub publishes that ref on the BASE repo for every PR, forks included,
+# which is why there is no branch-name path here any more: resolving `refs/heads/`
+# plus "or the local checkout if the branch name matches" compared an unrelated
+# commit whenever a local branch happened to share a fork PR's branch name, and
+# silently passed when that stale local SHA also matched the lagging API value.
+[ -n "$prnumber" ] || deny "could not read the PR number for '$pr' (failing closed)"
+[ -n "$apihead" ] || deny "could not read the head commit of PR #$prnumber (failing closed)"
+head=$(git ls-remote origin "refs/pull/$prnumber/head" 2>/dev/null | awk 'NR==1 {print $1}') || head=""
+[ -n "$head" ] || deny "could not resolve refs/pull/$prnumber/head from origin — no authoritative, non-lagging head is available, and the only other value is the one known to lag (failing closed)"
+
+# Disagreement means the API has not caught up. Deny rather than proceeding on the
+# fresh value: the operator waits seconds, and the message names both commits.
+[ "$apihead" = "$head" ] \
+	|| deny "PR #$prnumber reports head $apihead but refs/pull/$prnumber/head is at $head — the PR API lags after a push, and the older value would match an already-reviewed commit. Wait for it to catch up, then re-check (failing closed)"
+
+# Everything this hook checks is true of ONE MOMENT. `gh pr merge` then runs afterwards
+# and merges whatever the head is THEN — so a push landing in that window merges a commit
+# the gate never saw, which is #117 again by a different route. The hook cannot rewrite the
+# command, and it cannot observe the race, so it requires the caller to close it:
+# `--match-head-commit` makes the GitHub API itself refuse the merge if the head moved.
+# THE PIN, PARSED FROM AN UNAMBIGUOUS COMMAND OR NOT AT ALL.
+#
+# This check has now been bypassed three different ways, each time because it tried to find the
+# flag inside an arbitrary command string:
+#   * `*--match-head-commit*` matched it anywhere, so `--body=--match-head-commit=<head>` passed.
+#   * whitespace-splitting matched it inside a quoted value, so
+#     `--body 'review --match-head-commit <head>'` passed while gh received no pin.
+#   * taking the FIRST occurrence disagreed with gh, which uses the LAST, so a second differing
+#     pin could bind the merge to another commit.
+# Every fix made the parser cleverer and left the next hole. So it stops parsing cleverly and
+# starts refusing what it cannot read with certainty: no quotes, no shell metacharacters. A hex
+# SHA never needs quoting, the PR title already becomes the squash subject here (so --subject and
+# --body are not needed), and chained commands were forbidden anyway. With those gone, splitting
+# on whitespace is exact rather than approximate.
+case "$cmd" in
+*[\"\'\`\$\;\|\&\<\>\(\)\\]*)
+	deny "the merge command contains quotes or shell metacharacters, so this gate cannot read its arguments with certainty. Write it plainly: gh pr merge <number> --squash --match-head-commit $head (failing closed)" ;;
+esac
+
+# Now that splitting is exact: skip the values consumed by value-taking flags (so
+# `--subject --match-head-commit=x` cannot smuggle a pin), and take the LAST occurrence, which is
+# what gh sends. Two different pins is a contradiction rather than a preference — deny it.
+pinned=$(printf '%s' "$cmd" | awk '
+	BEGIN { split("-t --subject -b --body -F --body-file --author-email", f, " "); for (k in f) vf[f[k]] = 1 }
+	{
+		for (i = 1; i <= NF; i++) {
+			t = $i
+			if (t == "--match-head-commit") { n++; v = $(++i); continue }
+			if (index(t, "--match-head-commit=") == 1) { n++; v = substr(t, length("--match-head-commit=") + 1); continue }
+			if (t in vf) { i++; continue }
+		}
+		if (n > 1) { print "DUPLICATE"; exit }
+		if (n == 1) { print v }
+	}')
+[ "$pinned" = "DUPLICATE" ] && deny "--match-head-commit is given more than once; gh would use the last and this gate cannot tell which you meant (failing closed)"
+[ -n "$pinned" ] || deny "pin the merge to the commit this gate verified: add --match-head-commit $head as its own option (without it a push between this check and the merge lands an unreviewed commit; failing closed)"
+[ -n "$pinned" ] || deny "pin the merge to the commit this gate verified: add --match-head-commit $head as its own option (without it a push between this check and the merge lands an unreviewed commit; failing closed)"
+# Abbreviations are accepted as a prefix, as git does — but not so short that they would
+# match almost anything. Seven is git's own default abbreviation length.
+[ "${#pinned}" -ge 7 ] || deny "--match-head-commit $pinned is too short to identify a commit; use at least 7 characters (failing closed)"
+case "$head" in
+"$pinned"*) ;;
+*) deny "--match-head-commit $pinned is not the head this gate verified ($head) — refusing to pin the merge to a different commit (failing closed)" ;;
+esac
 # (1) Copilot must not be mid-review.
 [ "$pending" = "false" ] || deny "Copilot is still a requested reviewer on PR #$pr (review pending)"
 
 # (2) Copilot's latest review must target the current head commit.
-#     sort_by(.submitted_at) first — the REST reviews response order isn't guaranteed.
+#
+#     READ THIS VIA GraphQL, NOT REST. The REST reviews collection
+#     (`repos/{owner}/{repo}/pulls/N/reviews`) lags badly for this bot: on PR #129
+#     on 2026-09-15 it reported Copilot's latest review as ee1770c submitted at
+#     14:45:44Z while GraphQL reported 1559962 at 18:43:14Z — nearly four hours and
+#     nine reviews behind. Because this gate fails closed, reading the stale view
+#     does not make it conservative, it makes it STUCK: every merge is denied with
+#     "not on the current head" however clean the review is, and no amount of
+#     re-requesting clears it. A gate that cannot pass gets switched off, which is
+#     worse than the mistake it was written to prevent.
+#
+#     sort_by(submittedAt) first — response order isn't guaranteed either way.
 #     `// empty` coerces the no-reviews case (null) to an empty string.
-# Exact login match — REST reports Copilot as `…[bot]` (gh pr view omits the
-# suffix; see the pending check above). `contains` would match unrelated logins.
-last=$(gh api "repos/{owner}/{repo}/pulls/$pr/reviews" \
-	--jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id // empty' 2>/dev/null) \
+#     Mind the login spelling: GraphQL omits the `[bot]` suffix that REST carries
+#     (see the Dependabot note above). Exact match — `contains` would match
+#     unrelated logins.
+last=$(gh api graphql -f owner="$owner" -f name="$name" -F number="$pr" \
+	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){totalCount nodes{author{login} commit{oid} submittedAt}}}}}' \
+	--jq '.data.repository.pullRequest.reviews as $r | ($r.nodes | map(select(.author.login == "copilot-pull-request-reviewer")) | sort_by(.submittedAt) | last | .commit.oid // "NONE") as $c | "\($r.totalCount) \($c)"' 2>/dev/null) \
 	|| deny "could not read reviews for PR #$pr (failing closed)"
-[ -n "$last" ] || deny "Copilot has not reviewed PR #$pr yet"
+reviewcount=${last%% *}
+last=${last#* }
+# The jq above emits the literal `NONE` rather than an empty field when Copilot has no
+# review. An empty field would leave this parse resting on a trailing space surviving
+# command substitution — which it does, but invisibly, and a contract you cannot see in the
+# output is one the next edit breaks silently. `NONE` is not a valid object id, so it can
+# never be mistaken for one.
+[ "$last" = "NONE" ] && last=""
+# `reviews(last:100)` takes the newest hundred, so on a very long-running PR Copilot's
+# review can fall off the window entirely. Absent-with-a-full-page is not the same fact as
+# absent-with-room-to-spare, and reporting the first as "has not reviewed yet" would send
+# someone re-requesting a review that already exists.
+if [ -z "$last" ]; then
+	# Strictly greater: at exactly 100 the window holds the ENTIRE history, so Copilot being
+	# absent is a real absence rather than something that fell off the end. Denying there would
+	# block a merge for a reason that is not true.
+	if [ "${reviewcount:-0}" -gt 100 ] 2>/dev/null; then
+		deny "PR #$pr has $reviewcount reviews and Copilot's is not in the newest 100 — this gate cannot page back far enough to verify it (failing closed)"
+	fi
+	deny "Copilot has not reviewed PR #$pr yet"
+fi
 [ "$last" = "$head" ] || deny "Copilot's latest review ($last) is not on the current head ($head) — re-review pending on PR #$pr"
 
 # (3) Zero unresolved review threads. Fetch hasNextPage too and fail closed if a

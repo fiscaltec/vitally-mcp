@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** secured by Microsoft Entra directly; users connect to it by URL rather than installing a binary. Auth0 was the identity provider until the #108 cutover on 2026-09-03 and is no longer in the path.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** whose OAuth façade is built for Microsoft Entra directly; users connect to it by URL rather than installing a binary. ⚠️ **Production still authenticates through Auth0 at the time of writing.** #108 merged the cutover *code* on 2026-09-03 — deliberately inert until five `OAuth__*` variables are set — and the configuration flip has not yet been applied to production. Staging runs Entra. Read the provider off the live metadata (`curl https://vitally.fiscaltec.com/.well-known/oauth-authorization-server | jq .jwks_uri`) rather than trusting this file: it claimed the cutover was complete for twelve days while it was not.
 
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
 - Permission management via `ReadOnly` and `Destructive` flags on every tool, for MCP clients to enforce per-category permissions
 - **Streamable HTTP transport** (MCP 2026-07-28) on the `ModelContextProtocol.AspNetCore` package, stateless mode
-- **Entra OAuth 2.1 protection** via JwtBearer on `/mcp`; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts the upstream Entra tenant when `OAuth:SharedClientId` is set — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. The proxy *validates* the RFC 8707 `resource` parameter (#105) and then **terminates** it, naming the API upstream by scope instead — see the `resource` section under Architecture for why relaying it to Entra is a hard failure.
+- **OAuth 2.1 protection** via JwtBearer on `/mcp` — against Entra on staging, still against Auth0 on production until the #108 flip; publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`. An in-process OAuth proxy fronts whichever upstream provider `OAuth:Authority` names when `OAuth:SharedClientId` is set — Entra on staging, Auth0 on production today — it implements an RFC 7591 DCR shim so every MCP client converges on one pre-registered first-party app (skipping the per-session consent screen and accepting any RFC 8252 loopback port). Non-loopback `redirect_uri` values must be in `OAuth:AllowedClientRedirectUris`. The proxy *validates* the RFC 8707 `resource` parameter (#105) on both targets, and then either relays it (production, on Auth0, where the relay is what binds the audience) or **terminates** it and names the API upstream by scope (staging, on Entra). `OAuth:UpstreamResourceScope` is the switch — see the `resource` section under Architecture for why relaying it to Entra is a hard failure.
 - **On-demand Vitally API key fetch**: the server fetches the `vitally-shared` secret from Azure Key Vault via its user-assigned managed identity (with a short in-memory cache) and uses it to call Vitally on behalf of all authenticated users. Future per-user keys can be added by reintroducing claim-based secret resolution.
 - .NET 10 ASP.NET Core, framework-dependent — runs in any .NET 10 container
 - Built on the official `ModelContextProtocol` C# SDK 2.2.0 + `ModelContextProtocol.AspNetCore` 2.2.0
@@ -90,7 +90,7 @@ A successful response carries `ttlMs: 300000` and `cacheScope: "private"` alongs
 
 ## Installing for End Users
 
-FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the OAuth flow automatically on first use via the protected-resource metadata document, signing in against Entra.
+FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the OAuth flow automatically on first use via the protected-resource metadata document. **Everyone signs in with their FISCAL Entra account either way — but the issuer differs by target, which is what matters when debugging a sign-in.** On production the client is redirected to **Auth0**, which federates to Entra; on staging it goes to **Entra directly**. See the current-state warning at the top of this file.
 
 | Client | How to connect |
 |---|---|
@@ -173,20 +173,37 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       review of an earlier commit does not count, and timestamps cannot be lined up against the head
       commit — compare the SHA.
       ```bash
-      n=<PR>; head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
+      n=<PR>; head=$(git ls-remote origin "refs/pull/$n/head" | awk '{print $1}')
       gh pr view "$n" --json reviewRequests \
         --jq '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null'   # false = not pending
-      gh api "repos/fiscaltec/vitally-mcp/pulls/$n/reviews" \
-        --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | sort_by(.submitted_at) | last | .commit_id'
+      gh api graphql -f owner=fiscaltec -f name=vitally-mcp -F number="$n" \
+        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){nodes{author{login} commit{oid} submittedAt}}}}}' \
+        --jq '[.data.repository.pullRequest.reviews.nodes[] | select(.author.login=="copilot-pull-request-reviewer")] | sort_by(.submittedAt) | last | .commit.oid'
       ```
 
-      ⚠️ **Take the head SHA from `git rev-parse HEAD`, not from `gh pr view --json headRefOid`,
+      ⚠️ **Read the review commit from GraphQL, never from REST.** The REST reviews
+      collection (`…/pulls/N/reviews`) lags for this bot by hours, not seconds. Measured on
+      #129 on 2026-09-15: REST reported Copilot's latest review as `ee1770c` submitted
+      `14:45:44Z` while GraphQL reported `1559962` at `18:43:14Z` — nine reviews and nearly
+      four hours apart, from the same `gh` session seconds apart. The earlier version of this
+      block used REST, so following it would have parked the PR indefinitely: the SHA never
+      matches, re-requesting does not help, and the obvious reading is "Copilot hasn't
+      reviewed the head yet" when it has. `.claude/hooks/pre-merge-copilot-gate.sh` had the
+      same defect and was fixed with it — a fail-closed gate reading a stale source is not
+      conservative, it is stuck, and a gate that cannot pass is a gate someone switches off.
+
+      ⚠️ **Take the head SHA from `refs/pull/$n/head`, never from `gh pr view --json headRefOid`,
       in the seconds after a push.** The GraphQL field lags: on #122 it still reported the previous
       commit right after a push, so the comparison matched Copilot's *old* review and the gate read
       as passing. Two consequences, and the second is the expensive one: re-requesting in that
       window gets a review of the previous commit (that happened on #122 too — a review arrived four
       minutes after the request, on the superseded SHA), so **wait until the API reports the new head
-      before re-requesting**, then compare against `git rev-parse`.
+      before re-requesting**.
+
+      `refs/pull/$n/head` rather than `git rev-parse HEAD`, which was what this said until the hook
+      moved to the remote ref: the local checkout is only the right answer when it *is* that PR's
+      branch and has nothing unpushed, and merging a second PR from another branch is normal. The
+      manual check and the hook must read the same source or they disagree exactly when it matters.
 
       ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
       request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
@@ -204,6 +221,23 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       re-request.
 3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
    branch current, Copilot's latest review on the current head, zero unresolved threads.
+
+   **Pin the merge to the SHA you verified** — the hook requires it and denies without it — and
+   **write the PR number and the SHA out literally**:
+
+   ```bash
+   gh pr merge 129 --squash --match-head-commit 4384e311ed03c94e79134bd7a7435b62d2e124e9
+   ```
+
+   ⚠️ **Not `"$n"` / `"$head"`.** The hook is a `PreToolUse` hook: it sees the command *text*,
+   before the shell expands anything. So it reads `"$n"` as the PR argument and fails to resolve a
+   PR from it, and `"$head"` as a non-hex pin — the variable form is denied outright. Verified by
+   feeding both forms to the hook: `could not resolve a PR from '"$n"'` versus a clean pass.
+
+   Everything checked above is true of *one moment*; `gh pr merge` runs after it, so a push landing
+   in that window merges a commit nothing verified. The hook cannot see that race — it has already
+   returned by then — so `--match-head-commit` hands the check to GitHub, which refuses the merge
+   outright if the head moved. Without it the gate is a snapshot, which is #117's shape again.
 
 **Mind the two spellings of the bot's login — both are correct, don't "align" them.** The suffix
 tracks *which API answered*, not which field you read. **REST** (`gh api …/pulls/N/reviews`,
@@ -224,7 +258,19 @@ adaptation, resolving owner/repo at runtime.
 Caveats worth knowing before trusting it:
 
 - It guards **only Claude Code's own tool calls** — a merge from the GitHub UI is unaffected.
+- **It resolves the head from `refs/pull/N/head` via `git ls-remote`, not from the PR API.**
+  `headRefOid` lags after a push (see the warning above), and a gate that trusts it fails *open* —
+  the stale value names the commit Copilot already reviewed. `ls-remote` reads the git server
+  directly, so it neither lags nor cares which branch is checked out, which matters because merging
+  a second PR from another branch is normal. GitHub publishes `refs/pull/N/head` on the base repo
+  for **every** PR including forks, so there is no branch-name path and no local-checkout fallback:
+  an earlier version had both, and the fallback compared an unrelated commit whenever a local branch
+  shared a fork PR's branch name. If that ref cannot be read, the gate denies.
 - A newly added hook needs `/hooks` opened once (or a restart) to activate.
+- **It requires `--match-head-commit <verified sha>`** and denies a merge without one, with a
+  too-short abbreviation (under 7 characters), or with one naming a different commit. That is not
+  belt-and-braces: every other check here describes the moment the hook ran, and the merge happens
+  afterwards.
 - **Run `gh pr merge` as a standalone command — no pipes, no `;`, no `&&`.** The hook resolves the PR
   by counting non-flag positional tokens after the subcommand, so a chained form turns every
   following word into a candidate and the gate denies as ambiguous.
@@ -517,8 +563,24 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 - `MaxAutoPageFetches` — hard cap on page fetches per server-side filtered call (default 10; 100 items/page). Bounds fan-out against Vitally's 1000 req/min budget.
 
 `OAuthOptions` (singleton, bound from `OAuth:` section):
-- `Authority` — the provider's OIDC **issuer** identifier: `https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0`. It is *not* a prefix the endpoint URLs are built from: `{Authority}/.well-known/openid-configuration` is fetched and the endpoints come from that document. The trailing slash is whatever the provider's own issuer carries — Entra's has none, Auth0's had one.
-- `Audience` — the Entra App ID URI, `https://vitally.fiscaltec.com` — **with NO trailing slash**, because Entra refuses to register a slash-suffixed `identifierUris` value. Validated against the JWT `aud` claim, though not alone: `OAuthOptions.ValidAudiences` also accepts `SharedClientId`, and that is what a **v2** access token actually carries (a v1 token carries this App ID URI). One registration is both the OAuth client and the API resource, so the two are the same object. See the divergence warning below for why this must not be reconciled with `Resource`.
+
+> ⚠️ **These five differ by target while #108 is half-applied.** The bullets below describe each
+> setting; this is which *value* is live where. Taking an Entra value from the prose and applying it
+> to production before the flip is the mistake this table exists to prevent.
+>
+> | | Production (Auth0, today) | Staging (Entra, since 2026-09-03) |
+> |---|---|---|
+> | `Authority` | `https://fiscal-it.uk.auth0.com/` | `https://login.microsoftonline.com/75bd…/v2.0` |
+> | `Audience` | `https://vitally.fiscaltec.com/` (slash) | `https://vitally.fiscaltec.com` (no slash) |
+> | `Resource` | `https://vitally.fiscaltec.com/` | `https://vitally-staging.fiscaltec.com/` |
+> | `UpstreamResourceScope` | *(empty — `resource` is relayed)* | `https://vitally.fiscaltec.com/mcp.access` |
+> | `SharedClientId` / `Secret` | Auth0 client + its secret | Entra appId + `entra-mcp-client-secret` |
+>
+> `infra/terraform/variables.tf` carries the same split as `oauth_*` / `staging_oauth_*`. The values
+> production moves to are in *The Auth0 → Entra cutover (#108) and its rollback*.
+
+- `Authority` — the provider's OIDC **issuer** identifier (see the per-target table above; Entra's is `https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0`). It is *not* a prefix the endpoint URLs are built from: `{Authority}/.well-known/openid-configuration` is fetched and the endpoints come from that document. The trailing slash is whatever the provider's own issuer carries — Entra's has none, Auth0's had one.
+- `Audience` — the identifier validated against the JWT `aud`. Under **Entra** that is the App ID URI `https://vitally.fiscaltec.com` — **with NO trailing slash**, because Entra refuses to register a slash-suffixed `identifierUris` value; under **Auth0**, which production still uses, it is the Resource Server identifier *with* the slash. Validated against the JWT `aud` claim, though not alone: `OAuthOptions.ValidAudiences` also accepts `SharedClientId`, and that is what a **v2** access token actually carries (a v1 token carries this App ID URI). One registration is both the OAuth client and the API resource, so the two are the same object. See the divergence warning below for why this must not be reconciled with `Resource`.
 - `Resource` — canonical resource identifier published in `/.well-known/oauth-protected-resource` (falls back to `Audience` if empty). Set explicitly when MCP clients validate metadata `resource` against the server URL/origin (RFC 8707 + RFC 9728 compliance) — the published client rejects the whole document on a mismatch. **It must not be reconciled with `Audience`** — see the divergence warning below.  Second role: `PublishedResourceIdentifier` (this value, falling back to `Audience`) is what an incoming RFC 8707 `resource` parameter is validated *against* on `/oauth/authorize` and `/oauth/token` — so it is now a control on what audience a caller may ask to be bound to, not only a value published. `PublicBaseUrl` is the odd one out: it is an origin, so no trailing slash (and `Validate()` trims one anyway).
 
 > ⚠️ **`Audience` and `Resource` differ by exactly one character and must stay that way.** They were
@@ -527,7 +589,7 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > single `oauth_audience` variable. #108 split that variable, which is what makes the difference
 > structural rather than a convention someone has to remember.
 >
-> | | Auth0 (until 2026-09-03) | Entra (now) |
+> | | Auth0 posture (production today) | Entra posture (staging today; production after the flip) |
 > |---|---|---|
 > | `OAuth:Audience` — validated against JWT `aud` | `https://vitally.fiscaltec.com/` | `https://vitally.fiscaltec.com` — **no slash**, Entra refuses to register one on `identifierUris` |
 > | `OAuth:Resource` — published in RFC 9728, and validated against | `https://vitally.fiscaltec.com/` | `https://vitally.fiscaltec.com/` — **unchanged**, Claude Code normalises to it |
@@ -537,9 +599,9 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > serves both origins (#107), so a staging token's `aud` is production's App ID URI — expected, not
 > drift. `OAuthOptions.IsResourceIndicatorAllowed` tolerating exactly one trailing slash is what lets
 > the two forms name one resource — see `docs/runbooks/entra-app-registration.md`.
-- `UpstreamResourceScope` — `https://vitally.fiscaltec.com/mcp.access`. Setting it makes the proxy **terminate** the RFC 8707 `resource` parameter and name the API by this scope instead; leaving it empty relays `resource` (the Auth0 posture). One switch, because neither half works alone — see the `resource` section above. Validated at boot as a single whitespace-free token.
-- `SharedClientId` — appId of the pre-registered Entra app registration (`c3812e7d-a413-4169-b57e-803326611ba3`) that every MCP client converges on via the DCR shim. When set, the OAuth proxy endpoints become active. It is also a valid `aud` — see `Audience`.
-- `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`. Sourced from the Key Vault secret `entra-mcp-client-secret`, which **expires 2027-03-01** — a hard outage date, since Key Vault refuses to read an expired secret. Rotation is in `docs/runbooks/entra-app-registration.md`.
+- `UpstreamResourceScope` — set on Entra targets to `https://vitally.fiscaltec.com/mcp.access`, **empty on production** while it is on Auth0. Setting it makes the proxy **terminate** the RFC 8707 `resource` parameter and name the API by this scope instead; leaving it empty relays `resource` (the Auth0 posture). One switch, because neither half works alone — see the `resource` section above. Validated at boot as a single whitespace-free token.
+- `SharedClientId` — the pre-registered client every MCP client converges on via the DCR shim: the Entra app registration `c3812e7d-a413-4169-b57e-803326611ba3` on staging, still the Auth0 native client on production. When set, the OAuth proxy endpoints become active. It is also a valid `aud` — see `Audience`.
+- `SharedClientSecret` — confidential-client secret for whichever `SharedClientId` that target uses, injected server-side at `/oauth/token`. On Entra targets it is the Key Vault secret `entra-mcp-client-secret`, which **expires 2027-03-01** — a hard outage date, since Key Vault refuses to read an expired secret. Rotation is in `docs/runbooks/entra-app-registration.md`.
 - `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
 - `PublicBaseUrl` — canonical public origin (e.g. `https://vitally.fiscaltec.com`). When set, `/.well-known/*` metadata and the OAuth proxy callback are built from this instead of the request `Host`, defending against Host-header injection into the metadata documents. Empty in local dev (falls back to request scheme+host so loopback works). Validated as absolute https.
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
@@ -548,14 +610,14 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 - `Enabled` (default `true`), `ReadPermission` (`vitally:read`), `WritePermission` (`vitally:write`), `DeletePermission` (`vitally:delete`), `CustomPermissionsClaim` (default `https://vitally.fiscaltec.com/permissions`).
 - `ReadOnly` (default `false`) — deployment-level read-only kill switch. When true, **every** mutating tool call (create/update/delete) is denied in `ToolAuthorizer` (checked before the `Enabled`/`NoAuth` gate, so it holds even with RBAC off), and the destructive tools are hidden from `tools/list` via an `AddListToolsFilter`. A blunt safety net for read-only deployments that doesn't depend on the per-user Entra-group RBAC. Denials are audited via `LogDenied`.
 - `LiveGroupCheck` (default `false`), `LiveGroupCacheSeconds` (default `60`), `LiveGroupStaleSeconds` (default `3600`; `0` disables stale serving), `ReaderGroupId`/`EditorGroupId`/`AdminGroupId` (Entra group object ids).
-- **Entitlement comes from Entra group membership, resolved live from Graph — nothing in the token grants access.** `LiveGroupCheck` is `true` on every deployed target, and that flag alone chooses the mode: on, permissions come from Graph; off, from the token's `permissions` / `CustomPermissionsClaim` / `scope` claims. The claim path is a *different mode*, not a fallback beneath the live one, and there is no route from one to the other — including when the resolver is missing entirely, which denies rather than quietly selecting the claim mode. Those claim settings are inert on every deployed target; the Auth0 post-login Action that used to mint the custom claim was retired at the #108 cutover.
+- **Entitlement comes from Entra group membership, resolved live from Graph — nothing in the token grants access.** `LiveGroupCheck` is `true` on every deployed target, and that flag alone chooses the mode: on, permissions come from Graph; off, from the token's `permissions` / `CustomPermissionsClaim` / `scope` claims. The claim path is a *different mode*, not a fallback beneath the live one, and there is no route from one to the other — including when the resolver is missing entirely, which denies rather than quietly selecting the claim mode. Those claim settings are inert on every deployed target — not because the Auth0 post-login Action was removed (it still exists and still runs, since production still signs in through Auth0) but because #108 removed the code path that read any claim while `LiveGroupCheck` is on (PR #125, `45a51db`). The Action is retained with the rest of the Auth0 configuration for the rollback window, and deleting it early is what the Deployment table warns against. Its output is simply no longer consulted.
 - **Live group check (preferred for prompt propagation):** when `LiveGroupCheck=true`, `ToolAuthorizer` resolves permissions from the caller's *current* Entra group membership via `GraphGroupPermissionResolver` (Microsoft Graph — it lists each configured group's `transitiveMembers` filtered to the caller's object id, using the managed identity, cached `LiveGroupCacheSeconds` per user) instead of the token claim — so grants and **revocations** take effect within the cache window regardless of token/refresh age (a claim is frozen at login and does not refresh with the token). **`transitiveMembers` expands nested groups**, so a user who gets a tier via a department group nested inside an `sg-vitally-*` group is authorised, not only users assigned to the `sg-vitally-*` group directly. The object id is taken from the `oid` claim or the trailing GUID of `sub`. Requires the managed identity to hold Graph `GroupMember.Read.All`.
-- **A Graph failure degrades in one step, then denies** (#106, #108). The order is **fresh Graph → stale Graph → deny**: `GraphGroupPermissionResolver` keeps each successful lookup with the time it was resolved and, when a Graph call fails, serves that caller's last known-good set for up to `LiveGroupStaleSeconds` (default 1 h) before giving up and returning null — at which point `ToolAuthorizer` denies, explicitly and with a log line saying which of the two fail-closed routes was taken. Serving stale logs **one** warning carrying the subject id and how stale the result is in seconds — never the email, never two lines per call.
+- **A Graph failure degrades in one step, then denies** (#106, #108). The order is **fresh Graph → stale Graph → deny**: `GraphGroupPermissionResolver` keeps each successful lookup with the time it was resolved and, when a Graph call fails, serves that caller's last known-good set for up to `LiveGroupStaleSeconds` (default 1 h) before giving up and returning null — at which point `ToolAuthorizer` denies, explicitly and with a log line saying which of the two fail-closed routes was taken. Serving stale logs **one** warning carrying the caller's Entra **object id** — the same `oid` `CallerIdentity` resolves for the audit record, not the JWT `sub`, so a stale-serve line joins to the audit trail and to the membership that caused it — and how stale the result is in seconds. Never the email, never two lines per call.
   - **Why it exists:** the stale copy is the only thing between a Graph outage and a total denial, now that no claim can authorise. Bounded staleness is the trade — a revoked user could retain access for up to the window, but only while Graph is unavailable, which is strictly tighter than the 8-hour frozen claim the design tolerated before the live check existed. `LiveGroupStaleSeconds: 0` turns the protection off and denies immediately.
   - **The two windows are separate on purpose, and must stay separate.** `LiveGroupCacheSeconds` governs answering *without asking Graph*; `LiveGroupStaleSeconds` is consulted *only after a Graph call has failed*. Collapsing them — e.g. by simply lengthening the cache TTL to an hour — would stop revocations propagating, which is the whole reason the live check exists. `ReHitsGraph_OnceTheFreshTtlLapses_DespiteRetainingAStaleCopy` is the regression guard.
   - Age is measured against an injected `TimeProvider`, not by cache expiry: the warning needs the age itself, and `IMemoryCache` expiry cannot be wound forward in a test. The cache entry is keyed per user, which is what stops one caller's retained tier being served to another during an outage (`DoesNotServeOneUsersStaleResult_ToAnother`).
   - **The degraded path is observed, not just unit-tested** (`StaleEntitlementCompositionTests`). #106 shipped it with unit coverage alone and it had never been seen working; staging cannot induce a Graph failure in isolation, because it shares the managed identity and CAE with production. #108 closed that gap with a composed-host test that drives the real wiring — DI, the typed Graph client, the singleton `IMemoryCache` that carries the retained copy *between requests*, the authorizer, the policy handler, the SDK filter — and reads the outcome off `tools/list` across an outage that starts, is survived, and then outlasts its window. A resolver handed a fresh cache per request would pass the unit tests and fail that one.
-  - **The claim tier used to sit beneath the stale cache and was removed at the cutover (#108).** While Auth0 minted the claim it genuinely authorised, which is why #106 added the stale cache *beneath* rather than in place of it. With the Action retired the claim is permanently absent, so a fall-through could only ever have denied — leaving code that read like a working fallback and behaved like a silent denial. Do not reinstate it "as a safety net": it is not one.
+  - **The claim tier used to sit beneath the stale cache and was removed at the cutover (#108).** While Auth0 minted the claim it genuinely authorised, which is why #106 added the stale cache *beneath* rather than in place of it. The Action itself is **not** retired — it is retained for the rollback window, and production still signs in through Auth0 — but #108 removed the code that reads any claim while `LiveGroupCheck` is on, so no claim it mints can authorise anyone. A fall-through could therefore only ever have denied, leaving code that read like a working fallback and behaved like a silent denial. Do not reinstate it "as a safety net" on the grounds that the Action still exists: its output is not consulted, and a rollback to Auth0 does not change that.
 - Server-side RBAC backstop. `ToolAuthorizer.EnsureAuthorizedAsync(method, ct)` is awaited from **`VitallyService.SendAsync`** — the single point every Vitally call funnels through — so all 93 tools are covered without per-tool annotation. The HTTP verb maps to the tier: GET → read, POST/PUT/PATCH → write, DELETE → delete (unknown verbs fall back to the strictest). Resolution is `HasEffectivePermissionAsync`, exactly as for discovery filtering (see above), so the two cannot disagree. Bypassed when `Enabled=false` or `OAuth:NoAuth=true`. **The `ReadOnly`/`Destructive` tool attributes are advisory client hints; this is the actual enforcement — when adding a new call path, route it through `VitallyService.SendAsync` so it stays covered, and never call the Vitally API around it.**
 - **Per-caller discovery filtering.** All 93 tools carry `[Authorize(Policy = "vitally:read|write|delete")]` (56 read / 25 write / 12 delete). `mcpBuilder.AddAuthorizationFilters()` makes the SDK evaluate that attribute on each tool, so `tools/list` shows only the tools the caller may actually invoke and an unauthorised call is rejected before the handler runs. **It and `AddAuthorizationBuilder()` are registered unconditionally — never guarded on `OAuth:NoAuth`.** Once any tool carries `[Authorize]`, the SDK *fails closed*: it throws ("Authorization filter was not invoked for tools/call operation, but authorization metadata was found on the tool") so a guarded registration yields a dev server that can neither list nor call any tool. Dev mode stays unfiltered instead via `VitallyPermissionHandler`, which succeeds when `ToolAuthorizer.IsAuthorizationBypassedAsync()` reports RBAC disabled or `NoAuth`. `VitallyPermissionHandler` resolves those policies through `ToolAuthorizer.HasEffectivePermissionAsync`, so discovery and the `VitallyService.SendAsync` backstop cannot drift apart. This is **discovery filtering** — the security boundary remains `SendAsync`. Distinct from the deployment-wide `Authorization:ReadOnly` switch, which hides destructive tools from everyone.
 - A denial refused at this SDK authorisation checkpoint is audited separately: see `LogToolCallDenied` under `AuditOptions` below — `SendAsync`'s own `LogDenied` never fires for a tier mismatch, because the SDK rejects the call before `SendAsync` runs.
@@ -842,8 +904,8 @@ than deploying somewhere unintended.
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
 | Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics (attached to the CAE) | + Application Insights for traces |
-| Auth | Entra app registration `Vitally MCP` `c3812e7d-a413-4169-b57e-803326611ba3` | Both the OAuth client and the API resource in one registration, which is why `SharedClientId` is also a valid `aud`. App ID URI `https://vitally.fiscaltec.com` (no slash), exposes `mcp.access`, carries both origins' `/oauth/callback`, so both targets share one `SharedClientId` / `SharedClientSecret`. `appRoleAssignmentRequired` with seven department groups assigned **directly** (nesting does not grant sign-in). Secret `entra-mcp-client-secret` in the vault, expires **2027-03-01** — 180 days, the standard `scan/run.py` asserts. A rotation commitment Auth0 did not carry, and a hard outage date: Key Vault refuses to read an expired secret rather than merely warning. The expiry is set on the *Key Vault secret* as well as the Entra credential, because the scanner alerts on the former and knows nothing about Entra. `vitally-shared` is on the same standard (2027-02-14). See `docs/runbooks/entra-app-registration.md` |
-| Auth (Auth0, retained for rollback only) | Tenant `fiscal-it.uk.auth0.com` | Nothing routes through it since the #108 cutover. Its client, the two Resource Servers and the `Vitally MCP claims` Action are deliberately **left in place** until production has soaked on Entra — deleting them early turns a one-command rollback into an outage. Removing them is a separate, later step. The tenant itself stays regardless: it hosts Simple Asset System, its API and a Terraform client |
+| Auth (Entra — live on staging, pending on production) | Entra app registration `Vitally MCP` `c3812e7d-a413-4169-b57e-803326611ba3` | Both the OAuth client and the API resource in one registration, which is why `SharedClientId` is also a valid `aud`. App ID URI `https://vitally.fiscaltec.com` (no slash), exposes `mcp.access`, and carries **both** origins' `/oauth/callback` so it *can* serve both targets. **Only staging is pointed at it today.** Production still uses the Auth0 client and the Auth0 client secret, so `SharedClientId` and `SharedClientSecret` currently hold **different values per target** — see the split `oauth_*` / `staging_oauth_*` variables in `infra/terraform/variables.tf`. Check which target you are touching before rotating or provisioning either credential; they reunify onto this registration when production flips. `appRoleAssignmentRequired` with nine department groups assigned **directly** (nesting does not grant sign-in) — the list must equal `FISCAL IT Auth0`'s exactly, and has drifted from it **twice** (2026-09-03, 2026-09-15), each time an onboarded department that would have lost access at the cutover. The cause was `ACCESS.md` naming only the Auth0 app in its onboarding steps, so both were onboarded exactly as documented — corrected, along with a parity command that compares object ids and actually diffs. Compare the two apps before any cutover or rollback rather than trusting a document; see the runbook and #134. Secret `entra-mcp-client-secret` in the vault, expires **2027-03-01** — 180 days, which is a convention rather than an enforced rule: `scan/run.py` warns when an **enabled** Key Vault secret **that has an expiry** comes within **30 days** of it, and its alert text repeats the 180-day wording — but nothing validates the interval, a secret with no expiry set is not covered at all, and the scanner cannot see Entra credentials. A rotation commitment Auth0 did not carry, and a hard outage date: Key Vault refuses to read an expired secret rather than merely warning. The expiry is set on the *Key Vault secret* as well as the Entra credential, because the scanner alerts on the former and knows nothing about Entra. `vitally-shared` is on the same standard (2027-02-14). See `docs/runbooks/entra-app-registration.md` |
+| Auth (Auth0) | Tenant `fiscal-it.uk.auth0.com` | **Still the live production sign-in path** — the #108 configuration flip has not been applied. After it is, this becomes the rollback path and its client, both Resource Servers and the `Vitally MCP claims` Action stay **in place** until production has soaked on Entra; deleting them early turns a one-command rollback into an outage. The tenant stays regardless: it hosts Simple Asset System, its API and a Terraform client |
 | CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | Infrastructure-as-code is in this repo at `infra/terraform/` (adopted via import blocks; see `infra/terraform/README.md`). The `deploy.yml` workflow consumes whatever that provisions. |
 | IaC — Entra | `infra/terraform/entra.tf` + the `azuread` provider | Added by #107. Same adopt-by-import convention, but it is the **first non-`azurerm` provider here**, so `terraform init` must be re-run before any plan. The client secret and the admin-consent grant are deliberately *not* modelled — state would hold the secret value, and the vault is private-endpoint only so Terraform cannot write it from outside the VNet regardless |
@@ -877,9 +939,15 @@ validating straight against production is the failure mode a staging-first desig
 registration be reused across a multi-run validation.
 
 **What it shares with production, deliberately:** the CAE, the managed identity, the ACR, the Key
-Vault *and its `vitally-shared` secret*, the `sg-vitally-*` tier group ids, and the single Entra app
-registration. Sharing is the point — a staging environment that differs in more than the thing under
-test cannot tell you whether a failure is the change or the environment.
+Vault *and its `vitally-shared` secret*, and the `sg-vitally-*` tier group ids. Sharing is the point —
+a staging environment that differs in more than the thing under test cannot tell you whether a
+failure is the change or the environment.
+
+**The identity provider is the exception, and only while #108 is half-applied.** Staging points at
+the Entra app registration; production still points at the Auth0 client, with its own client secret.
+That is the thing under test, so the divergence is deliberate — but it does mean `SharedClientId` and
+`SharedClientSecret` are *not* shared between the targets right now, despite the identical Container
+App secret name. They reunify onto the Entra registration when production flips.
 
 **What diverges:** `OAuth__Resource` and `OAuth__PublicBaseUrl` (both naming the staging origin) and
 `minReplicas: 0`. During an identity-provider migration `OAuth__Authority` diverges too, while
@@ -891,12 +959,52 @@ still be the staging origin (clients reject a metadata document whose `resource`
 they fetched it from). So the two diverge by **host as well as by slash** here. It looks like a
 copy-paste error and is not; see the divergence warning under *Configuration*.
 
-**One divergence that will cost you time if you meet it cold: there is one Vitally tenant and its API
-keys are global.** Staging reads the *production* `vitally-shared` secret, so its write and delete
-tools mutate real customer data — there is no sandbox to point it at. `Authorization:ReadOnly=true`
-is deliberately **not** set, because the tier-enforcement acceptance test needs the write tools
-visible to prove a reader is denied one. So staging is read-only by convention, not by
-configuration.
+**One divergence that will cost you time if you meet it cold: staging reads the *production*
+`vitally-shared` secret**, so its write and delete tools mutate real customer data. There is one
+Vitally tenant and no sandbox. Vitally *does* allow additional API keys, but its REST API
+documentation describes no **read-scoped** key (checked 2026-09-15), so a second key would be
+revocable and separately attributable while carrying the same write access — it would not fix this.
+Revisit if scoped keys ever ship; a read-only key at the boundary beats any switch of ours.
+
+**So `Authorization__ReadOnly=true` is staging's guard, and it is the one live use for that switch.**
+Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
+write tools to prove a reader is denied one. Live state: **`true` on staging**, **unset on production**.
+
+⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it — grep the file for
+`Authorization__ReadOnly` rather than a line number, which moves — but `infra/terraform/` is an as-built
+capture and **`terraform apply` is never run here** — staging is stood up through `deploy.yml`
+and `az containerapp`. So a fresh app comes up on the application default, `false`, writing to
+the shared production Vitally tenant until someone sets the variable. Set it as part of the
+spin-up and verify it, rather than reading the capture as a guarantee:
+
+```bash
+CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
+# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
+# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
+# print nothing and read exactly like the "unguarded" case the text below describes.
+if ! REVS=$(az containerapp revision list -n $CA -g $RG \
+     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
+else
+  rc=0
+  for REV in $REVS; do
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
+      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
+      [ "$V" = "true" ] || rc=1
+    else
+      echo "NOT ASSESSED — could not read $REV"; rc=1
+    fi
+  done
+  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
+  [ "$rc" -eq 0 ]
+fi
+```
+
+Empty output means unguarded, not "defaulted to safe". It reads the **serving** revision on
+purpose: `az containerapp show` returns the desired template, which flips the moment an update is
+accepted, while the previous — unguarded — revision may still be taking traffic.
 
 **The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
 DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from
@@ -956,8 +1064,8 @@ serves multiple subnets in the same VNet, and both CAEs resolve the same private
 shared DNS zone links. That closes the one gap the shared model cannot: **CAE-level and platform
 changes cannot be rehearsed before production sees them.**
 
-What no topology fixes: there is one Vitally tenant and its API keys are global, so any staging or dev
-environment reads real customer data.
+What no topology fixes: there is one Vitally tenant and no sandbox, and Vitally offers no read-scoped
+API key, so any staging or dev environment reads — and can write — real customer data.
 
 ### The deploy smoke covers the OAuth metadata, not just liveness
 

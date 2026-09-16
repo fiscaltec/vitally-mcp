@@ -42,11 +42,15 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # The same Entra app registration as production, so this is the same secret value. Its redirect
-  # URIs carry both origins' /oauth/callback; the proxy's callback is fixed per origin.
+  # NOT the same value as production's, despite the identical Container App secret name. Staging
+  # flipped to Entra on 2026-09-03 and production has not, so this holds the *Entra* app's secret
+  # while `containerapps.tf` holds the *Auth0* client's. Handing production's secret to staging (or
+  # the reverse) is a silent authentication failure at the token exchange, not a startup error.
+  # Reunify the two variables once production flips — the Entra registration's redirect URIs already
+  # carry both origins' /oauth/callback, so one secret will serve both again.
   secret {
     name  = "oauth-shared-client-secret"
-    value = var.oauth_shared_client_secret
+    value = var.staging_oauth_shared_client_secret
   }
 
   ingress {
@@ -91,9 +95,11 @@ resource "azurerm_container_app" "staging" {
         name  = "Vitally__Region"
         value = "EU"
       }
-      # Deliberately the production vault and the production `vitally-shared` secret: there is only
-      # one Vitally tenant and its API keys are global, so there is no staging key to point at. That
-      # means staging writes reach real Vitally data — see the note in CLAUDE.md.
+      # Deliberately the production vault and the production `vitally-shared` secret. Vitally does
+      # allow additional API keys per environment, but offers no read-scoped key (checked
+      # 2026-09-15), so a separate staging key would carry the same write access to the same single
+      # tenant — it would buy revocability, not safety. Hence staging writes reach real Vitally data,
+      # and `Authorization__ReadOnly` below is what guards it. See CLAUDE.md.
       env {
         name  = "Vitally__KeyVaultUri"
         value = "https://${azurerm_key_vault.secret.name}.vault.azure.net/"
@@ -103,7 +109,8 @@ resource "azurerm_container_app" "staging" {
         value = var.managed_identity_client_id
       }
       # Staging is pointed at a new identity provider first and production follows once it has
-      # passed; both are on Entra now that #108 has cut over.
+      # passed. Staging has been on Entra since 2026-09-03; **production is still on Auth0** until
+      # the #108 configuration flip is applied there, so the two deliberately differ here.
       env {
         name  = "OAuth__Authority"
         value = var.staging_oauth_authority
@@ -121,7 +128,7 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__UpstreamResourceScope"
-        value = var.oauth_upstream_resource_scope
+        value = var.staging_oauth_upstream_resource_scope
       }
       env {
         name  = "OAuth__NoAuth"
@@ -129,7 +136,7 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__SharedClientId"
-        value = var.oauth_shared_client_id
+        value = var.staging_oauth_shared_client_id
       }
       env {
         name        = "OAuth__SharedClientSecret"
@@ -146,6 +153,37 @@ resource "azurerm_container_app" "staging" {
       # Same tier groups as production. Entitlement is resolved live from Graph transitiveMembers
       # using only the `oid` claim, so it is identity-provider-independent and needs no staging
       # variant — which is also why staging can be moved to Entra without touching these.
+      # Staging shares the PRODUCTION Vitally API key — there is one Vitally tenant, no sandbox, and
+      # no read-scoped key available (checked 2026-09-15) — so its write and delete tools mutate real
+      # customer data. This switch is the only thing preventing that.
+      #
+      # BUT THIS FILE DOES NOT APPLY IT. infra/terraform/ is a back-filled as-built capture and
+      # `terraform apply` is never run here — staging is stood up through deploy.yml and the
+      # `az containerapp` commands in CLAUDE.md. So recording it here does NOT make a recreated app
+      # come up guarded: it starts on the application default, false. Set it out of band as part of
+      # the spin-up and then verify it:
+      #
+      #   (the full form, which reports NOT ASSESSED rather than printing nothing when the
+      #    lookup fails, is in docs/runbooks/read-only-and-rbac-rollout.md — an empty result
+      #    from a bare loop is indistinguishable from an unguarded app)
+      #   CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+      #   REVS=$(az containerapp revision list -n $CA -g $RG \
+      #     --query '[?properties.trafficWeight > `0`].name' -o tsv) || echo "NOT ASSESSED"
+      #   for REV in $REVS; do az containerapp revision show -n $CA -g $RG --revision "$REV" \
+      #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; done
+      #
+      # Empty output means unguarded, not "defaulted to safe". It reads the SERVING revision
+      # deliberately: `az containerapp show` returns the desired template, which reports the new
+      # value the moment an update is accepted while the previous — unguarded — revision may
+      # still be taking every request.
+      #
+      # Unset it for the tier-enforcement acceptance test, which has to see the write tools to prove
+      # a reader is denied one, then put it back — under the EXIT trap in
+      # docs/runbooks/entra-cutover-staging-validation.md, so an interrupted run cannot leave it off.
+      env {
+        name  = "Authorization__ReadOnly"
+        value = "true"
+      }
       env {
         name  = "Authorization__LiveGroupCheck"
         value = "true"

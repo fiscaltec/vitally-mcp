@@ -27,12 +27,14 @@ namespace VitallyMcp;
 /// exactly the posture this arrangement exists to rule out.</para>
 ///
 /// <para>The token claim used to sit beneath the stale cache as a third tier in mode 1. It was the
-/// Auth0 post-login Action's <c>permissions</c> claim, and while Auth0 issued the tokens it genuinely
-/// authorised — which is why #106 added the stale cache beneath it rather than in place of it. The
-/// Entra cutover (#108) retired the Action, so that claim is now permanently absent and a
-/// fall-through to it could only ever deny. Keeping it would have left code that reads like a working
-/// fallback and behaves like a silent denial; the explicit deny below says what actually happens, and
-/// logs why.</para>
+/// Auth0 post-login Action's <c>permissions</c> claim, and while it was consulted it genuinely
+/// authorised — which is why #106 added the stale cache beneath it rather than in place of it. #108
+/// removed the fall-through. Note what that did and did not change: the Action still exists and still
+/// runs (production signs in through Auth0 until the cutover's configuration flip is applied), but
+/// nothing reads its claim while <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> is on — so the
+/// tier is unreachable rather than unminted, and a rollback to Auth0 does not bring it back. Keeping
+/// the fall-through would have left code that reads like a working fallback and behaves like a silent
+/// denial; the explicit deny below says what actually happens, and logs why.</para>
 /// </summary>
 public class ToolAuthorizer
 {

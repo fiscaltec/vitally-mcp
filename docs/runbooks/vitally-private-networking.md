@@ -1,6 +1,14 @@
 # Runbook: Vitally MCP — Private Networking Migration
 
 **Status:** ✅ COMPLETED & VALIDATED 2026-06-09 · **Author:** Infra · **Date:** 2026-06-05
+
+> ⚠️ **This is the plan as written in June 2026, kept as the record of why the estate is shaped
+> this way. It is not a procedure — read every phase in the past tense.** Where the build diverged
+> from the plan, the *As-built* section at the bottom is authoritative. Two divergences reach into
+> the phases below: the scanner was built as the Container Apps **Job** `vitally-prod-secscan-uksouth`,
+> **not** the timer Function the phases describe, and the live subnets are `snet-app` / `snet-pe` /
+> `snet-pe-monitor` — `snet-aca` and `snet-func` were never built (verified against the live VNet
+> on 2026-09-15).
 **Goal:** Move Key Vault and ACR off the public internet via a VNet-integrated Container Apps
 environment + private endpoints, as a reusable *private-by-default* standard.
 
@@ -22,15 +30,15 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | VNet | `vitally-prod-vnet-uksouth` | `10.80.0.0/23` |
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
-| Subnet (func) | `snet-func` | `10.80.0.48/28`, delegation per Functions Flex VNet-integration (confirm at create) |
-| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for app/func → Auth0/Vitally/Graph/Teams |
+| ~~Subnet (func)~~ | ~~`snet-func`~~ | **Never built** — the scanner became a Container Apps Job, which needs no subnet of its own |
+| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
 | KV private endpoint | `vitally-prod-pe-kv-uksouth` | in `snet-pe` |
 | ACR private endpoint | `vitally-prod-pe-acr-uksouth` | in `snet-pe`; requires ACR Premium |
 | New env | `vitally-prod-cae2-uksouth` | workload-profiles, VNet `snet-aca`, **external** ingress |
 | New app | `vitally-prod-ca2-uksouth` | same identity/image/env/secrets/scale as current |
-| Scanner func | `vitally-prod-func-secretscan-uksouth` (+ storage) | timer; replaces the Logic App scanner |
+| Scanner | ~~`vitally-prod-func-secretscan-uksouth` (Function + storage)~~ — **built instead as the Container Apps Job `vitally-prod-secscan-uksouth`**, no storage account | scheduled; replaces the Logic App scanner |
 
 *(The `…ca2…`/`…cae2…` names are because the old + new run in parallel during cutover; optional later cleanup.)*
 
@@ -46,17 +54,20 @@ zones linked to the VNet. No effect on the running service.
 - **Leave `publicNetworkAccess=Enabled` on both** so the current app + CI keep working.
 
 ### Phase 3 — New environment + app + scanner (zero impact)
+
 - Create VNet-integrated workload-profiles env (`…cae2…`), external ingress.
 - Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the
   `oauth-shared-client-secret`, scale 0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
 - Deploy the timer Function (`…func-secretscan…`) with VNet integration; port the scan logic
+  *(as-built: a Container Apps Job on `python:3-slim`, not a Function — see the table above)*
   (list secrets via MI → filter ≤30 days → POST Adaptive Card to the Teams webhook). Grant its MI
   **Key Vault Reader**. Retire the Consumption Logic App after validation.
 
 ### Phase 4 — Validate new app on temp FQDN (zero impact)
 - Confirm the new app resolves KV/ACR via the **private endpoints** (private DNS makes it use the
   PE even while public is still on), pulls its image, and is healthy (`/health`).
-- Confirm the Function run reads KV and (force-test) posts to Teams.
+- Confirm the scanner run reads KV and (force-test) posts to Teams. *(As-built this is the Job:
+  `az containerapp job start -n vitally-prod-secscan-uksouth -g vitally-prod-rg-uksouth`.)*
 
 ### Phase 5 — Cutover (short planned interruption)
 - Pre-lower DNS TTL on `vitally.fiscaltec.com`.
@@ -68,7 +79,8 @@ zones linked to the VNet. No effect on the running service.
 
 ### Phase 6 — Lock down + decommission
 - Set **KV `publicNetworkAccess=Disabled`** and **ACR public access disabled**.
-- Confirm app + Function still work (now fully private).
+- Confirm app + scanner still work (now fully private) — the Job, per *As-built*. There is no
+  Function to confirm here or to delete below.
 - Delete the old env, old app, and the Consumption Logic App + its O365 leftovers.
 
 ## Rollback
@@ -94,8 +106,13 @@ public IP (~£3/mo), scanner Job (pennies, no storage), 2 private DNS zones (~£
 ## As-built (2026-06-09) — deviations from the plan
 - **Naming:** rebuilt the env+app with clean names (`vitally-prod-cae-uksouth` / `vitally-prod-ca-uksouth`,
   no `…2…` suffix). The env infra subnet is **`snet-app`** (10.80.0.64/27), not `snet-aca` — the original
-  `snet-aca` couldn't be reused (occupied by the interim env until it was deleted) so it was removed; subnets
-  are now `snet-app` (env) + `snet-pe` (private endpoints).
+  `snet-aca` couldn't be reused (occupied by the interim env until it was deleted) so it was removed; the
+  subnets built here were `snet-app` (env) + `snet-pe` (private endpoints).
+- **A third subnet was added later, after this runbook was written.** `snet-pe-monitor`
+  (10.80.0.96/27) came with the Azure Monitor Private Link Scope in August 2026 and is modelled in
+  `infra/terraform/ampls.tf`; see `docs/superpowers/specs/2026-08-11-observability-design.md`. So the
+  live VNet has **three** subnets, not the two this section listed — which is what the banner at the
+  top means by reading the phases as a June record rather than a current inventory.
 - **Scanner:** implemented as a **Container Apps Job** `vitally-prod-secscan-uksouth` (cron `0 8 * * 1`),
   **not** a Function. Image `python:3-slim`; gets a token from the Container Apps identity endpoint
   (`IDENTITY_ENDPOINT`/`IDENTITY_HEADER`) and calls the **Key Vault REST API** directly (no Azure CLI).

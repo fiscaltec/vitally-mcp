@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the [Vitally](https://vitally.io) customer success platform's REST API to MCP-compatible clients such as **Claude Desktop**, **Claude Code**, **VS Code**, and **Cursor**.
 
-Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Auth0 (OAuth 2.0 / RFC 9728). Users connect by URL — no install, no executable, no per-user secrets to distribute.
+Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a **remote HTTP MCP server** secured with Microsoft Entra (OAuth 2.1 / RFC 9728) — production reaching it through Auth0 federation until the #108 configuration flip, staging directly. Users connect by URL — no install, no executable, no per-user secrets to distribute.
 
 [![CI](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiscaltec/vitally-mcp/actions/workflows/ci.yml)
 
@@ -14,7 +14,7 @@ Built in C# on .NET 10 and the official `ModelContextProtocol` SDK, hosted as a 
 - **Rate-limit-aware HTTP pipeline** — auto-retries on `429 Too Many Requests` honouring `Retry-After` and `X-RateLimit-Reset`, and logs a warning when remaining requests drop below threshold.
 - **Client-side field & trait filtering** — responses are trimmed before they reach the LLM, each resource type with sensible defaults that exclude heavy fields (rich text, transcripts, full traits objects).
 - **Streamable HTTP transport** (MCP 2026-07-28) in stateless mode — easy to scale horizontally, no sticky sessions required.
-- **OAuth 2.0 protection** via Auth0 — `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
+- **OAuth 2.1 protection** against Microsoft Entra — reached via Auth0 federation on production until the #108 configuration flip, directly on staging. `/.well-known/oauth-protected-resource` exposes the metadata document so clients discover the authorisation server automatically. The Vitally API key is fetched on demand from Azure Key Vault via the server's managed identity.
 
 ## Using the server (FISCAL users)
 
@@ -24,7 +24,7 @@ Point your MCP client at:
 https://vitally.fiscaltec.com/mcp
 ```
 
-The first time you connect, your client will redirect you through Auth0 to authenticate. Once authenticated, the server proxies your tool calls to Vitally using a service-account API key it fetches from Azure Key Vault.
+The first time you connect, your client will redirect you to a Microsoft sign-in to authenticate. Once authenticated, the server proxies your tool calls to Vitally using a service-account API key it fetches from Azure Key Vault.
 
 > **Access & groups:** authentication alone grants nothing — you must be in a `sg-vitally-*` Entra group for your access tier. See **[ACCESS.md](ACCESS.md)** for connecting, the group setup, and how access is granted or revoked.
 
@@ -57,21 +57,24 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Vitally:SecretCacheDuration` | No | `00:05:00` | In-memory TTL for the resolved API key. |
 | `Vitally:DevelopmentApiKey` | Yes (local) | — | Local-dev-only fallback API key, used when `KeyVaultUri` is not set. Never set this in production. |
 | `OAuth:Authority` | Yes | — | The provider's OIDC **issuer** identifier, e.g. `https://fiscal-it.uk.auth0.com/`. The proxy's upstream endpoints are read from `{Authority}/.well-known/openid-configuration`, not built by appending paths to this value. |
-| `OAuth:Audience` | Yes | — | The OAuth Resource Server / API identifier, e.g. `https://vitally.fiscaltec.com/`. Must match the provider's identifier exactly, trailing slash included — Auth0 compares it byte for byte and its identifiers are immutable once created. |
+| `OAuth:Audience` | Yes | — | The API identifier the token's `aud` is validated against, e.g. `https://vitally.fiscaltec.com`. Must match the provider's identifier **exactly** — comparison is byte for byte and identifiers are immutable once created. It is not the only accepted value: when `OAuth:SharedClientId` is set it is also accepted as an audience, which is what an Entra **v2** access token actually carries (the appId GUID). See `OAuthOptions.ValidAudiences`. Note the trailing slash is provider-specific: Entra refuses to register one on `identifierUris`, Auth0 identifiers carried one. **This is deliberately not the same value as `OAuth:Resource`** under Entra; see the divergence warning in [CLAUDE.md](CLAUDE.md). |
 | `OAuth:Resource` | No | — | Canonical resource identifier published in `/.well-known/oauth-protected-resource`. Falls back to `Audience` when blank; set explicitly when clients need the metadata `resource` to match the server's URL/origin (per RFC 9728 + RFC 8707 validators). |
+| `OAuth:UpstreamResourceScope` | Entra: **yes** | *(empty)* | The API scope the proxy names upstream, e.g. `https://vitally.fiscaltec.com/mcp.access`. Empty relays the RFC 8707 `resource` parameter verbatim (the Auth0 posture, and production today); set, the proxy **terminates** `resource` and merges this scope into `scope` instead (the Entra posture, staging today). One switch, because neither half works alone: Entra's v2 `/authorize` rejects any `resource` that does not match the requested scopes (`AADSTS9010010`), and dropping `resource` without a scope leaves the token bound to nothing. Must be a single whitespace-free token; validated at boot. |
 | `OAuth:PublicBaseUrl` | Recommended (prod) | — | Canonical public origin, e.g. `https://vitally.fiscaltec.com`. When set, the `/.well-known/*` metadata and the OAuth proxy callback are built from this value instead of the request `Host`, so a spoofed/forwarded `Host` can't redirect a client's `authorization_endpoint`/`token_endpoint` at an attacker. Leave empty in local dev. |
-| `Authorization:Enabled` | No | `true` | Server-side RBAC enforcement. When `true`, every tool call is checked against the caller's JWT permissions (the hard backstop behind the advisory `ReadOnly`/`Destructive` flags). Set `false` only for local dev. |
-| `Authorization:ReadPermission` | No | `vitally:read` | Permission required for read operations (list/get/search → HTTP GET). Must match a permission defined on the Auth0 API. |
-| `Authorization:WritePermission` | No | `vitally:write` | Permission required for create/update operations (HTTP POST/PUT/PATCH). |
-| `Authorization:DeletePermission` | No | `vitally:delete` | Permission required for delete operations (HTTP DELETE). Set equal to `WritePermission` to collapse to a two-tier read/write model. |
-| `Authorization:CustomPermissionsClaim` | No | `https://vitally.fiscaltec.com/permissions` | Optional namespaced claim also checked for permissions (alongside the standard `permissions` and `scope` claims). Use when an Auth0 post-login Action maps Entra group membership to permissions via a custom claim instead of Auth0 role assignment. Set empty to disable. |
-| `Authorization:LiveGroupCheck` | No | `false` | When `true`, permissions are resolved from the caller's **live** Entra group membership via Microsoft Graph (cached per `LiveGroupCacheSeconds`) instead of the frozen token claim — so group changes (grants/revocations) take effect within the cache window regardless of token age. Membership is evaluated **transitively** (Graph `transitiveMembers`), so users who inherit a tier via a nested group are authorised. The token claim is the automatic fallback if Graph is unavailable. **Requires the server's managed identity to hold Microsoft Graph `GroupMember.Read.All`.** |
+| `Authorization:ReadOnly` | No | `false` | Deployment-wide kill switch: denies every create/update/delete regardless of tier, RBAC state or `NoAuth`, and hides the destructive tools from `tools/list`. Checked before the `Enabled`/`NoAuth` gate, and consults neither Microsoft Graph nor the token — so it holds when the identity layer does not. Its live use is guarding a staging deployment that shares the production Vitally key; see `docs/runbooks/read-only-and-rbac-rollout.md` for when it is and is not the right tool. |
+| `Authorization:Enabled` | No | `true` | Server-side RBAC enforcement. When `true`, every tool call is checked against the caller's effective permissions — resolved from live Entra group membership when `LiveGroupCheck` is on, from token claims when it is off (the hard backstop behind the advisory `ReadOnly`/`Destructive` flags). Set `false` only for local dev. |
+| `Authorization:ReadPermission` | No | `vitally:read` | Permission required for read operations (list/get/search → HTTP GET). An internal tier name: with `LiveGroupCheck` on it is produced by mapping Entra group membership, not issued by any provider. |
+| `Authorization:WritePermission` | No | `vitally:write` | Permission required for create/update operations (HTTP POST/PUT/PATCH). An internal tier name, as above. |
+| `Authorization:DeletePermission` | No | `vitally:delete` | Permission required for delete operations (HTTP DELETE). An internal tier name, as above. Set equal to `WritePermission` to collapse to a two-tier read/write model. |
+| `Authorization:CustomPermissionsClaim` | No | `https://vitally.fiscaltec.com/permissions` | Optional namespaced claim also checked for permissions (alongside the standard `permissions` and `scope` claims). Use when the identity provider maps group membership to permissions via a custom claim. **Ignored entirely when `LiveGroupCheck` is `true`**, which is the case on every deployed target. Set empty to disable. |
+| `Authorization:LiveGroupCheck` | No | `false` | When `true`, permissions are resolved from the caller's **live** Entra group membership via Microsoft Graph (cached per `LiveGroupCacheSeconds`) instead of the frozen token claim — so group changes (grants/revocations) take effect within the cache window regardless of token age. Membership is evaluated **transitively** (Graph `transitiveMembers`), so users who inherit a tier via a nested group are authorised. **When `true`, the token claim is not consulted at all** — the order is fresh Graph → stale Graph (see `LiveGroupStaleSeconds`) → **deny**. It is a different mode, not a layer above the claim, so a Graph outage that outlasts the stale window denies rather than falling back. **Requires the server's managed identity to hold Microsoft Graph `GroupMember.Read.All`.** |
 | `Authorization:LiveGroupCacheSeconds` | No | `60` | TTL for the per-user live group-membership cache. Lower = faster propagation, more Graph calls. |
+| `Authorization:LiveGroupStaleSeconds` | No | `3600` | How long a successful lookup stays usable as a **fallback after a Graph call fails**, so an outage degrades to each caller's last known-good tier instead of denying everyone. `0` disables it and denies immediately. Distinct from `LiveGroupCacheSeconds`, which governs answering *without* asking Graph — lengthening that one instead would stop revocations propagating. |
 | `Authorization:ReaderGroupId` / `EditorGroupId` / `AdminGroupId` | When `LiveGroupCheck=true` | — | Entra security-group object ids mapped to the read / read+write / read+write+delete tiers. At least one required when live check is on. Membership is transitive — a user in a group nested inside one of these is granted the tier. |
 | `Audit:Enabled` | No | `true` | Emit a structured audit record per action (authenticated user + verb + resource + outcome). In production these flow to Application Insights / Log Analytics, giving a per-user "who did what" trail despite the shared Vitally key. |
 | `Audit:IncludeReads` | No | `false` | Also audit read operations (HTTP GET). Off by default as reads are high-volume; mutations and denied attempts are always recorded. |
-| `OAuth:SharedClientId` | No | — | Enables the OAuth proxy / DCR shim (see [OAuth proxy](#oauth-proxy) below). When set, every Dynamic Client Registration call returns this fixed Auth0 client_id, and the server proxies `/oauth/authorize` and `/oauth/token` to the upstream issuer. Leave empty to fall through to the upstream's native DCR. |
-| `OAuth:SharedClientSecret` | No | — | Confidential-client secret for `SharedClientId`. Injected server-side on token exchange so the shared Auth0 app can stay confidential without exposing the secret to MCP clients. |
+| `OAuth:SharedClientId` | No | — | Enables the OAuth proxy / DCR shim (see [OAuth proxy](#oauth-proxy) below). When set, every Dynamic Client Registration call returns this fixed client_id, and the server proxies `/oauth/authorize` and `/oauth/token` to the upstream issuer. Leave empty to fall through to the upstream's native DCR. |
+| `OAuth:SharedClientSecret` | No | — | Confidential-client secret for `SharedClientId`. Injected server-side on token exchange so the shared app registration can stay confidential without exposing the secret to MCP clients. |
 | `OAuth:AllowedClientRedirectUris` | No | `[]` | Allowlist of non-loopback `redirect_uri` values the OAuth proxy will accept. Loopback URIs (`http://localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252. Add cloud-hosted MCP callbacks here, e.g. `https://claude.ai/api/mcp/auth_callback`. |
 | `OAuth:NoAuth` | No | `false` | **Local development only.** Skips JWT validation entirely. Logs a warning at startup. |
 
@@ -85,7 +88,7 @@ Prerequisites: .NET 10 SDK.
 # Restore + build + run the test suite
 dotnet test VitallyMcp.sln -c Debug
 
-# Start the server in dev mode (no Auth0, no Key Vault — uses DevelopmentApiKey from env)
+# Start the server in dev mode (no identity provider, no Key Vault — uses DevelopmentApiKey from env)
 $env:OAuth__NoAuth = "true"
 $env:Vitally__Region = "EU"
 $env:Vitally__DevelopmentApiKey = "sk_live_your_key"
@@ -116,11 +119,11 @@ claude mcp add --transport http vitally-dev http://localhost:5099/mcp
 
 Deploying your own instance for a different org or against a different Vitally tenant requires three things — none of which are in this repo, all of which are config:
 
-1. **An OIDC identity provider** that issues RS256-signed JWTs for your users. Auth0 ID is what FISCAL uses; any compliant provider works (Auth0, Keycloak, Okta, etc.). Register an Application with identifier URI matching your `OAuth:Audience` value, plus a delegated scope (e.g. `Tools.Access`) and public-client redirect URI `http://localhost` for MCP-client OAuth flows.
+1. **An OIDC identity provider** that issues RS256-signed JWTs for your users. FISCAL uses Microsoft Entra (production reaches it via Auth0 federation until the #108 switch is applied); any compliant provider works (Entra, Auth0, Keycloak, Okta, etc.). Register an Application with identifier URI matching your `OAuth:Audience` value, plus a delegated scope (e.g. `Tools.Access`) and public-client redirect URI `http://localhost` for MCP-client OAuth flows.
 2. **An Azure Key Vault** (or compatible secret store; see the swap notes in [CLAUDE.md](CLAUDE.md)) containing your Vitally API key as a secret. Default secret name is `vitally-shared`; change via `Vitally:DefaultSecretRef`.
 3. **A container host** that can run the published Docker image. Anywhere ASP.NET Core 10 runs (Azure Container Apps, AWS App Runner, GCP Cloud Run, plain Kubernetes) — Container Apps is what FISCAL uses.
 
-FISCAL's deployment uses Azure Container Apps + Azure Key Vault + Auth0 (which federates to Microsoft Entra for sign-in) — see the [Deployment](CLAUDE.md#deployment) section in `CLAUDE.md` for the shape. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Auth0 for Keycloak, etc., without touching the application code. Bicep / `azd` templates aren't shipped in this repo — the surface is small enough that the README description is the contract.
+FISCAL's deployment uses Azure Container Apps + Azure Key Vault + Microsoft Entra — production still reaching Entra through Auth0 federation until the #108 configuration flip, staging directly. See the [Deployment](CLAUDE.md#deployment) section in `CLAUDE.md` for the shape. Anyone replicating can swap Container Apps for App Service, ACR for GHCR, Entra for Keycloak, etc., without touching the application code. Bicep / `azd` templates aren't shipped in this repo — the surface is small enough that the README description is the contract.
 
 ## Architecture
 
@@ -151,22 +154,22 @@ VitallyMcp/
     └── SurveysTools.cs
 ```
 
-The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against the Auth0 tenant configured in `OAuth:Authority` / `OAuth:Audience`. On each tool call, `VitallyApiKeyProvider` fetches the `vitally-shared` secret from Key Vault (cached in-memory for 5 min, using the server's user-assigned managed identity), and `VitallyService` uses it to call Vitally on behalf of all authenticated users.
+The MCP server runs on the [`ModelContextProtocol.AspNetCore`](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) package using the streamable HTTP transport in stateless mode. `MapMcp("/mcp")` is gated by `RequireAuthorization()` — JWTs are validated against whichever provider is configured in `OAuth:Authority` / `OAuth:Audience`. On each tool call, `VitallyApiKeyProvider` fetches the `vitally-shared` secret from Key Vault (cached in-memory for 5 min, using the server's user-assigned managed identity), and `VitallyService` uses it to call Vitally on behalf of all authenticated users.
 
 ### OAuth proxy
 
-When `OAuth:SharedClientId` is set the server runs an OAuth 2.0 proxy in front of the upstream Auth0 tenant. It serves:
+When `OAuth:SharedClientId` is set the server runs an OAuth 2.1 proxy in front of the upstream identity provider — it advertises `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code", "refresh_token"]` and `code_challenge_methods_supported: ["S256"]`, and offers no implicit or password grant. It serves:
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 protected-resource metadata — clients use it to discover the authorisation server. |
 | `GET /.well-known/oauth-authorization-server` | RFC 8414 authorisation-server metadata — declares this server's own origin as `issuer` and points `authorization_endpoint`, `token_endpoint` and `registration_endpoint` at the proxy. `jwks_uri` and `userinfo_endpoint` still point upstream, read from the provider's OIDC discovery document. |
 | `GET /oauth/authorize` | Captures the client's `redirect_uri`, swaps it for our fixed `/oauth/callback`, and 302s the user to the upstream `authorization_endpoint` named in the provider's discovery document. Validates the client `redirect_uri` against the loopback + allowlist rules before stashing. |
-| `GET /oauth/callback` | Receives the Auth0 redirect, looks up the original client `redirect_uri` from `state`, and 302s the user back to it with the code. |
+| `GET /oauth/callback` | Receives the provider's redirect, looks up the original client `redirect_uri` from `state`, strips any upstream `iss` and appends our own, and 302s the user back to it with the code. |
 | `POST /oauth/token` | Forwards the code-exchange to the upstream `token_endpoint` from the discovery document and injects `SharedClientSecret` so the shared app stays confidential without exposing the secret to MCP clients. |
-| `POST /oauth/register` | RFC 7591 Dynamic Client Registration shim — always returns `SharedClientId`, regardless of what the caller requests, so every MCP client converges on a single first-party Auth0 app. Echoes back only `redirect_uris` that the allowlist accepts. |
+| `POST /oauth/register` | RFC 7591 Dynamic Client Registration shim — always returns `SharedClientId`, regardless of what the caller requests, so every MCP client converges on a single first-party app registration. Echoes back only `redirect_uris` that the allowlist accepts. |
 
-This setup exists because MCP clients implement RFC 7591 (DCR) and RFC 8252 (loopback redirect with ephemeral ports), but Auth0 third-party DCR clients trigger a per-session API consent screen and don't natively accept arbitrary loopback ports. The proxy collapses everything onto one pre-registered "first-party" Auth0 app, skipping the consent and accepting any loopback port (Claude Code, VS Code, Cursor, MCP Inspector all rotate ports between sessions). To support hosted MCP clients (e.g. Claude.ai), add their callback URL to `OAuth:AllowedClientRedirectUris`.
+This setup exists because MCP clients implement RFC 7591 (DCR) and RFC 8252 (loopback redirect with ephemeral ports), but a dynamically registered client typically triggers a per-session consent screen and providers do not natively accept arbitrary loopback ports. The proxy collapses everything onto one pre-registered first-party app, skipping the consent and accepting any loopback port (Claude Code, VS Code, Cursor, MCP Inspector all rotate ports between sessions). To support hosted MCP clients (e.g. Claude.ai), add their callback URL to `OAuth:AllowedClientRedirectUris`.
 
 The `VitallyService` exposes two call patterns:
 1. **Standard envelope** (`GetResourcesAsync`, `GetResourceByIdAsync`, `CreateResourceAsync`, `UpdateResourceAsync`, `DeleteResourceAsync`) — for endpoints returning `{results, next}`. Applies client-side field and trait filtering with resource-specific defaults.
@@ -202,10 +205,10 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 
 ## Security
 
-- All MCP requests require a valid JWT signed by the configured Auth0 tenant. Tokens are validated server-side against the issuer + audience and the signature.
-- **Server-side RBAC** (`Authorization:*`) enforces a `vitally:read` / `vitally:write` / `vitally:delete` permission on every tool call, mapped from the HTTP verb at a single choke point (`VitallyService.SendAsync`). This is the hard backstop: the `ReadOnly`/`Destructive` tool attributes are advisory hints for MCP clients, but RBAC physically prevents a caller (or a misbehaving agent) from mutating data without the permission. Permissions are sourced from Auth0 (Enable RBAC + Add Permissions in the Access Token) and assigned via roles — ideally driven by Entra group membership.
+- All MCP requests require a valid JWT signed by the configured identity provider. Tokens are validated server-side against the issuer + audience and the signature.
+- **Server-side RBAC** (`Authorization:*`) enforces a `vitally:read` / `vitally:write` / `vitally:delete` permission on every tool call, mapped from the HTTP verb at a single choke point (`VitallyService.SendAsync`). This is the hard backstop: the `ReadOnly`/`Destructive` tool attributes are advisory hints for MCP clients, but RBAC physically prevents a caller (or a misbehaving agent) from mutating data without the permission. The tier is resolved from the caller's **live Entra group membership** via Microsoft Graph on every deployed target (`Authorization:LiveGroupCheck`), so grants and revocations take effect within about a minute **while Graph is reachable**, and no claim in the token can grant access. During a Graph outage each caller's last known-good tier is served for up to `Authorization:LiveGroupStaleSeconds` (default 1 h) before the call is denied — so a revocation can take that long to bite. See `ACCESS.md` for the incident procedure. A token-claim mode exists for deployments without Graph reachability and is selected by turning that flag off.
 - **Per-caller tool discovery.** Every tool additionally carries an `[Authorize]` policy for its tier, which the MCP SDK evaluates so `tools/list` advertises only what the caller may invoke. Discovery filtering and the `SendAsync` backstop resolve permissions through the same code path, so they cannot disagree — but the security boundary remains `SendAsync`. Hiding a tool is a usability improvement, not the control: an out-of-tier call is refused regardless of what the client was shown.
-- **Per-user audit trail** (`Audit:*`) — every action is logged at the choke point with the authenticated user's stable Entra subject id (`sub` — an opaque object id, resolvable to a person in Entra but not itself PII), HTTP verb, target resource path and outcome (denied attempts included). Because all users share one Vitally key, Vitally's own log can't attribute actions to individuals; this server-side record can, and is queryable in Application Insights / Log Analytics. Neither email nor request bodies are logged, keeping personal data out of telemetry while staying fully attributable.
+- **Per-user audit trail** (`Audit:*`) — every action is logged at the choke point with the caller's Entra **object id** (the `oid` claim: a GUID that resolves to a person with `az ad user show --id`, and no more personal than the alternatives), HTTP verb, target resource path and outcome (denied attempts included). Because all users share one Vitally key, Vitally's own log can't attribute actions to individuals; this server-side record can, and is queryable in Application Insights / Log Analytics. Neither email nor request bodies are logged, keeping personal data out of telemetry while staying fully attributable.
 - The OAuth proxy's `/oauth/token` only services the `authorization_code` and `refresh_token` grants — it rejects any other grant before injecting the confidential client secret, so the secret can't be leveraged to mint tokens without a user sign-in.
 - Set `OAuth:PublicBaseUrl` in production so the OAuth metadata documents emit a fixed canonical origin rather than reflecting the request `Host`.
 - Vitally API keys are **not** distributed to clients or stored in tokens — they live in Key Vault, accessed by the server's managed identity.
@@ -217,7 +220,7 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 
 The proxy presents itself as a complete authorisation server: it declares its own origin as `issuer`
 (RFC 8414 §3.3), and `/oauth/callback` replaces any upstream `iss` with that same origin so the
-authorization response is consistent with the metadata (RFC 9207). Auth0 remains the token issuer.
+authorisation response is consistent with the metadata (RFC 9207). The upstream provider remains the token issuer.
 Strict clients — including **MCP Inspector** — complete the flow; see the *complete
 authorisation-server façade* section in `CLAUDE.md` for what was verified and how.
 

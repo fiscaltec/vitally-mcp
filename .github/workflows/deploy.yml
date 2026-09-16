@@ -250,7 +250,8 @@ jobs:
           done
           [ "$mcp_code" = "401" ] || { echo "::error::/mcp unauthenticated not 401 after retries (last: ${mcp_code:-000}, expected 401)"; exit 1; }
 
-      # The step above proves the app is live and the Auth0 gate is enforced. It cannot tell whether
+      # The step above proves the app is live and the auth gate is enforced (whichever provider is
+      # configured — the 401 contract is provider-independent). It cannot tell whether
       # the OAuth metadata documents are correct: a wrong `issuer`, a broken
       # `issuer` <-> `authorization_servers` pairing, a bad `jwks_uri`, an `/oauth/authorize` pointed
       # at the wrong upstream, a dropped `iss` flag or a null-serialised optional all leave /health at

@@ -1,5 +1,21 @@
 # Runbook: MCP SDK 2.0 staging validation
 
+> # ⚠️ ARCHIVED — DO NOT FOLLOW
+>
+> **Every command below is superseded.** This records a validation executed on 2026-08-12 and is kept
+> only because the Layer 2/3 evidence is the basis for the SDK 2.0 adoption sign-off. It is not a
+> procedure, and following its section headings will provision infrastructure that does not exist in
+> the current estate — notably the Auth0 client in step 2.5, replaced by the Entra app registration.
+>
+> | If you came here to… | Go to |
+> |---|---|
+> | stand staging up | the **Staging** section of CLAUDE.md — `deploy.yml` plus the two `az containerapp hostname` commands, and set `Authorization__ReadOnly` yourself. `infra/terraform/containerapps-staging.tf` is an as-built *record*, not a stand-up path: `terraform apply` is never run here, so it applies nothing, including that guard |
+> | validate an identity-provider change | `docs/runbooks/entra-cutover-staging-validation.md` |
+> | work on the app registration | `docs/runbooks/entra-app-registration.md` |
+> | tear staging down | the teardown table in CLAUDE.md |
+>
+> Read the rest as a record of what happened, in the past tense, regardless of how it is worded.
+
 **Purpose:** execute Layers 2 and 3 of the validation design for the MCP SDK 2.0 / spec
 2026-07-28 adoption (`docs/superpowers/specs/2026-08-10-mcp-sdk2-validation-design.md`), and tear
 staging down afterwards. Layer 1 (in-process integration tests) is automated and already covered

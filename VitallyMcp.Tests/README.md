@@ -4,9 +4,16 @@ Automated test suite for the Vitally MCP server.
 
 ## Coverage
 
-**400 tests, all passing** (xUnit + FluentAssertions + Moq + ASP.NET Core
-test host), running fully in-process — no live API calls, no real Auth0
-tenant, no Key Vault.
+xUnit + FluentAssertions + Moq + ASP.NET Core test host, running fully in-process — no live API
+calls, no real identity provider tenant, no Key Vault.
+
+This used to open with a hard-coded total. It said **400** while the suite ran **531**, because a
+count in prose is only correct on the day it is written and nothing fails when it drifts. Ask the
+runner instead:
+
+```powershell
+dotnet test VitallyMcp.sln -c Debug   # the summary line carries the current total
+```
 
 > **Integration tests that set environment variables must join
 > `IntegrationTestCollection`.** `Program.cs` reads `OAuth:NoAuth` and

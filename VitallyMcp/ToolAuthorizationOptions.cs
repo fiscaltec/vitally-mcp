@@ -1,10 +1,12 @@
 namespace VitallyMcp;
 
 /// <summary>
-/// Server-side authorisation policy for Vitally tool calls. Maps the HTTP verb of each Vitally
-/// API call to a required permission, which is checked against the caller's JWT. This is the
-/// hard backstop behind the advisory <c>ReadOnly</c>/<c>Destructive</c> tool flags — those flags
-/// only guide MCP clients; this enforces access regardless of what the client does.
+/// Server-side authorisation policy for Vitally tool calls. Maps the HTTP verb of each Vitally API
+/// call to a required permission, then resolves whether the caller holds it — from their live Entra
+/// group membership when <see cref="LiveGroupCheck"/> is on (every deployed target), and from the
+/// token's claims only when it is off. This is the hard backstop behind the advisory
+/// <c>ReadOnly</c>/<c>Destructive</c> tool flags — those flags only guide MCP clients; this enforces
+/// access regardless of what the client does.
 ///
 /// The permission strings are internal names, not something an identity provider issues: with
 /// <see cref="LiveGroupCheck"/> on they are produced by mapping Entra group membership to tiers in
@@ -46,9 +48,12 @@ public class ToolAuthorizationOptions
     /// <remarks>
     /// <b>Consulted only when <see cref="LiveGroupCheck"/> is false.</b> It exists for the
     /// namespaced-custom-claim convention (Auth0 required custom claims to be namespaced on a domain
-    /// you control), and the Auth0 post-login Action that minted it here was retired at the #108
-    /// cutover — so on every deployed target this value is inert, and no claim of any kind can grant
-    /// access. See <see cref="ToolAuthorizer"/>.
+    /// you control). The Auth0 post-login Action that mints it is retained for the #108 rollback
+    /// window and still runs — <b>on the Auth0 sign-in path only</b>, which today means production.
+    /// Staging authenticates against Entra directly, so no Auth0 Action is in that path at all and
+    /// this claim is simply absent from its tokens. Either way <see cref="LiveGroupCheck"/> is true
+    /// on every deployed target, so nothing reads this value and no claim can grant access.
+    /// See <see cref="ToolAuthorizer"/>.
     /// </remarks>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
 
@@ -60,8 +65,10 @@ public class ToolAuthorizationOptions
     ///
     /// On a Graph failure the caller's last known-good permission set is served for up to
     /// <see cref="LiveGroupStaleSeconds"/>; when there is no such copy the call is <b>denied</b>.
-    /// There is no third tier — the token claim was removed at the #108 cutover, once the Auth0
-    /// Action that minted it was retired and it could only ever have denied anyway. Never
+    /// There is no third tier: #108 removed the fall-through to the token claim. Note that is a
+    /// change to what this server <i>reads</i>, not to what the provider mints — the Auth0 Action
+    /// still exists and still runs on the Auth0 path (production today; not staging, which signs
+    /// in against Entra directly), so a rollback to Auth0 does not restore the tier. Never
     /// fail-open: an empty set denies just as a missing one does. Requires the server's managed
     /// identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
     /// </summary>

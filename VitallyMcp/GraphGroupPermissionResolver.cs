@@ -23,8 +23,10 @@ namespace VitallyMcp;
 /// <see cref="ToolAuthorizationOptions.LiveGroupCacheSeconds"/> decides whether it can be served
 /// without asking Graph at all, and <see cref="ToolAuthorizationOptions.LiveGroupStaleSeconds"/>
 /// decides whether it may still be served as a <i>fallback</i> after a Graph call has failed. Only
-/// when neither applies does the method return <c>null</c>, leaving the authorizer to fall through to
-/// the token claim.</para>
+/// when neither applies does the method return <c>null</c> — which, with
+/// <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> on, means the authorizer <b>denies</b>.
+/// #108 removed the fall-through to the token claim, so the order is fresh Graph → stale set →
+/// deny.</para>
 ///
 /// <para>The two thresholds are kept deliberately separate. Retaining a copy for an hour must not
 /// stretch the live check's own cache from a minute to an hour — that would stop revocations
@@ -85,7 +87,14 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         var groupIds = _options.ConfiguredGroupIds.ToArray();
         if (groupIds.Length == 0)
         {
-            return null; // Nothing to check against — let the caller fall back to the claim.
+            // Nothing to check against. Returns null like any other unresolvable case, which with
+            // LiveGroupCheck on means the authorizer denies. Unreachable on a configuration-bound
+            // server, by two separate routes: with Authorization:Enabled=true, Validate() refuses
+            // LiveGroupCheck with no group ids at boot; with Enabled=false it returns before
+            // reaching that check, but ToolAuthorizer then bypasses and never calls a resolver at
+            // all. So arriving here means an options instance built in code — a test, or a future
+            // call site resolving permissions outside ToolAuthorizer.
+            return null;
         }
 
         try
@@ -112,10 +121,10 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         }
         catch (Exception ex)
         {
-            // Fail-degraded, in two steps. Prefer this caller's last known-good tier, so a Graph
-            // outage does not revoke someone whose membership was confirmed minutes ago; only when
-            // there is no usable copy does the authorizer fall through to the token claim (which is
-            // empty post-cutover, hence #106). Never cache the failure itself.
+            // Fail-degraded, then closed. Prefer this caller's last known-good tier, so a Graph
+            // outage does not revoke someone whose membership was confirmed minutes ago; when there
+            // is no usable copy this returns null and the authorizer denies (#108 removed the
+            // token-claim tier that used to sit below). Never cache the failure itself.
             // Read the clock again: `now` predates the attempt, and a Graph timeout can burn the
             // whole client timeout before arriving here. Both the decision and the reported age must
             // be as of failure time, or a lookup that began inside the window could be served after
@@ -136,7 +145,18 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
                 return lastKnownGood.Permissions;
             }
 
-            _logger.LogWarning(ex, "Live group permission lookup failed for {UserObjectId}; falling back to token claim.", userObjectId);
+            // Deliberately does NOT say "falling back to the token claim". It used to, and that became
+            // false when #108 removed the claim tier: with LiveGroupCheck on — every deployed target —
+            // ToolAuthorizer denies on this null. A log line promising a fallback during the one incident
+            // where it matters would send whoever is reading it looking for a tier that cannot engage.
+            // The caller decides and logs the outcome; this line reports only what happened here.
+            _logger.LogWarning(
+                ex,
+                "Live group permission lookup failed for {UserObjectId} and no usable retained set exists "
+                + "(stale window {StaleLimitSeconds}s). Returning no result; with Authorization:LiveGroupCheck "
+                + "enabled the caller will be denied.",
+                userObjectId,
+                _options.LiveGroupStaleSeconds);
             return null;
         }
     }
