@@ -46,7 +46,7 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureC
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
 // Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
 // unreachable Graph can stall a tool call; it does NOT buy a fallback. #108 removed the
-// fall-through from live mode to the token claim, so what a timeout reaches is the retained stale set
+// fall-through to the token claim, so what a timeout reaches is the retained stale set
 // (Authorization:LiveGroupStaleSeconds) and, past that window, a denial — see
 // GraphGroupPermissionResolver. This comment said "degrades to the token-claim fallback"
 // for long enough to outlive the fallback itself.
@@ -376,12 +376,18 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
 });
 
 // OAuth 2.0 Authorization Code proxy. The shared upstream app — the Entra registration
-// `Vitally MCP` on both deployed targets — has a single fixed callback URL (our /oauth/callback).
-// We accept any client redirect_uri here, save the mapping, substitute our fixed URL on the upstream
-// request, and at /oauth/callback look the original up and redirect there. That lets random loopback
-// ports and claude.ai's hosted callback coexist with one registration, which neither Entra nor Auth0
-// supports natively: Auth0 has no RFC 8252 loopback wildcard, and Entra requires each redirect URI
-// to be registered exactly.
+// `Vitally MCP` on both deployed targets — registers ONE callback per origin
+// (`https://vitally.fiscaltec.com/oauth/callback` and the staging equivalent), not one globally:
+// each target sends its own, so removing either breaks that target's sign-in.
+//
+// The client's `redirect_uri` is VALIDATED, not merely accepted — `IsRedirectUriAllowed` permits
+// RFC 8252 loopback URIs on any port plus the configured `AllowedClientRedirectUris`, and rejects
+// everything else. That check is the only thing between this proxy and an open redirector with
+// authorisation-code theft; never widen it. What follows validation is the substitution: save the
+// client's URI keyed by `state`, send our own fixed callback upstream, and at /oauth/callback look
+// the original up and redirect there. That is what lets random loopback ports and claude.ai's
+// hosted callback coexist with one registration, which neither provider supports natively — Auth0
+// has no loopback wildcard, and Entra requires every redirect URI to be registered exactly.
 app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;

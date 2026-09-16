@@ -80,7 +80,7 @@ variable "oauth_resource" {
 
 variable "oauth_upstream_resource_scope" {
   type        = string
-  description = "PRODUCTION only. Set, so the proxy terminates the RFC 8707 `resource` parameter instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty is the Auth0 posture, which only a rollback would use."
+  description = "The PRODUCTION variable; staging carries the same value in `staging_oauth_upstream_resource_scope` until #102 collapses the pair. Set, so the proxy terminates the RFC 8707 `resource` parameter instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty is the Auth0 posture, which only a rollback would use."
   default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 

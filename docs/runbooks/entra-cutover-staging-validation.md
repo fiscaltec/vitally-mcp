@@ -292,7 +292,10 @@ untouched throughout and needs nothing.
 ## After it passes
 
 **Production was flipped on 2026-09-16, so the #108 step this section described is done.** What follows
-is kept because this runbook is the procedure for *any* identity-provider change, not only that one:
+is kept because these checks are re-runnable: this is the acceptance suite for **Entra** specifically
+— the steps assert Entra v2 endpoints, `mcp.access`, `AADSTS` responses and Graph, so a move to a
+different provider would need its own — and re-running them is what any later change to *this*
+registration, tenant or scope calls for:
 re-run the checks above after one, and if a target still needs the five variables applied, they are in
 `CLAUDE.md` and the Container App secret comes from the Key Vault secret `entra-mcp-client-secret`
 through the two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a

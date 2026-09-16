@@ -39,10 +39,21 @@ and DR-able.
   > secrets to **Key Vault references** (`key_vault_secret_id`) instead of inline values.
 
 ## Adoption (import the existing estate)
+> ⚠️ **`terraform apply` has never been run against this estate, and the standing rule is that it
+> must not be** (`.github/ISSUE_TEMPLATE/ops.yml`): `infra/terraform/` is back-filled documentation
+> of record and the live resources are managed with `az cli`. A plan against shared state would try
+> to reconcile production drift as a side effect of whatever you were doing — and since the 2026-09-16
+> flip that includes the OAuth secrets, where an apply could overwrite the retained Auth0 value and
+> take the rollback with it.
+>
+> The sequence below is the **adoption procedure**, kept because adopting this capture properly is
+> still the intended end state. It is not a maintenance step, and running it is a decision, not a
+> routine.
+
 ```bash
 terraform init
 terraform plan    # shows the imports (from imports.tf) + any drift — REVIEW CAREFULLY
-terraform apply   # performs the imports + reconciles
+terraform apply   # performs the imports + reconciles — see the warning above
 ```
 After a clean import, comment out `imports.tf`. From then on it's the source of truth.
 
