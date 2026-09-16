@@ -90,7 +90,7 @@ A successful response carries `ttlMs: 300000` and `cacheScope: "private"` alongs
 
 ## Installing for End Users
 
-FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the OAuth flow automatically on first use via the protected-resource metadata document. **Everyone signs in with their FISCAL Entra account either way — but the issuer differs by target, which is what matters when debugging a sign-in.** On production the client is redirected to **Auth0**, which federates to Entra; on staging it goes to **Entra directly**. See the current-state warning at the top of this file.
+FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. The client handles the OAuth flow automatically on first use via the protected-resource metadata document. Everyone signs in with their FISCAL Entra account, and since the 2026-09-16 flip both targets redirect to **Entra directly** — Auth0 is no longer in the path on either. See the current-state note at the top of this file.
 
 | Client | How to connect |
 |---|---|
@@ -567,13 +567,14 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > **The targets now agree on all five.** They diverged while #108 was half-applied; the flip on 2026-09-16
 > reunified them. Only `Resource` and `PublicBaseUrl` still differ, because each names its own origin.
 >
-> | | Production (Auth0, today) | Staging (Entra, since 2026-09-03) |
+> | | Production (Entra, since 2026-09-16) | Staging (Entra, since 2026-09-03) |
 > |---|---|---|
-> | `Authority` | `https://fiscal-it.uk.auth0.com/` | `https://login.microsoftonline.com/75bd…/v2.0` |
-> | `Audience` | `https://vitally.fiscaltec.com/` (slash) | `https://vitally.fiscaltec.com` (no slash) |
+> | `Authority` | `https://login.microsoftonline.com/75bd…/v2.0` | *same* |
+> | `Audience` | `https://vitally.fiscaltec.com` (no slash) | *same* |
 > | `Resource` | `https://vitally.fiscaltec.com/` | `https://vitally-staging.fiscaltec.com/` |
-> | `UpstreamResourceScope` | *(empty — `resource` is relayed)* | `https://vitally.fiscaltec.com/mcp.access` |
-> | `SharedClientId` / `Secret` | Auth0 client + its secret | Entra appId + `entra-mcp-client-secret` |
+> | `UpstreamResourceScope` | `https://vitally.fiscaltec.com/mcp.access` | *same* |
+> | `SharedClientId` | `c3812e7d-a413-4169-b57e-803326611ba3` | *same* |
+> | `SharedClientSecret` | `secretref:entra-oauth-client-secret` | `secretref:oauth-shared-client-secret` — same value, different Container App secret name (see Rollback) |
 >
 > `infra/terraform/variables.tf` carries the same split as `oauth_*` / `staging_oauth_*`. The values
 > production moves to are in *The Auth0 → Entra cutover (#108) and its rollback*.
@@ -598,9 +599,9 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > serves both origins (#107), so a staging token's `aud` is production's App ID URI — expected, not
 > drift. `OAuthOptions.IsResourceIndicatorAllowed` tolerating exactly one trailing slash is what lets
 > the two forms name one resource — see `docs/runbooks/entra-app-registration.md`.
-- `UpstreamResourceScope` — set on Entra targets to `https://vitally.fiscaltec.com/mcp.access`, **empty on production** while it is on Auth0. Setting it makes the proxy **terminate** the RFC 8707 `resource` parameter and name the API by this scope instead; leaving it empty relays `resource` (the Auth0 posture). One switch, because neither half works alone — see the `resource` section above. Validated at boot as a single whitespace-free token.
-- `SharedClientId` — the pre-registered client every MCP client converges on via the DCR shim: the Entra app registration `c3812e7d-a413-4169-b57e-803326611ba3` on staging, still the Auth0 native client on production. When set, the OAuth proxy endpoints become active. It is also a valid `aud` — see `Audience`.
-- `SharedClientSecret` — confidential-client secret for whichever `SharedClientId` that target uses, injected server-side at `/oauth/token`. On Entra targets it is the Key Vault secret `entra-mcp-client-secret`, which **expires 2027-03-01** — a hard outage date, since Key Vault refuses to read an expired secret. Rotation is in `docs/runbooks/entra-app-registration.md`.
+- `UpstreamResourceScope` — `https://vitally.fiscaltec.com/mcp.access` on **both** deployed targets. Empty is the Auth0 posture, which now only a rollback would use. Setting it makes the proxy **terminate** the RFC 8707 `resource` parameter and name the API by this scope instead; leaving it empty relays `resource` (the Auth0 posture). One switch, because neither half works alone — see the `resource` section above. Validated at boot as a single whitespace-free token.
+- `SharedClientId` — the pre-registered client every MCP client converges on via the DCR shim: the Entra app registration `c3812e7d-a413-4169-b57e-803326611ba3` on **both** targets. When set, the OAuth proxy endpoints become active. It is also a valid `aud` — see `Audience`.
+- `SharedClientSecret` — confidential-client secret for `SharedClientId`, injected server-side at `/oauth/token`. On both targets it is the Key Vault secret `entra-mcp-client-secret` (referenced under different Container App secret names — see Rollback), which **expires 2027-03-01** — a hard outage date, since Key Vault refuses to read an expired secret. Rotation is in `docs/runbooks/entra-app-registration.md`.
 - `AllowedClientRedirectUris` — non-loopback `redirect_uri` allowlist for the OAuth proxy. Loopback URIs (`localhost`, `127.0.0.1`, `[::1]`) on any port are always allowed per RFC 8252 §7.3; this list covers hosted MCP clients like `https://claude.ai/api/mcp/auth_callback`. `OAuthOptions.IsRedirectUriAllowed(uri)` is the single check; `/oauth/authorize` and `/oauth/register` both use it. **This is the only thing standing between the proxy and an open redirector with authorisation-code theft — never bypass it.**
 - `PublicBaseUrl` — canonical public origin (e.g. `https://vitally.fiscaltec.com`). When set, `/.well-known/*` metadata and the OAuth proxy callback are built from this instead of the request `Host`, defending against Host-header injection into the metadata documents. Empty in local dev (falls back to request scheme+host so loopback works). Validated as absolute https.
 - `NoAuth` — local-only dev flag that bypasses JWT validation entirely.
@@ -1178,14 +1179,21 @@ also records what has already been machine-verified so it is not repeated.
 
 #### Rollback — the retained Auth0 values
 
-**This section is the one place Auth0 survives on purpose. Delete it only when the tenant objects
-go.** Everything else about Auth0 has been removed from this repo now that both targets run Entra;
-this is what you would need under pressure, and reconstructing it from the Auth0 tenant during an
-incident is not a plan.
+**This section is the canonical record of the retained Auth0 configuration. Delete it only when the
+tenant objects go.** Auth0 no longer appears anywhere as *current* state — what survives elsewhere is
+rollback and parity context (ACCESS.md's onboarding rule, the RBAC runbook's audit-identity note, the
+Terraform capture), and this is the one place the values themselves live. Reconstructing them from
+the tenant mid-incident is not a plan.
 
-Rollback is **one `az containerapp update` per target** — no redeploy, no Key Vault window, no
-revision pin — because the Auth0 client secret was never overwritten. It is still on the production
-Container App under its original name, `oauth-shared-client-secret`, alongside the Entra one.
+Rollback of **production** is one `az containerapp update` — no redeploy, no Key Vault window, no
+revision pin — because the Auth0 client secret was never overwritten. It is still on that Container
+App under its original name, `oauth-shared-client-secret`, alongside the Entra one added at the flip.
+
+⚠️ **Staging is not in the same position.** It carries a single Container App secret,
+`oauth-shared-client-secret`, and that one now holds the **Entra** value — verified against the live
+app. So rolling staging back needs the Auth0 client secret re-fetched from Key Vault first, which
+means a Key Vault window, unlike production. Production is the
+target a rollback actually matters for; do not read the command below as covering both.
 
 ```bash
 az containerapp update -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth   --set-env-vars     "OAuth__Authority=https://fiscal-it.uk.auth0.com/"     "OAuth__Audience=https://vitally.fiscaltec.com/"     "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D"     "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"   --remove-env-vars OAuth__UpstreamResourceScope

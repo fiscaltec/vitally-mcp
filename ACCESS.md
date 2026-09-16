@@ -91,8 +91,8 @@ regardless of any `sg-vitally-*` membership.
 >
 > | App | Role |
 > |---|---|
-> | **FISCAL IT Auth0** | gates production sign-in **today** |
-> | **Vitally MCP** | gates staging today, and production once the switch is made |
+> | **Vitally MCP** | gates sign-in on **both** production and staging |
+> | **FISCAL IT Auth0** | no longer gates sign-in — retained as the rollback, so it must stay at parity |
 >
 > Assigning only one is the single most common way to break access here, and it has happened twice —
 > because this page used to name only *FISCAL IT Auth0*. A department assigned to just one app works

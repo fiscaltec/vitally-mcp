@@ -110,7 +110,9 @@ resource "azurerm_container_app" "staging" {
       }
       # Staging is pointed at a new identity provider first and production follows once it has
       # passed. That is what happened here: staging moved to Entra on 2026-09-03 and production on
-      # 2026-09-16, so the two now agree and these staging_* variables are ready to be collapsed.
+      # 2026-09-16, so the two now agree and these staging_* variables are ready to be collapsed
+      # onto the oauth_* ones. Tracked in #102; not done here to keep this change to current-state
+      # corrections.
       env {
         name  = "OAuth__Authority"
         value = var.staging_oauth_authority

@@ -6,7 +6,7 @@ proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also 
 valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
-Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first and stayed inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables were set, which is what the flip did. That has not happened yet. Staging runs Entra.
+Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first and stayed inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables were set, which is what the flip did.
 
 | | |
 |---|---|
@@ -225,7 +225,8 @@ app is skipped rather than re-POSTed, because Graph refuses a duplicate assignme
 would report the apps out of parity in the very state it had just fixed.
 
 **And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is no longer a
-sign-in gate for this server, but it is the retained rollback path and stays one until Auth0 is retired; `Vitally MCP` gates staging now and production after. Omitting either locks the
+sign-in gate for this server, but it is the retained rollback path and stays one until Auth0 is
+retired; `Vitally MCP` gates **both** targets now. Omitting either locks the
 new department out of that one, silently, until it is the app being used — which is exactly how
 Development and Data Science were missed, both times by following a procedure that named one app.
 
@@ -455,14 +456,15 @@ configuration — worth raising after #108 rather than during it.
   a separate object in `identity.tf`.
 - **No implicit grant.** Authorization code + PKCE only.
 
-## The cutover (#108) — code deployed 2026-09-03, production flip outstanding
+## The cutover (#108) — code deployed 2026-09-03, flip complete 2026-09-16
 
 Config-only, as designed, and now **fully applied**. **Staging** was flipped on 2026-09-03; **production**
 followed on 2026-09-16 once the five `OAuth__*` variables were set there. The code had been deployed to both
 and running on both throughout — the OIDC discovery, the proxy and the `resource` validation were live
-on production before the flip; what the flip changed was the posture. What is inactive there is the
-Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relays `resource` exactly as
-it did before, which is why the deploy was a no-op and the flip is the whole change.
+on production before the flip. What the flip changed was the **posture**: with
+`OAuth__UpstreamResourceScope` empty the proxy had been relaying `resource` exactly as it always had,
+which is why the deploy was a no-op and setting the variables was the whole change. Both targets now
+terminate `resource` and name the API by scope; the relay is the rollback posture.
 
 The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → Entra cutover (#108)
 and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is

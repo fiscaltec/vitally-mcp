@@ -49,10 +49,10 @@ public class ToolAuthorizationOptions
     /// <b>Consulted only when <see cref="LiveGroupCheck"/> is false.</b> It exists for the
     /// namespaced-custom-claim convention (Auth0 required custom claims to be namespaced on a domain
     /// you control). The Auth0 post-login Action that mints it is retained for the #108 rollback
-    /// window and still runs — <b>on the Auth0 sign-in path only</b>, which today means production.
-    /// Staging authenticates against Entra directly, so no Auth0 Action is in that path at all and
-    /// this claim is simply absent from its tokens. Either way <see cref="LiveGroupCheck"/> is true
-    /// on every deployed target, so nothing reads this value and no claim can grant access.
+    /// window, but nothing reaches it: both deployed targets authenticate against Entra directly, so
+    /// this claim is absent from their tokens rather than merely ignored. Either way
+    /// <see cref="LiveGroupCheck"/> is true on every deployed target, so nothing reads this value
+    /// and no claim can grant access.
     /// See <see cref="ToolAuthorizer"/>.
     /// </remarks>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
