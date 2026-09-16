@@ -168,7 +168,7 @@ The two gates are separate mechanisms and should stay that way:
 | | Question it answers | Mechanism |
 |---|---|---|
 | Gate 1 | may this person sign in at all? | direct department assignment on this app |
-| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using only the `oid` claim |
+| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, which is the live path on production today |
 
 Gate 2 is IdP-independent — it survives the cutover untouched.
 

@@ -163,12 +163,14 @@ resource "azurerm_container_app" "staging" {
       # come up guarded: it starts on the application default, false. Set it out of band as part of
       # the spin-up and then verify it:
       #
+      #   (the full form, which reports NOT ASSESSED rather than printing nothing when the
+      #    lookup fails, is in docs/runbooks/read-only-and-rbac-rollout.md — an empty result
+      #    from a bare loop is indistinguishable from an unguarded app)
       #   CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-      #   for REV in $(az containerapp revision list -n $CA -g $RG \
-      #     --query '[?properties.trafficWeight > `0`].name' -o tsv); do
-      #     printf '%s\t%s\n' "$REV" "$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-      #       --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv)"
-      #   done
+      #   REVS=$(az containerapp revision list -n $CA -g $RG \
+      #     --query '[?properties.trafficWeight > `0`].name' -o tsv) || echo "NOT ASSESSED"
+      #   for REV in $REVS; do az containerapp revision show -n $CA -g $RG --revision "$REV" \
+      #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; done
       #
       # Empty output means unguarded, not "defaulted to safe". It reads the SERVING revision
       # deliberately: `az containerapp show` returns the desired template, which reports the new

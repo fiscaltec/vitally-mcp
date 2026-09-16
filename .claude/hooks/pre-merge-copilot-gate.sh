@@ -130,21 +130,42 @@ head=$(git ls-remote origin "refs/pull/$prnumber/head" 2>/dev/null | awk 'NR==1 
 # the gate never saw, which is #117 again by a different route. The hook cannot rewrite the
 # command, and it cannot observe the race, so it requires the caller to close it:
 # `--match-head-commit` makes the GitHub API itself refuse the merge if the head moved.
-# Read the pin as an OPTION TOKEN, never as a substring of the command. `*--match-head-commit*`
-# matched it anywhere, so `--body=--match-head-commit=<head>` satisfied the check while `gh`
-# received no pin at all — the race protection passed and protected nothing. Verified: that exact
-# command went straight through this check to the thread test. Only a bare
-# `--match-head-commit <sha>` or `--match-head-commit=<sha>` token counts now, with the shell
-# quoting people actually write ("abc1234", 'abc1234') stripped — anchoring the capture at a hex
-# digit had rejected those and denied a correctly pinned merge as unreadable.
-pinned=$(printf '%s' "$cmd" | awk '{
-	for (i = 1; i <= NF; i++) {
-		t = $i
-		if (t == "--match-head-commit") { v = $(i + 1); found = 1; break }
-		if (index(t, "--match-head-commit=") == 1) { v = substr(t, length("--match-head-commit=") + 1); found = 1; break }
-	}
-	if (found) { gsub(/^["\047]+|["\047]+$/, "", v); print v }
-}')
+# THE PIN, PARSED FROM AN UNAMBIGUOUS COMMAND OR NOT AT ALL.
+#
+# This check has now been bypassed three different ways, each time because it tried to find the
+# flag inside an arbitrary command string:
+#   * `*--match-head-commit*` matched it anywhere, so `--body=--match-head-commit=<head>` passed.
+#   * whitespace-splitting matched it inside a quoted value, so
+#     `--body 'review --match-head-commit <head>'` passed while gh received no pin.
+#   * taking the FIRST occurrence disagreed with gh, which uses the LAST, so a second differing
+#     pin could bind the merge to another commit.
+# Every fix made the parser cleverer and left the next hole. So it stops parsing cleverly and
+# starts refusing what it cannot read with certainty: no quotes, no shell metacharacters. A hex
+# SHA never needs quoting, the PR title already becomes the squash subject here (so --subject and
+# --body are not needed), and chained commands were forbidden anyway. With those gone, splitting
+# on whitespace is exact rather than approximate.
+case "$cmd" in
+*[\"\'\`\$\;\|\&\<\>\(\)\\]*)
+	deny "the merge command contains quotes or shell metacharacters, so this gate cannot read its arguments with certainty. Write it plainly: gh pr merge <number> --squash --match-head-commit $head (failing closed)" ;;
+esac
+
+# Now that splitting is exact: skip the values consumed by value-taking flags (so
+# `--subject --match-head-commit=x` cannot smuggle a pin), and take the LAST occurrence, which is
+# what gh sends. Two different pins is a contradiction rather than a preference — deny it.
+pinned=$(printf '%s' "$cmd" | awk '
+	BEGIN { split("-t --subject -b --body -F --body-file --author-email", f, " "); for (k in f) vf[f[k]] = 1 }
+	{
+		for (i = 1; i <= NF; i++) {
+			t = $i
+			if (t == "--match-head-commit") { n++; v = $(++i); continue }
+			if (index(t, "--match-head-commit=") == 1) { n++; v = substr(t, length("--match-head-commit=") + 1); continue }
+			if (t in vf) { i++; continue }
+		}
+		if (n > 1) { print "DUPLICATE"; exit }
+		if (n == 1) { print v }
+	}')
+[ "$pinned" = "DUPLICATE" ] && deny "--match-head-commit is given more than once; gh would use the last and this gate cannot tell which you meant (failing closed)"
+[ -n "$pinned" ] || deny "pin the merge to the commit this gate verified: add --match-head-commit $head as its own option (without it a push between this check and the merge lands an unreviewed commit; failing closed)"
 [ -n "$pinned" ] || deny "pin the merge to the commit this gate verified: add --match-head-commit $head as its own option (without it a push between this check and the merge lands an unreviewed commit; failing closed)"
 # Abbreviations are accepted as a prefix, as git does — but not so short that they would
 # match almost anything. Seven is git's own default abbreviation length.

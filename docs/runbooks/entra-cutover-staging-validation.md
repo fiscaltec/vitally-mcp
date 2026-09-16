@@ -67,8 +67,13 @@ state() {
 # Up to 5 minutes, far longer than a swap needs.
 #   $1 = the revision our update produced, $2 = expected guard value ("true" guarded, "" not).
 await_serving() {
+  local v
   for _ in $(seq 1 20); do
-    if serving | grep -qxF "$1" && [ "$(state)" = "$2" ]; then return 0; fi
+    # `[ "$(state)" = "$2" ]` alone is a trap when $2 is the empty string: command substitution
+    # discards state()'s exit status, so a FAILED lookup also yields "" and compares equal —
+    # the unguard direction would then announce readiness having verified nothing. Capture the
+    # status separately and treat a failure as not-ready.
+    if serving | grep -qxF "$1" && v=$(state) && [ "$v" = "$2" ]; then return 0; fi
     sleep 15
   done
   return 1
@@ -174,13 +179,27 @@ before you walk away, from any shell:**
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-# EVERY revision taking traffic, not just the newest — one line each. All of them must read
-# `true`; a single one blank is enough for requests to reach an unguarded revision.
-for REV in $(az containerapp revision list -n $CA -g $RG \
-  --query '[?properties.trafficWeight > `0`].name' -o tsv); do
-  printf '%s\t%s\n' "$REV" "$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-    --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv)"
-done
+# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
+# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
+# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
+# print nothing and read exactly like the "unguarded" case the text below describes.
+if ! REVS=$(az containerapp revision list -n $CA -g $RG \
+     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
+else
+  rc=0
+  for REV in $REVS; do
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
+      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
+      [ "$V" = "true" ] || rc=1
+    else
+      echo "NOT ASSESSED — could not read $REV"; rc=1
+    fi
+  done
+  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
+  [ "$rc" -eq 0 ]
+fi
 ```
 
 It must print `true`. **Empty output means UNGUARDED**, not "defaulted to safe" — the application

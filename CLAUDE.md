@@ -979,13 +979,27 @@ spin-up and verify it, rather than reading the capture as a guarantee:
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-# EVERY revision taking traffic, not just the newest — one line each. All of them must read
-# `true`; a single one blank is enough for requests to reach an unguarded revision.
-for REV in $(az containerapp revision list -n $CA -g $RG \
-  --query '[?properties.trafficWeight > `0`].name' -o tsv); do
-  printf '%s\t%s\n' "$REV" "$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-    --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv)"
-done
+# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
+# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
+# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
+# print nothing and read exactly like the "unguarded" case the text below describes.
+if ! REVS=$(az containerapp revision list -n $CA -g $RG \
+     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
+else
+  rc=0
+  for REV in $REVS; do
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
+      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
+      [ "$V" = "true" ] || rc=1
+    else
+      echo "NOT ASSESSED — could not read $REV"; rc=1
+    fi
+  done
+  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
+  [ "$rc" -eq 0 ]
+fi
 ```
 
 Empty output means unguarded, not "defaulted to safe". It reads the **serving** revision on
