@@ -291,9 +291,11 @@ untouched throughout and needs nothing.
 
 ## After it passes
 
-If production has not yet had the same five variables applied, that is the next step: the values are
-in `CLAUDE.md`, and the Container App secret is copied from the Key Vault secret
-`entra-mcp-client-secret` through the two-switch network window in
-`docs/runbooks/entra-app-registration.md`. The code ships ahead of the configuration and is inert
-until `OAuth__UpstreamResourceScope` is set, so the flip is the whole change and reverting it is the
-whole rollback.
+**Production was flipped on 2026-09-16, so the #108 step this section described is done.** What follows
+is kept because this runbook is the procedure for *any* identity-provider change, not only that one:
+re-run the checks above after one, and if a target still needs the five variables applied, they are in
+`CLAUDE.md` and the Container App secret comes from the Key Vault secret `entra-mcp-client-secret`
+through the two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a
+`trap … EXIT INT TERM HUP` so an interrupted run cannot leave a private vault reachable. The code
+ships ahead of the configuration and is inert until `OAuth__UpstreamResourceScope` is set, so the flip
+is the whole change and reverting it is the whole rollback.

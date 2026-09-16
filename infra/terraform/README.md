@@ -28,8 +28,9 @@ and DR-able.
   block in `providers.tf` and `terraform init -migrate-state`. (Local state works for the first pass.)
 - Secrets — supply via env (not committed):
   ```bash
-  export TF_VAR_oauth_shared_client_secret='…'          # Auth0 client secret — production
-  export TF_VAR_staging_oauth_shared_client_secret='…'  # Entra app secret — staging
+  export TF_VAR_oauth_shared_client_secret='…'          # Entra app secret — production
+  export TF_VAR_staging_oauth_shared_client_secret='…'  # Entra app secret — staging (same value)
+  export TF_VAR_auth0_rollback_client_secret='…'        # retained Auth0 secret — production rollback only
   export TF_VAR_teams_webhook_url='…'
   ```
   > ⚠️ Terraform persists these values in **state** even though the variables are `sensitive`. Always use a

@@ -41,8 +41,10 @@ variable "managed_identity_client_id" {
 # replaced are kept in CLAUDE.md under "The Auth0 → Entra cutover and its rollback", which is the
 # canonical record of the rollback posture.
 #
-# Staging has its own `staging_oauth_*` variables below holding the same values; collapsing the two
-# sets is tracked in #102.
+# Staging has its own `staging_oauth_*` variables below. The identity ones — authority, audience,
+# client id, upstream scope, client secret — now hold the same values and are what #102 collapses.
+# `staging_oauth_resource` and `staging_public_base_url` are NOT among them: each target publishes its
+# own origin, so those stay per-target after any collapse.
 variable "oauth_authority" {
   type        = string
   description = "Upstream OIDC issuer for PRODUCTION — Entra. Endpoints are read from the issuer's discovery document, not built from this."
@@ -57,7 +59,8 @@ variable "oauth_authority" {
 #     originally, and is why they are two now.
 #   Entra (both targets, live): Audience follows the App ID URI, which cannot
 #     carry a trailing slash — Entra refuses to register one on identifierUris — while Resource keeps
-#     it. The no-slash rule is Entra's, not a general one; do not "correct" the live Auth0 value.
+#     it. The no-slash rule is Entra's, not a general one; the slash-suffixed Auth0 form is the
+#     rollback value, not a mistake to "correct".
 #
 # Resource is published in the RFC 9728 document and keeps the slash either way, because that is the
 # form Claude Code normalises to and then compares.
@@ -167,13 +170,13 @@ variable "staging_oauth_resource" {
 # `oauth-shared-client-secret` for rollback; staging has only the one name.
 variable "staging_oauth_shared_client_id" {
   type        = string
-  description = "Shared OAuth client_id for STAGING — the Entra app registration appId (#107), since staging flipped on 2026-09-03."
+  description = "Same value as `oauth_shared_client_id` — the Entra app registration appId (#107). Staging flipped 2026-09-03, production 2026-09-16; separate only until #102 collapses the pair."
   default     = "c3812e7d-a413-4169-b57e-803326611ba3"
 }
 
 variable "staging_oauth_upstream_resource_scope" {
   type        = string
-  description = "STAGING only. Set, because staging is on Entra: the proxy terminates the RFC 8707 `resource` parameter and names the API by this scope instead."
+  description = "Same value as `oauth_upstream_resource_scope` — both targets are on Entra, so the proxy terminates the RFC 8707 `resource` parameter and names the API by this scope. Separate only until #102 collapses the pair."
   default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 
@@ -198,7 +201,7 @@ variable "auth0_rollback_client_secret" {
 
 variable "staging_oauth_shared_client_secret" {
   type        = string
-  description = "Client secret for STAGING's `staging_oauth_shared_client_id` — the Entra app's, sourced from the Key Vault secret `entra-mcp-client-secret`. Expires 2027-03-01; see docs/runbooks/entra-app-registration.md."
+  description = "Same value as `oauth_shared_client_secret` — the Entra app's, from the Key Vault secret `entra-mcp-client-secret`. Held on the staging Container App under the name `oauth-shared-client-secret`, where production uses `entra-oauth-client-secret`; that naming difference is why the two are still separate variables. Expires 2027-03-01; see docs/runbooks/entra-app-registration.md."
   sensitive   = true
 }
 
