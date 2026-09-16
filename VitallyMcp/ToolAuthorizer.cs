@@ -8,7 +8,7 @@ namespace VitallyMcp;
 /// <summary>
 /// Enforces <see cref="ToolAuthorizationOptions"/> against the authenticated caller. Called from
 /// <see cref="VitallyService.SendAsync"/> — the single point every Vitally API call funnels
-/// through — so all ~92 tools are covered without per-tool annotation. Because every read
+/// through — so all 93 tools are covered without per-tool annotation. Because every read
 /// (including search) is a GET and every mutation is a POST/PUT/DELETE, the HTTP verb is a
 /// faithful proxy for the tool's read/write/delete tier.
 ///
