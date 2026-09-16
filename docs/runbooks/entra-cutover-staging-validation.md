@@ -84,7 +84,12 @@ trap guard EXIT INT TERM HUP
 #     success line prints before unguard has run, and a failed unguard silently skips the timer.
 LOG=~/vitally-staging-guard-failsafe.log
 if unguard; then
-  nohup bash -c "$(declare -p APP CA RG); $(declare -f state guard); sleep 1800; guard" >>"$LOG" 2>&1 &
+  # Every function guard() reaches TRANSITIVELY has to be in this list, and every variable they
+  # read in `declare -p`. The child shell inherits nothing else. Omitting `serving` here once
+  # cost a failsafe that restored the guard correctly and then logged GUARD NOT RESTORED every
+  # single time, because its verification step could not run — a permanent false alarm, which is
+  # how a real one stops being read.
+  nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state guard); sleep 1800; guard" >>"$LOG" 2>&1 &
   echo "guard REMOVED — failsafe PID $!, logging to $LOG"
   echo "run steps 3 and 4 now, then exit this shell"
 else
