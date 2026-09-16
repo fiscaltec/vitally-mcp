@@ -932,7 +932,8 @@ identity, so `AcrPull`, `Key Vault Secrets User` and the Graph `GroupMember.Read
 cover it.
 
 **Why it exists.** Authentication has the largest blast radius in this system, so the Entra migration
-(#102 / #108) is validated here before production. The alternatives were rejected: a local server
+(#102 / #108) was validated here first — staging ran Entra from 2026-09-03, production followed on
+2026-09-16 — and staging remains the pre-production target for the next identity change. The alternatives were rejected: a local server
 behind an ephemeral HTTPS tunnel orphans one identity-provider app registration per run — identifier
 URIs are immutable and must equal the server origin — which cost two sessions during #90; and
 validating straight against production is the failure mode a staging-first design exists to prevent.

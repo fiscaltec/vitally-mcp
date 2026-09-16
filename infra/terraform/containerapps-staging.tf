@@ -8,8 +8,10 @@
 # federated credential) is persistent scaffolding that deliberately survives a teardown — see the
 # teardown table in CLAUDE.md before deleting any of it.
 #
-# WHY IT EXISTS. Authentication has the largest blast radius in this system, so the Entra migration
-# (#102) is validated here before production. The alternatives were both rejected: a local server
+# WHY IT EXISTS. Authentication has the largest blast radius in this system, so identity-provider
+# changes are validated here before production — which is what happened for the Entra migration
+# (#102): staging ran it from 2026-09-03 and production followed on 2026-09-16. It remains the
+# pre-production target for the next such change. The alternatives were both rejected: a local server
 # behind an ephemeral HTTPS tunnel orphans one identity-provider app registration per run (identifier
 # URIs are immutable and must equal the server origin), and validating straight against production is
 # the failure mode the staging-first design exists to avoid.

@@ -315,9 +315,12 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 // resource-path-suffixed variant (…/mcp) that RFC 9728 and the MCP SDK prefer. Clients probe
 // either, so serving both removes a discovery failure mode. Points clients at the authorization
 // server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
-// token issuance still happens upstream — our discovery doc points at the provider's endpoints for
-// everything except registration_endpoint. That is Entra on both deployed targets; the code names no
-// provider, which is what makes a rollback a configuration change.
+// Token ISSUANCE still happens upstream, but almost none of the RFC 8414 document points there.
+// `authorization_endpoint`, `token_endpoint` and `registration_endpoint` are all OURS — clients talk
+// to the proxy, which forwards — and only `jwks_uri` and `userinfo_endpoint` name the provider.
+// Do not "correct" the first three to the upstream URLs: that bypasses the proxy, breaks the DCR
+// shim and the `iss` injection, and violates RFC 8414 §3.3, which requires the issuer to match the
+// origin the document was served from. See the façade section in CLAUDE.md.
 // Serialised with the SDK's own options rather than the ASP.NET Core defaults, because those
 // write every unset optional property as an explicit `null`. RFC 9728 §3.2 says an unused
 // metadata parameter is *omitted*, and strict clients enforce the difference: the published
@@ -372,12 +375,13 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
     });
 });
 
-// OAuth 2.0 Authorization Code proxy. The `Vitally MCP — Claude Code (shared)` Auth0 app
-// has a single fixed callback URL (our /oauth/callback) — we accept any client redirect_uri
-// here, save the mapping, replace with our fixed URL for the upstream Auth0 request, and
-// at /oauth/callback look the original up and redirect there. This sidesteps Auth0's lack
-// of RFC 8252 loopback wildcard support and lets random localhost ports + claude.ai's
-// hosted callback URL coexist with one Auth0 app.
+// OAuth 2.0 Authorization Code proxy. The shared upstream app — the Entra registration
+// `Vitally MCP` on both deployed targets — has a single fixed callback URL (our /oauth/callback).
+// We accept any client redirect_uri here, save the mapping, substitute our fixed URL on the upstream
+// request, and at /oauth/callback look the original up and redirect there. That lets random loopback
+// ports and claude.ai's hosted callback coexist with one registration, which neither Entra nor Auth0
+// supports natively: Auth0 has no RFC 8252 loopback wildcard, and Entra requires each redirect URI
+// to be registered exactly.
 app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
