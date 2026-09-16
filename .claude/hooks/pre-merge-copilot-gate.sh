@@ -130,15 +130,22 @@ head=$(git ls-remote origin "refs/pull/$prnumber/head" 2>/dev/null | awk 'NR==1 
 # the gate never saw, which is #117 again by a different route. The hook cannot rewrite the
 # command, and it cannot observe the race, so it requires the caller to close it:
 # `--match-head-commit` makes the GitHub API itself refuse the merge if the head moved.
-case "$cmd" in
-*--match-head-commit*) ;;
-*) deny "pin the merge to the commit this gate verified: add --match-head-commit $head (without it a push between this check and the merge lands an unreviewed commit; failing closed)" ;;
-esac
-# Tolerate the shell quoting people actually write — `--match-head-commit "abc1234"` and
-# `--match-head-commit='abc1234'` are ordinary invocations, and anchoring the capture straight
-# at a hex digit rejected both, denying a correctly pinned merge as unreadable.
-pinned=$(printf '%s' "$cmd" | sed -nE 's/.*--match-head-commit[=[:space:]]+["'"'"']?([0-9a-fA-F]+).*/\1/p')
-[ -n "$pinned" ] || deny "could not read the --match-head-commit value (failing closed)"
+# Read the pin as an OPTION TOKEN, never as a substring of the command. `*--match-head-commit*`
+# matched it anywhere, so `--body=--match-head-commit=<head>` satisfied the check while `gh`
+# received no pin at all — the race protection passed and protected nothing. Verified: that exact
+# command went straight through this check to the thread test. Only a bare
+# `--match-head-commit <sha>` or `--match-head-commit=<sha>` token counts now, with the shell
+# quoting people actually write ("abc1234", 'abc1234') stripped — anchoring the capture at a hex
+# digit had rejected those and denied a correctly pinned merge as unreadable.
+pinned=$(printf '%s' "$cmd" | awk '{
+	for (i = 1; i <= NF; i++) {
+		t = $i
+		if (t == "--match-head-commit") { v = $(i + 1); found = 1; break }
+		if (index(t, "--match-head-commit=") == 1) { v = substr(t, length("--match-head-commit=") + 1); found = 1; break }
+	}
+	if (found) { gsub(/^["\047]+|["\047]+$/, "", v); print v }
+}')
+[ -n "$pinned" ] || deny "pin the merge to the commit this gate verified: add --match-head-commit $head as its own option (without it a push between this check and the merge lands an unreviewed commit; failing closed)"
 # Abbreviations are accepted as a prefix, as git does — but not so short that they would
 # match almost anything. Seven is git's own default abbreviation length.
 [ "${#pinned}" -ge 7 ] || deny "--match-head-commit $pinned is too short to identify a commit; use at least 7 characters (failing closed)"
@@ -183,7 +190,10 @@ last=${last#* }
 # absent-with-room-to-spare, and reporting the first as "has not reviewed yet" would send
 # someone re-requesting a review that already exists.
 if [ -z "$last" ]; then
-	if [ "${reviewcount:-0}" -ge 100 ] 2>/dev/null; then
+	# Strictly greater: at exactly 100 the window holds the ENTIRE history, so Copilot being
+	# absent is a real absence rather than something that fell off the end. Denying there would
+	# block a merge for a reason that is not true.
+	if [ "${reviewcount:-0}" -gt 100 ] 2>/dev/null; then
 		deny "PR #$pr has $reviewcount reviews and Copilot's is not in the newest 100 — this gate cannot page back far enough to verify it (failing closed)"
 	fi
 	deny "Copilot has not reviewed PR #$pr yet"

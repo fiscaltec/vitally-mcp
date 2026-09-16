@@ -164,10 +164,11 @@ resource "azurerm_container_app" "staging" {
       # the spin-up and then verify it:
       #
       #   CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-      #   REV=$(az containerapp revision list -n $CA -g $RG \
-      #     --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv)
-      #   az containerapp revision show -n $CA -g $RG --revision "$REV" \
-      #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
+      #   for REV in $(az containerapp revision list -n $CA -g $RG \
+      #     --query '[?properties.trafficWeight > `0`].name' -o tsv); do
+      #     printf '%s\t%s\n' "$REV" "$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+      #       --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv)"
+      #   done
       #
       # Empty output means unguarded, not "defaulted to safe". It reads the SERVING revision
       # deliberately: `az containerapp show` returns the desired template, which reports the new

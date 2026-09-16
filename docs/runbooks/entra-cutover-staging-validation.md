@@ -116,7 +116,19 @@ guard() {
 
 # (a) This shell. EXIT alone is not enough: Ctrl-C at an interactive prompt does not exit the
 #     shell, and without `set -e` a failed step does not either — so trap the signals too.
-trap guard EXIT INT TERM HUP
+#     On a clean restore this also cancels the detached timer below. Leaving it to fire half an
+#     hour later would roll a second revision for nothing, and would re-assert the guard over
+#     whatever the app had been deliberately set to by then. Cancelling only AFTER a successful
+#     restore is the whole point: if guard() failed, that timer is the remaining protection.
+cleanup() {
+  if guard; then
+    [ -n "${FAILSAFE_PID:-}" ] && kill "$FAILSAFE_PID" 2>/dev/null \
+      && echo "$(date -u +%FT%TZ) failsafe $FAILSAFE_PID cancelled (guard already restored)"
+  else
+    echo "$(date -u +%FT%TZ) leaving failsafe ${FAILSAFE_PID:-?} armed — it is the remaining protection"
+  fi
+}
+trap cleanup EXIT INT TERM HUP
 
 # (b) A detached failsafe, because (a) dies with the terminal, the SSH session or the laptop.
 #     It reuses guard() verbatim via `declare -f` rather than carrying a second, simpler copy of
@@ -139,7 +151,8 @@ if target=$(unguard) && [ -n "$target" ]; then
   # how a real one stops being read. `await_serving` joined that list when guard() started
   # calling it, and `state_of` when state() did.
   nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state_of state await_serving guard); sleep 1800; guard" >>"$LOG" 2>&1 &
-  echo "removal accepted (revision $target) — failsafe PID $!, logging to $LOG"
+  FAILSAFE_PID=$!
+  echo "removal accepted (revision $target) — failsafe PID $FAILSAFE_PID, logging to $LOG"
   if await_serving "$target" ""; then
     echo "guard REMOVED and $target is serving — run steps 3 and 4 now, then exit this shell"
   else
@@ -161,10 +174,13 @@ before you walk away, from any shell:**
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-REV=$(az containerapp revision list -n $CA -g $RG \
-  --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv)
-az containerapp revision show -n $CA -g $RG --revision "$REV" \
-  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
+# EVERY revision taking traffic, not just the newest — one line each. All of them must read
+# `true`; a single one blank is enough for requests to reach an unguarded revision.
+for REV in $(az containerapp revision list -n $CA -g $RG \
+  --query '[?properties.trafficWeight > `0`].name' -o tsv); do
+  printf '%s\t%s\n' "$REV" "$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+    --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv)"
+done
 ```
 
 It must print `true`. **Empty output means UNGUARDED**, not "defaulted to safe" — the application
