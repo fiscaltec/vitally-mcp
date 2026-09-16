@@ -46,16 +46,20 @@ and DR-able.
 > flip that includes the OAuth secrets, where an apply could overwrite the retained Auth0 value and
 > take the rollback with it.
 >
-> The sequence below is the **adoption procedure**, kept because adopting this capture properly is
-> still the intended end state. It is not a maintenance step, and running it is a decision, not a
-> routine.
+> Adoption — actually importing this capture so Terraform becomes the source of truth — remains the
+> intended end state, and is described below as a **plan, not a runnable recipe**. It is deliberately
+> not given as a copy-pasteable block: the commands are one paste away from reconciling production,
+> and the whole point of the rule above is that reaching for them should be a decision someone makes
+> on purpose, with the estate quiet and the secret layout understood.
 
-```bash
-terraform init
-terraform plan    # shows the imports (from imports.tf) + any drift — REVIEW CAREFULLY
-terraform apply   # performs the imports + reconciles — see the warning above
-```
-After a clean import, comment out `imports.tf`. From then on it's the source of truth.
+**The adoption sequence, when it is deliberately undertaken:** `terraform init`, then a *plan* whose
+output is read line by line — it shows the imports from `imports.tf` plus any drift, and drift here
+means the capture disagrees with the live estate, which is a thing to investigate rather than
+reconcile. Only then the apply that performs the imports. Afterwards, comment out `imports.tf`.
+
+⚠️ Before any of that, confirm the OAuth secret layout: production carries **two** Container App
+secrets (`entra-oauth-client-secret`, live; `oauth-shared-client-secret`, the retained Auth0 value)
+and an apply driven from incomplete variables would collapse them and take the rollback with it.
 
 A few resources need an ID looked up before their import block works (see notes in `imports.tf`):
 role assignments (`az role assignment list --scope <id> --query "[].id"`), diagnostic settings

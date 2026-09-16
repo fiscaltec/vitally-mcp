@@ -291,14 +291,17 @@ untouched throughout and needs nothing.
 
 ## After it passes
 
-**Production was flipped on 2026-09-16, so the #108 step this section described is done.** What follows
-is kept because these checks are re-runnable: this is the acceptance suite for **Entra** specifically
-— the steps assert Entra v2 endpoints, `mcp.access`, `AADSTS` responses and Graph, so a move to a
-different provider would need its own — and re-running them is what any later change to *this*
-registration, tenant or scope calls for:
-re-run the checks above after one, and if a target still needs the five variables applied, they are in
-`CLAUDE.md` and the Container App secret comes from the Key Vault secret `entra-mcp-client-secret`
-through the two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a
+**Both targets were flipped — staging 2026-09-03, production 2026-09-16 — so there is no outstanding
+flip. Do not read anything below as a step still to perform.**
+
+What this runbook is now: the **Entra acceptance suite**. Its checks assert Entra v2 endpoints,
+`mcp.access`, `AADSTS` responses and Graph, so it does not generalise to another provider — that
+would need its own. **Re-run everything above after any change to this app registration, the tenant,
+or the `mcp.access` scope**, and after a rollback or a re-flip.
+
+If a *future* target ever needs the five `OAuth__*` variables applied, they are in `CLAUDE.md`, and
+its Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the
+two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a
 `trap … EXIT INT TERM HUP` so an interrupted run cannot leave a private vault reachable. The code
-ships ahead of the configuration and is inert until `OAuth__UpstreamResourceScope` is set, so the flip
-is the whole change and reverting it is the whole rollback.
+ships ahead of the configuration and is inert until `OAuth__UpstreamResourceScope` is set, so setting
+the variables is the whole change and reverting them is the whole rollback.

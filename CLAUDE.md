@@ -565,7 +565,11 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 `OAuthOptions` (singleton, bound from `OAuth:` section):
 
 > **The targets now agree on all five.** They diverged while #108 was half-applied; the flip on 2026-09-16
-> reunified them. Only `Resource` and `PublicBaseUrl` still differ, because each names its own origin.
+> reunified them. `Resource` and `PublicBaseUrl` still differ because each names its own origin — and
+> so does the *Container App secret name* behind `SharedClientSecret`: production references
+> `entra-oauth-client-secret`, staging `oauth-shared-client-secret`, for the same underlying value.
+> That third difference is deliberate, not drift: production kept the old name for the retained Auth0
+> credential instead of overwriting it, which is what makes its rollback free of a Key Vault window.
 >
 > | | Production (Entra, since 2026-09-16) | Staging (Entra, since 2026-09-03) |
 > |---|---|---|
