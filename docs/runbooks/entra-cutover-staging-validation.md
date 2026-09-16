@@ -43,7 +43,25 @@ serving() { az containerapp revision list "${APP[@]}" \
 state()   { local r; r=$(serving) && [ -n "$r" ] || return 1
   az containerapp revision show "${APP[@]}" --revision "$r" \
     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
-unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly -o none; }
+
+# Wait for ONE SPECIFIC revision to be the one taking traffic, carrying the value expected of
+# it. Both directions need this and for the same reason: an accepted `az containerapp update`
+# changes the desired spec, not what is answering requests. Up to 5 minutes, far longer than a
+# swap needs.  $1 = revision, $2 = expected guard value ("true" when guarded, empty when not).
+await_serving() {
+  for _ in $(seq 1 20); do
+    [ "$(serving)" = "$1" ] && [ "$(state)" = "$2" ] && return 0
+    sleep 15
+  done
+  return 1
+}
+# Returns the revision the removal produced, so the caller can wait for it. Announcing
+# "guard REMOVED" on acceptance alone would send the operator into steps 3 and 4 while the
+# OLD read-only revision was still serving — every destructive tool still hidden, an admin
+# seeing the 56-tool reader catalogue, and the check reporting a tier failure that is really
+# the guard it was told had been lifted.
+unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__ReadOnly \
+  --query properties.latestRevisionName -o tsv; }
 
 # Retries, then VERIFIES, then shouts, then RETURNS A STATUS. Three separate things, and each
 # one has been the bug here at some point:
@@ -69,14 +87,10 @@ guard() {
     return 1
   fi
   # A successful update means the SPEC was accepted, not that the guarded revision is serving.
-  # Poll until OUR revision is the one taking traffic — up to 5 minutes, far longer than a swap.
-  for _ in $(seq 1 20); do
-    if [ "$(serving)" = "$target" ] && [ "$(state)" = "true" ]; then
-      echo "$(date -u +%FT%TZ) guard RESTORED (serving revision $target)"
-      return 0
-    fi
-    sleep 15
-  done
+  if await_serving "$target" "true"; then
+    echo "$(date -u +%FT%TZ) guard RESTORED (serving revision $target)"
+    return 0
+  fi
   echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — $target never took traffic. staging is WRITABLE against real customer data. Run now:"
   echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
   return 1
@@ -94,15 +108,27 @@ trap guard EXIT INT TERM HUP
 #     unguard runs in the FOREGROUND. `unguard && nohup … &` backgrounds the whole list, so the
 #     success line prints before unguard has run, and a failed unguard silently skips the timer.
 LOG=~/vitally-staging-guard-failsafe.log
-if unguard; then
+if target=$(unguard) && [ -n "$target" ]; then
+  # Arm the failsafe the moment the REMOVAL IS ACCEPTED, before waiting for the swap. The spec
+  # is already unguarded here, so that revision will take traffic whether or not anyone is
+  # still watching — a failsafe gated on the wait succeeding would be absent in exactly the
+  # case that needs it most.
+  #
   # Every function guard() reaches TRANSITIVELY has to be in this list, and every variable they
   # read in `declare -p`. The child shell inherits nothing else. Omitting `serving` here once
   # cost a failsafe that restored the guard correctly and then logged GUARD NOT RESTORED every
   # single time, because its verification step could not run — a permanent false alarm, which is
-  # how a real one stops being read.
-  nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state guard); sleep 1800; guard" >>"$LOG" 2>&1 &
-  echo "guard REMOVED — failsafe PID $!, logging to $LOG"
-  echo "run steps 3 and 4 now, then exit this shell"
+  # how a real one stops being read. `await_serving` joined that list when guard() started
+  # calling it.
+  nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state await_serving guard); sleep 1800; guard" >>"$LOG" 2>&1 &
+  echo "removal accepted (revision $target) — failsafe PID $!, logging to $LOG"
+  if await_serving "$target" ""; then
+    echo "guard REMOVED and $target is serving — run steps 3 and 4 now, then exit this shell"
+  else
+    echo "!!! $target has NOT taken traffic yet. Do not start steps 3 and 4: they would run"
+    echo "    against the old read-only revision and report tier failures that are really the"
+    echo "    guard. Wait, re-check with the state command below, then begin."
+  fi
 else
   echo "unguard FAILED — the guard is still ON and NO failsafe was started."
   echo "Nothing to clean up. Fix your az session and re-run this block."

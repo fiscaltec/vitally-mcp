@@ -165,10 +165,16 @@ esac
 #     unrelated logins.
 last=$(gh api graphql -f owner="$owner" -f name="$name" -F number="$pr" \
 	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){totalCount nodes{author{login} commit{oid} submittedAt}}}}}' \
-	--jq '.data.repository.pullRequest.reviews as $r | ($r.nodes | map(select(.author.login == "copilot-pull-request-reviewer")) | sort_by(.submittedAt) | last | .commit.oid // "") as $c | "\($r.totalCount) \($c)"' 2>/dev/null) \
+	--jq '.data.repository.pullRequest.reviews as $r | ($r.nodes | map(select(.author.login == "copilot-pull-request-reviewer")) | sort_by(.submittedAt) | last | .commit.oid // "NONE") as $c | "\($r.totalCount) \($c)"' 2>/dev/null) \
 	|| deny "could not read reviews for PR #$pr (failing closed)"
 reviewcount=${last%% *}
 last=${last#* }
+# The jq above emits the literal `NONE` rather than an empty field when Copilot has no
+# review. An empty field would leave this parse resting on a trailing space surviving
+# command substitution — which it does, but invisibly, and a contract you cannot see in the
+# output is one the next edit breaks silently. `NONE` is not a valid object id, so it can
+# never be mistaken for one.
+[ "$last" = "NONE" ] && last=""
 # `reviews(last:100)` takes the newest hundred, so on a very long-running PR Copilot's
 # review can fall off the window entirely. Absent-with-a-full-page is not the same fact as
 # absent-with-room-to-spare, and reporting the first as "has not reviewed yet" would send

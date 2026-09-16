@@ -173,7 +173,7 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       review of an earlier commit does not count, and timestamps cannot be lined up against the head
       commit — compare the SHA.
       ```bash
-      n=<PR>; head=$(git rev-parse HEAD)
+      n=<PR>; head=$(git ls-remote origin "refs/pull/$n/head" | awk '{print $1}')
       gh pr view "$n" --json reviewRequests \
         --jq '[.reviewRequests[].login] | index("copilot-pull-request-reviewer") != null'   # false = not pending
       gh api graphql -f owner=fiscaltec -f name=vitally-mcp -F number="$n" \
@@ -192,13 +192,18 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       same defect and was fixed with it — a fail-closed gate reading a stale source is not
       conservative, it is stuck, and a gate that cannot pass is a gate someone switches off.
 
-      ⚠️ **Take the head SHA from `git rev-parse HEAD`, not from `gh pr view --json headRefOid`,
+      ⚠️ **Take the head SHA from `refs/pull/$n/head`, never from `gh pr view --json headRefOid`,
       in the seconds after a push.** The GraphQL field lags: on #122 it still reported the previous
       commit right after a push, so the comparison matched Copilot's *old* review and the gate read
       as passing. Two consequences, and the second is the expensive one: re-requesting in that
       window gets a review of the previous commit (that happened on #122 too — a review arrived four
       minutes after the request, on the superseded SHA), so **wait until the API reports the new head
-      before re-requesting**, then compare against `git rev-parse`.
+      before re-requesting**.
+
+      `refs/pull/$n/head` rather than `git rev-parse HEAD`, which was what this said until the hook
+      moved to the remote ref: the local checkout is only the right answer when it *is* that PR's
+      branch and has nothing unpushed, and merging a second PR from another branch is normal. The
+      manual check and the hook must read the same source or they disagree exactly when it matters.
 
       ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
       request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
@@ -217,11 +222,17 @@ it. Two consequences, both of which have cost real time in this repo and its sib
 3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
    branch current, Copilot's latest review on the current head, zero unresolved threads.
 
-   **Pin the merge to the SHA you verified** — the hook requires it and denies without it:
+   **Pin the merge to the SHA you verified** — the hook requires it and denies without it — and
+   **write the PR number and the SHA out literally**:
 
    ```bash
-   gh pr merge "$n" --squash --match-head-commit "$head"
+   gh pr merge 129 --squash --match-head-commit 4384e311ed03c94e79134bd7a7435b62d2e124e9
    ```
+
+   ⚠️ **Not `"$n"` / `"$head"`.** The hook is a `PreToolUse` hook: it sees the command *text*,
+   before the shell expands anything. So it reads `"$n"` as the PR argument and fails to resolve a
+   PR from it, and `"$head"` as a non-hex pin — the variable form is denied outright. Verified by
+   feeding both forms to the hook: `could not resolve a PR from '"$n"'` versus a clean pass.
 
    Everything checked above is true of *one moment*; `gh pr merge` runs after it, so a push landing
    in that window merges a commit nothing verified. The hook cannot see that race — it has already
