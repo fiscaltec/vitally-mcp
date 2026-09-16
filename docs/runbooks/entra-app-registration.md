@@ -225,9 +225,9 @@ fi
 app is skipped rather than re-POSTed, because Graph refuses a duplicate assignment and a naive loop
 would report the apps out of parity in the very state it had just fixed.
 
-**And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is no longer a
-sign-in gate for this server, but it is the retained rollback path and stays one until Auth0 is
-retired; `Vitally MCP` gates **both** targets now. Omitting either locks the
+**And it covers both apps on purpose — do not reduce it to one.** `Vitally MCP` gates **both** targets since
+the 2026-09-16 flip. `FISCAL IT Auth0` gates nothing for this server any more — it is retained purely as
+the rollback, and its assignments matter only because a rollback would start using them again. Omitting either locks the
 new department out of that one, silently, until it is the app being used — which is exactly how
 Development and Data Science were missed, both times by following a procedure that named one app.
 

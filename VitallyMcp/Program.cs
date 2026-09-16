@@ -46,7 +46,7 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureC
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
 // Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
 // unreachable Graph can stall a tool call; it does NOT buy a fallback. #108 removed the
-// token-claim route, so what a timeout reaches is the retained stale set
+// fall-through from live mode to the token claim, so what a timeout reaches is the retained stale set
 // (Authorization:LiveGroupStaleSeconds) and, past that window, a denial — see
 // GraphGroupPermissionResolver. This comment said "degrades to the token-claim fallback"
 // for long enough to outlive the fallback itself.
@@ -605,8 +605,10 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
 
     // Confidential-client auth: inject the secret server-side. Clients (Claude Code etc.)
     // never see it — they post as if they were a public client, we add the secret on the way
-    // upstream. This is what lets the shared Auth0 app be "verifiable first-party" and skip
-    // the consent screen.
+    // upstream. Presenting the shared app as a confidential client is what lets it skip the consent
+    // screen: on Entra through tenant-wide admin consent plus `api.preAuthorizedApplications`, and on
+    // Auth0 — the rollback — through `skip_consent_for_verifiable_first_party_clients`. Different
+    // mechanisms, same requirement, which is why the secret injection is not provider-specific.
     if (!string.IsNullOrWhiteSpace(o.SharedClientSecret))
     {
         pairs.RemoveAll(p => p.Key == "client_secret");
