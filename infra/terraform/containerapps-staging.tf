@@ -163,10 +163,16 @@ resource "azurerm_container_app" "staging" {
       # come up guarded: it starts on the application default, false. Set it out of band as part of
       # the spin-up and then verify it:
       #
-      #   az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+      #   CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+      #   REV=$(az containerapp revision list -n $CA -g $RG \
+      #     --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv)
+      #   az containerapp revision show -n $CA -g $RG --revision "$REV" \
       #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv
       #
-      # Empty output means unguarded, not "defaulted to safe".
+      # Empty output means unguarded, not "defaulted to safe". It reads the SERVING revision
+      # deliberately: `az containerapp show` returns the desired template, which reports the new
+      # value the moment an update is accepted while the previous — unguarded — revision may
+      # still be taking every request.
       #
       # Unset it for the tier-enforcement acceptance test, which has to see the write tools to prove
       # a reader is denied one, then put it back — under the EXIT trap in

@@ -124,6 +124,25 @@ head=$(git ls-remote origin "refs/pull/$prnumber/head" 2>/dev/null | awk 'NR==1 
 # fresh value: the operator waits seconds, and the message names both commits.
 [ "$apihead" = "$head" ] \
 	|| deny "PR #$prnumber reports head $apihead but refs/pull/$prnumber/head is at $head — the PR API lags after a push, and the older value would match an already-reviewed commit. Wait for it to catch up, then re-check (failing closed)"
+
+# Everything this hook checks is true of ONE MOMENT. `gh pr merge` then runs afterwards
+# and merges whatever the head is THEN — so a push landing in that window merges a commit
+# the gate never saw, which is #117 again by a different route. The hook cannot rewrite the
+# command, and it cannot observe the race, so it requires the caller to close it:
+# `--match-head-commit` makes the GitHub API itself refuse the merge if the head moved.
+case "$cmd" in
+*--match-head-commit*) ;;
+*) deny "pin the merge to the commit this gate verified: add --match-head-commit $head (without it a push between this check and the merge lands an unreviewed commit; failing closed)" ;;
+esac
+pinned=$(printf '%s' "$cmd" | sed -nE 's/.*--match-head-commit[=[:space:]]+([0-9a-fA-F]+).*/\1/p')
+[ -n "$pinned" ] || deny "could not read the --match-head-commit value (failing closed)"
+# Abbreviations are accepted as a prefix, as git does — but not so short that they would
+# match almost anything. Seven is git's own default abbreviation length.
+[ "${#pinned}" -ge 7 ] || deny "--match-head-commit $pinned is too short to identify a commit; use at least 7 characters (failing closed)"
+case "$head" in
+"$pinned"*) ;;
+*) deny "--match-head-commit $pinned is not the head this gate verified ($head) — refusing to pin the merge to a different commit (failing closed)" ;;
+esac
 # (1) Copilot must not be mid-review.
 [ "$pending" = "false" ] || deny "Copilot is still a requested reviewer on PR #$pr (review pending)"
 
@@ -145,10 +164,21 @@ head=$(git ls-remote origin "refs/pull/$prnumber/head" 2>/dev/null | awk 'NR==1 
 #     (see the Dependabot note above). Exact match — `contains` would match
 #     unrelated logins.
 last=$(gh api graphql -f owner="$owner" -f name="$name" -F number="$pr" \
-	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){nodes{author{login} commit{oid} submittedAt}}}}}' \
-	--jq '[.data.repository.pullRequest.reviews.nodes[] | select(.author.login == "copilot-pull-request-reviewer")] | sort_by(.submittedAt) | last | .commit.oid // empty' 2>/dev/null) \
+	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(last:100){totalCount nodes{author{login} commit{oid} submittedAt}}}}}' \
+	--jq '.data.repository.pullRequest.reviews as $r | ($r.nodes | map(select(.author.login == "copilot-pull-request-reviewer")) | sort_by(.submittedAt) | last | .commit.oid // "") as $c | "\($r.totalCount) \($c)"' 2>/dev/null) \
 	|| deny "could not read reviews for PR #$pr (failing closed)"
-[ -n "$last" ] || deny "Copilot has not reviewed PR #$pr yet"
+reviewcount=${last%% *}
+last=${last#* }
+# `reviews(last:100)` takes the newest hundred, so on a very long-running PR Copilot's
+# review can fall off the window entirely. Absent-with-a-full-page is not the same fact as
+# absent-with-room-to-spare, and reporting the first as "has not reviewed yet" would send
+# someone re-requesting a review that already exists.
+if [ -z "$last" ]; then
+	if [ "${reviewcount:-0}" -ge 100 ] 2>/dev/null; then
+		deny "PR #$pr has $reviewcount reviews and Copilot's is not in the newest 100 — this gate cannot page back far enough to verify it (failing closed)"
+	fi
+	deny "Copilot has not reviewed PR #$pr yet"
+fi
 [ "$last" = "$head" ] || deny "Copilot's latest review ($last) is not on the current head ($head) — re-review pending on PR #$pr"
 
 # (3) Zero unresolved review threads. Fetch hasNextPage too and fail closed if a

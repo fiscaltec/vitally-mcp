@@ -53,20 +53,31 @@ unguard() { az containerapp update "${APP[@]}" --remove-env-vars Authorization__
 #     detached `bash -c "…; guard"` below would exit SUCCESSFULLY while staging stayed writable,
 #     and nothing monitoring that process could tell.
 guard() {
+  # Capture the revision OUR update produces, and wait for that one specifically. Asking only
+  # "does the serving revision say true" passes on the revision that was serving BEFORE the
+  # unguard — which still carries the guard for the seconds before the unguarded one takes
+  # over. Every restore attempt could fail in that window and this would still report success.
+  local target=""
   for _ in 1 2 3 4 5; do
-    az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true -o none && break
-    sleep 10
+    target=$(az containerapp update "${APP[@]}" --set-env-vars Authorization__ReadOnly=true \
+      --query properties.latestRevisionName -o tsv) && [ -n "$target" ] && break
+    target=""; sleep 10
   done
+  if [ -z "$target" ]; then
+    echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — every restore attempt failed. staging is WRITABLE against real customer data. Run now:"
+    echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
+    return 1
+  fi
   # A successful update means the SPEC was accepted, not that the guarded revision is serving.
-  # Poll until it is — up to 5 minutes, which is far longer than a revision swap needs.
+  # Poll until OUR revision is the one taking traffic — up to 5 minutes, far longer than a swap.
   for _ in $(seq 1 20); do
-    if [ "$(state)" = "true" ]; then
-      echo "$(date -u +%FT%TZ) guard RESTORED (serving revision $(serving))"
+    if [ "$(serving)" = "$target" ] && [ "$(state)" = "true" ]; then
+      echo "$(date -u +%FT%TZ) guard RESTORED (serving revision $target)"
       return 0
     fi
     sleep 15
   done
-  echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — staging is WRITABLE against real customer data. Run now:"
+  echo "$(date -u +%FT%TZ) !!! GUARD NOT RESTORED — $target never took traffic. staging is WRITABLE against real customer data. Run now:"
   echo "    az containerapp update -n $CA -g $RG --set-env-vars Authorization__ReadOnly=true"
   return 1
 }

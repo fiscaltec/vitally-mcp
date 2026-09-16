@@ -109,7 +109,7 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
 3. **Auth0 token claim — retained configuration, NOT a fallback.** The Auth0 post-login Action
    `Vitally MCP claims` maps Entra group membership to the `vitally:*` permissions and writes them
    to the namespaced `Authorization:CustomPermissionsClaim`. **Nothing consults that claim on any
-   deployed target, and nothing has since #125 deployed.** With `LiveGroupCheck=true` — set
+   deployed target, and nothing has since #108 deployed.** With `LiveGroupCheck=true` — set
    everywhere — the order is **fresh Graph → stale Graph → deny**, and `ToolAuthorizer` has no
    route from the live mode to the claim mode, including when the resolver is absent, which
    denies. So during a Graph outage this claim authorises nobody. What covers an outage is
