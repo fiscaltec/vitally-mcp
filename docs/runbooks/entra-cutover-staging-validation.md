@@ -38,19 +38,37 @@ RG=vitally-prod-rg-uksouth; CA=vitally-staging-ca-uksouth
 # The SERVING value, not the desired one. `az containerapp show` returns the spec you just asked
 # for, so it flips to `true` the instant the update is accepted — while the previous, WRITABLE
 # revision can still be taking every request. Read it off the revision actually carrying traffic.
+# EVERY revision taking traffic, one per line — not just the newest. Both apps are in Single
+# revision mode today, where exactly one revision holds 100%, so this returns one name. It is
+# written as a set anyway because the mode is one `--revisions-mode multiple` away, nothing
+# would flag that change, and the failure it would cause is silent: an older UNGUARDED revision
+# still taking a share while the newest reports `true`. Staging writes reach real customer data.
 serving() { az containerapp revision list "${APP[@]}" \
-  --query '[?properties.trafficWeight > `0`]|sort_by(@,&properties.createdTime)[-1].name' -o tsv; }
-state()   { local r; r=$(serving) && [ -n "$r" ] || return 1
-  az containerapp revision show "${APP[@]}" --revision "$r" \
-    --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
+  --query '[?properties.trafficWeight > `0`].name' -o tsv; }
+state_of() { az containerapp revision show "${APP[@]}" --revision "$1" \
+  --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; }
+# The guard as the outside world sees it: the value only if EVERY traffic-bearing revision
+# agrees, otherwise `MIXED`. One revision disagreeing means some requests are unguarded, which
+# is not a state to report as either guarded or open.
+state() {
+  local r v first="" n=0
+  for r in $(serving); do
+    v=$(state_of "$r") || return 1
+    n=$((n + 1))
+    if [ "$n" = "1" ]; then first=$v; elif [ "$v" != "$first" ]; then echo "MIXED"; return 0; fi
+  done
+  [ "$n" -gt 0 ] || return 1
+  printf '%s\n' "$first"
+}
 
-# Wait for ONE SPECIFIC revision to be the one taking traffic, carrying the value expected of
-# it. Both directions need this and for the same reason: an accepted `az containerapp update`
-# changes the desired spec, not what is answering requests. Up to 5 minutes, far longer than a
-# swap needs.  $1 = revision, $2 = expected guard value ("true" when guarded, empty when not).
+# Wait until the revision we produced is taking traffic AND every traffic-bearing revision
+# carries the value expected of it. Both directions need this and for the same reason: an
+# accepted `az containerapp update` changes the desired spec, not what is answering requests.
+# Up to 5 minutes, far longer than a swap needs.
+#   $1 = the revision our update produced, $2 = expected guard value ("true" guarded, "" not).
 await_serving() {
   for _ in $(seq 1 20); do
-    [ "$(serving)" = "$1" ] && [ "$(state)" = "$2" ] && return 0
+    if serving | grep -qxF "$1" && [ "$(state)" = "$2" ]; then return 0; fi
     sleep 15
   done
   return 1
@@ -119,8 +137,8 @@ if target=$(unguard) && [ -n "$target" ]; then
   # cost a failsafe that restored the guard correctly and then logged GUARD NOT RESTORED every
   # single time, because its verification step could not run — a permanent false alarm, which is
   # how a real one stops being read. `await_serving` joined that list when guard() started
-  # calling it.
-  nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state await_serving guard); sleep 1800; guard" >>"$LOG" 2>&1 &
+  # calling it, and `state_of` when state() did.
+  nohup bash -c "$(declare -p APP CA RG); $(declare -f serving state_of state await_serving guard); sleep 1800; guard" >>"$LOG" 2>&1 &
   echo "removal accepted (revision $target) — failsafe PID $!, logging to $LOG"
   if await_serving "$target" ""; then
     echo "guard REMOVED and $target is serving — run steps 3 and 4 now, then exit this shell"

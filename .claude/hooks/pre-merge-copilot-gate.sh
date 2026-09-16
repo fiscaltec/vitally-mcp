@@ -134,7 +134,10 @@ case "$cmd" in
 *--match-head-commit*) ;;
 *) deny "pin the merge to the commit this gate verified: add --match-head-commit $head (without it a push between this check and the merge lands an unreviewed commit; failing closed)" ;;
 esac
-pinned=$(printf '%s' "$cmd" | sed -nE 's/.*--match-head-commit[=[:space:]]+([0-9a-fA-F]+).*/\1/p')
+# Tolerate the shell quoting people actually write — `--match-head-commit "abc1234"` and
+# `--match-head-commit='abc1234'` are ordinary invocations, and anchoring the capture straight
+# at a hex digit rejected both, denying a correctly pinned merge as unreadable.
+pinned=$(printf '%s' "$cmd" | sed -nE 's/.*--match-head-commit[=[:space:]]+["'"'"']?([0-9a-fA-F]+).*/\1/p')
 [ -n "$pinned" ] || deny "could not read the --match-head-commit value (failing closed)"
 # Abbreviations are accepted as a prefix, as git does — but not so short that they would
 # match almost anything. Seven is git's own default abbreviation length.
