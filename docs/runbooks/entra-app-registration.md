@@ -6,7 +6,7 @@ proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also 
 valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
-Serving staging since 2026-09-03. **Production still signs in through Auth0.** The cutover code is merged and deployed, but it is inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables are set, and that configuration flip has not happened yet. Staging runs Entra.
+Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first and stayed inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables were set, which is what the flip did. That has not happened yet. Staging runs Entra.
 
 | | |
 |---|---|
@@ -168,7 +168,7 @@ The two gates are separate mechanisms and should stay that way:
 | | Question it answers | Mechanism |
 |---|---|---|
 | Gate 1 | may this person sign in at all? | direct department assignment on this app |
-| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, which is the live path on production today |
+| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, retained for the rollback window |
 
 Gate 2 is IdP-independent — it survives the cutover untouched.
 
@@ -224,9 +224,8 @@ fi
 app is skipped rather than re-POSTed, because Graph refuses a duplicate assignment and a naive loop
 would report the apps out of parity in the very state it had just fixed.
 
-**And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is still the
-live production sign-in gate until the #108 configuration flip is applied, and the rollback path for
-a period after it; `Vitally MCP` gates staging now and production after. Omitting either locks the
+**And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is no longer a
+sign-in gate for this server, but it is the retained rollback path and stays one until Auth0 is retired; `Vitally MCP` gates staging now and production after. Omitting either locks the
 new department out of that one, silently, until it is the app being used — which is exactly how
 Development and Data Science were missed, both times by following a procedure that named one app.
 
@@ -458,10 +457,10 @@ configuration — worth raising after #108 rather than during it.
 
 ## The cutover (#108) — code deployed 2026-09-03, production flip outstanding
 
-Config-only, as designed — and only half applied. **Staging** was flipped on 2026-09-03 and has run
-Entra since; **production** still signs in through Auth0, because the five `OAuth__*` variables have
-not been set there. The code is deployed to both and *runs* on both — the OIDC discovery, the
-proxy and the `resource` validation are all live on production today. What is inactive there is the
+Config-only, as designed, and now **fully applied**. **Staging** was flipped on 2026-09-03; **production**
+followed on 2026-09-16 once the five `OAuth__*` variables were set there. The code had been deployed to both
+and running on both throughout — the OIDC discovery, the proxy and the `resource` validation were live
+on production before the flip; what the flip changed was the posture. What is inactive there is the
 Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relays `resource` exactly as
 it did before, which is why the deploy was a no-op and the flip is the whole change.
 

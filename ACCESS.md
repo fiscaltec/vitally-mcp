@@ -228,7 +228,7 @@ request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is
 
 ## How it's set up (in brief)
 
-- **Sign-in:** Microsoft Entra — reached via Auth0 federation on production today, directly on staging, and directly on production once the #108 switch is made. FISCAL staff sign in with their normal Microsoft account in every case.
+- **Sign-in:** Microsoft Entra, directly, on both production and staging (production since 2026-09-16). FISCAL staff sign in with their normal Microsoft account.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
 - **Auditing:** every action is logged with the acting user's Entra object id (resolvable with `az ad user show --id`; never their email), the operation and the outcome — queryable in Application Insights / Log Analytics.
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.

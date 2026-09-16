@@ -67,8 +67,8 @@ public class ToolAuthorizationOptions
     /// <see cref="LiveGroupStaleSeconds"/>; when there is no such copy the call is <b>denied</b>.
     /// There is no third tier: #108 removed the fall-through to the token claim. Note that is a
     /// change to what this server <i>reads</i>, not to what the provider mints — the Auth0 Action
-    /// still exists and still runs on the Auth0 path (production today; not staging, which signs
-    /// in against Entra directly), so a rollback to Auth0 does not restore the tier. Never
+    /// still exists, though nothing reaches it while both targets sign in against Entra directly, so
+    /// a rollback to Auth0 would not restore the tier either. Never
     /// fail-open: an empty set denies just as a missing one does. Requires the server's managed
     /// identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
     /// </summary>

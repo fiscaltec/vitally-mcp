@@ -48,12 +48,12 @@ variable "oauth_authority" {
 }
 
 # oauth_audience and oauth_resource are NOT the same value and must not be reconciled — though note
-# the reason differs by provider, and production is still on Auth0.
+# the reason differs by provider. Both targets are on Entra; the Auth0 row is the rollback posture.
 #
-#   Auth0 (production today): the Resource Server identifier carries a trailing slash, so Audience
+#   Auth0 (rollback only): the Resource Server identifier carries a trailing slash, so Audience
 #     and Resource happen to look identical. That coincidence is what made them one variable
 #     originally, and is why they are two now.
-#   Entra (staging today, production at the flip): Audience follows the App ID URI, which cannot
+#   Entra (both targets, live): Audience follows the App ID URI, which cannot
 #     carry a trailing slash — Entra refuses to register one on identifierUris — while Resource keeps
 #     it. The no-slash rule is Entra's, not a general one; do not "correct" the live Auth0 value.
 #
@@ -116,10 +116,10 @@ variable "entra_group_admin" {
 # `sg-vitally-*` tier group ids — is deliberately the same, so a staging failure points at what
 # changed rather than at the environment.
 #
-# The identity provider is NOT shared while #108 is half-applied: staging is on the Entra app
-# registration, production is still on the Auth0 client, so the client id, upstream scope and client
-# secret each have a `staging_*` variable below holding a different value. They reunify when
-# production flips.
+# The identity provider IS shared again: both targets point at the Entra app registration since the
+# 2026-09-16 production flip. The `staging_*` client id, upstream scope and client secret variables
+# below now hold the same values as their `oauth_*` counterparts and are ready to be collapsed — see
+# the simplification list in #102.
 variable "staging_app_name" {
   type        = string
   description = "Staging Container App name. Deliberately outside the name_prefix convention: it is a second app inside the production RG and Container Apps Environment, not a second environment."

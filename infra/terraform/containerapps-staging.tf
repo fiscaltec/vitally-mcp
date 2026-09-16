@@ -109,8 +109,8 @@ resource "azurerm_container_app" "staging" {
         value = var.managed_identity_client_id
       }
       # Staging is pointed at a new identity provider first and production follows once it has
-      # passed. Staging has been on Entra since 2026-09-03; **production is still on Auth0** until
-      # the #108 configuration flip is applied there, so the two deliberately differ here.
+      # passed. That is what happened here: staging moved to Entra on 2026-09-03 and production on
+      # 2026-09-16, so the two now agree and these staging_* variables are ready to be collapsed.
       env {
         name  = "OAuth__Authority"
         value = var.staging_oauth_authority

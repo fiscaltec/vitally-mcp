@@ -148,8 +148,8 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
    denials appear in the audit log — keyed by the caller's Entra **object id**, resolved `oid`-first
    and falling back to the trailing GUID of an Auth0-shaped `sub` (`waad|connection|{objectId}`).
-   That fallback is not legacy tolerance: production still signs in through Auth0, so it is the
-   live path there, and it yields the *same GUID* either way — which is what lets an Auth0-era
+   That fallback is no longer a live path — neither target signs in through Auth0 since the 2026-09-16 flip —
+   but it is retained for the rollback window, and it yields the *same GUID* either way — which is what lets an Auth0-era
    record join an Entra-era one. Only when neither is derivable is the raw subject used. See
    `CallerIdentity` and #127. Expect **`LogToolCallDenied`**, not `LogDenied`: the SDK
    authorisation filter rejects an out-of-tier call at the per-tool `[Authorize]` checkpoint, before
