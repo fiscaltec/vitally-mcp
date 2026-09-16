@@ -167,8 +167,9 @@ resource "azuread_service_principal" "vitally_mcp" {
   client_id = azuread_application.vitally_mcp.client_id
   owners    = [data.azuread_client_config.current.object_id]
 
-  # Gate 1 — sign-in is restricted to principals assigned below, mirroring what
-  # `FISCAL IT Auth0` enforces today.
+  # Gate 1 — sign-in is restricted to principals assigned below. This app enforces it for both
+  # targets since the 2026-09-16 flip; `FISCAL IT Auth0` must keep an identical list only so a rollback
+  # does not lock anyone out.
   app_role_assignment_required = true
 }
 

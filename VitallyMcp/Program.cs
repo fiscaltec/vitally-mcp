@@ -315,8 +315,9 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 // resource-path-suffixed variant (…/mcp) that RFC 9728 and the MCP SDK prefer. Clients probe
 // either, so serving both removes a discovery failure mode. Points clients at the authorization
 // server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
-// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints for
-// everything except registration_endpoint.
+// token issuance still happens upstream — our discovery doc points at the provider's endpoints for
+// everything except registration_endpoint. That is Entra on both deployed targets; the code names no
+// provider, which is what makes a rollback a configuration change.
 // Serialised with the SDK's own options rather than the ASP.NET Core defaults, because those
 // write every unset optional property as an explicit `null`. RFC 9728 §3.2 says an unused
 // metadata parameter is *omitted*, and strict clients enforce the difference: the published
@@ -333,10 +334,10 @@ app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetad
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
 // `issuer` names our *own* origin, not Auth0's. §3.3 requires the issuer to correspond to the URL
 // the document was fetched from (an anti-mix-up control), and from the client's point of view we
-// genuinely are the authorization server: authorize, token and register are all ours. Auth0 still
-// issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream — and why they
-// are read from the provider's own discovery document rather than assembled from Authority, which
-// only ever produced Auth0-shaped paths. Declaring our origin here is coupled to the `iss` injection
+// genuinely are the authorization server: authorize, token and register are all ours. The upstream
+// provider still issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream —
+// and why they are read from its own discovery document rather than assembled from Authority, whose
+// concatenation only ever produced Auth0-shaped paths and cannot produce Entra's. Declaring our origin here is coupled to the `iss` injection
 // in /oauth/callback below — see the façade section in CLAUDE.md before changing either.
 app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IOptions<OAuthOptions> oauth, UpstreamOidcMetadata upstream) =>
 {

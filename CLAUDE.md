@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** whose OAuth façade is built for Microsoft Entra directly; users connect to it by URL rather than installing a binary. **Both targets authenticate against Entra directly.** #108 merged the cutover code on 2026-09-03 and the production configuration flip was applied on 2026-09-16; staging had run Entra since 2026-09-03. Auth0 is no longer in the sign-in path — its tenant objects are retained only as the rollback, see *Rollback* below. Read the provider off the live metadata (`curl https://vitally.fiscaltec.com/.well-known/oauth-authorization-server | jq .jwks_uri`) rather than trusting this file: it asserted the wrong state for twelve days once already, in the other direction.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** whose OAuth façade is built for Microsoft Entra directly; users connect to it by URL rather than installing a binary. **Both targets authenticate against Entra directly.** #108 merged the cutover code on 2026-09-03 and the production configuration flip was applied on 2026-09-16; staging had run Entra since 2026-09-03. Auth0 is no longer in the sign-in path. **This server's** Auth0 objects — the client, both Resource Servers and the `Vitally MCP claims` Action — are retained as the rollback, see *Rollback* below. The `fiscal-it.uk.auth0.com` tenant itself stays regardless: it hosts Simple Asset System, its API and a Terraform client, and is not ours to delete. Read the provider off the live metadata (`curl https://vitally.fiscaltec.com/.well-known/oauth-authorization-server | jq .jwks_uri`) rather than trusting this file: it asserted the wrong state for twelve days once already, in the other direction.
 
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
@@ -1186,9 +1186,10 @@ also records what has already been machine-verified so it is not repeated.
 #### Rollback — the retained Auth0 values
 
 **This section is the canonical record of the retained Auth0 configuration. Delete it only when the
-tenant objects go.** Auth0 no longer appears anywhere as *current* state — what survives elsewhere is
-rollback and parity context (ACCESS.md's onboarding rule, the RBAC runbook's audit-identity note, the
-Terraform capture), and this is the one place the values themselves live. Reconstructing them from
+tenant objects go.** This is the one place the *values* live. Auth0 survives elsewhere as rollback and parity
+context — ACCESS.md's onboarding rule, the RBAC runbook's audit-identity note, the Terraform capture,
+and the Deployment table's note that the tenant serves other applications — plus historical records in
+`docs/superpowers/` kept deliberately as dated artefacts. Reconstructing them from
 the tenant mid-incident is not a plan.
 
 Rollback of **production** is one `az containerapp update` — no redeploy, no Key Vault window, no

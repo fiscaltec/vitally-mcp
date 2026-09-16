@@ -42,12 +42,15 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # NOT the same value as production's, despite the identical Container App secret name. Staging
-  # flipped to Entra on 2026-09-03 and production has not, so this holds the *Entra* app's secret
-  # while `containerapps.tf` holds the *Auth0* client's. Handing production's secret to staging (or
-  # the reverse) is a silent authentication failure at the token exchange, not a startup error.
-  # Reunify the two variables once production flips — the Entra registration's redirect URIs already
-  # carry both origins' /oauth/callback, so one secret will serve both again.
+  # The SAME value as production's, under a different Container App secret name. Both targets run the
+  # one Entra app registration — staging since 2026-09-03, production since 2026-09-16 — so this and
+  # production's `entra-oauth-client-secret` hold the same secret. Production kept the name
+  # `oauth-shared-client-secret` for the retained *Auth0* value instead, which is what lets a
+  # production rollback skip the Key Vault window; staging has only this one name, so a staging
+  # rollback would need the Auth0 secret re-fetched from the vault first.
+  #
+  # Handing the wrong secret to either app is a silent failure at the token exchange, not a startup
+  # error. Collapse the variables and the names when Auth0 is retired (#102).
   secret {
     name  = "oauth-shared-client-secret"
     value = var.staging_oauth_shared_client_secret
