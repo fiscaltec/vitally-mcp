@@ -11,15 +11,18 @@ resource "azurerm_log_analytics_workspace" "law" {
   # docs/superpowers/specs/2026-09-17-logging-observability-design.md.
   internet_query_enabled = true
 
-  # ⚠️ TEMPORARY, and opened to test a hypothesis that turned out to be wrong. The CAE's shipper
-  # was never blocked by the network: local_authentication_enabled below is FALSE, and
-  # appLogsConfiguration is a shared-key shipper, so the workspace refuses it on authentication
-  # whatever this flag says. That is why nothing arrived in 14 minutes of polling.
+  # Re-locked 2026-09-17 after being opened briefly that afternoon to test a hypothesis that turned
+  # out to be wrong. Recorded because the reasoning is not obvious: the CAE's shipper was never
+  # blocked by the network. local_authentication_enabled below is FALSE and appLogsConfiguration is
+  # a shared-key shipper, so the workspace refuses it on AUTHENTICATION whatever this flag says.
+  # That is why nothing arrived in 14 minutes of polling with it open.
   #
-  # Nothing needs this open — the fix is a diagnostic setting, which authenticates through the
-  # Azure Monitor control plane rather than a shared key (the same reason Key Vault and ACR records
-  # arrive into this workspace today). Re-lock to false; #142.
-  internet_ingestion_enabled = true
+  # Nothing needs it open: the fix is a diagnostic setting (diagnostics.tf), which authenticates
+  # through the Azure Monitor control plane rather than a shared key — the same reason Key Vault and
+  # ACR records reach this workspace with ingestion private. Do NOT re-open this, and do NOT rescue
+  # the shared-key path by setting local_authentication_enabled = true; that would trade a real
+  # hardening control for the worse of two mechanisms.
+  internet_ingestion_enabled = false
 
   local_authentication_enabled = false
 }
