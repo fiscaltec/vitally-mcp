@@ -38,10 +38,12 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   # then store null. Reading the setting back from ARM is the only way to see that. Claiming it here
   # would document a property the live resource does not have.
   #
-  # It appears to be implicit for this resource type: Microsoft's Container Apps log-options
-  # documentation refers to ContainerAppSystemLogs and ContainerAppConsoleLogs as the tables records
-  # become queryable in, which are the resource-specific names rather than AzureDiagnostics.
-  # Confirm against the live tables once records flow rather than trusting that reading.
+  # It is implicit for this resource type — CONFIRMED 2026-09-17 against the live table once records
+  # began flowing, rather than inferred from the documentation. ContainerAppSystemLogs has typed
+  # columns (ContainerAppName, Reason, RevisionName, ReplicaName) with no "_s" suffixes, which is the
+  # resource-specific shape; the custom-log shape would be ContainerAppSystemLogs_CL with _s columns.
+  # So records land in the real table and per-table retention is available to #93, despite the
+  # property reading null.
 
   enabled_log {
     category = "ContainerAppSystemLogs"

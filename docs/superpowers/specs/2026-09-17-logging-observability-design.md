@@ -492,13 +492,25 @@ discards logs quietly.
    az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
      --type console --tail 100
    ```
-2. **Verify records arrive — and read configuration back from ARM rather than trusting the write.**
-   Both `az monitor diagnostic-settings create --export-to-resource-specific true` and an explicit
-   PUT carrying `"logAnalyticsDestinationType": "Dedicated"` **return it in the response and store
-   `null`** for this resource type. The setting appears configured and is not. Resource-specific
-   tables seem to be implicit here — Microsoft's documentation names `ContainerAppSystemLogs` and
-   `ContainerAppConsoleLogs` as where records become queryable — but confirm that against the live
-   tables rather than the response body.
+2. ✅ **Verified 2026-09-17: records arrive.** First rows landed at `18:25:09`, seconds after the
+   destination change, from **both** apps — `ContainerAppReady`, `ContainerAppUpdate`,
+   `RevisionUpdate`, `RevisionDeactivating` on production; `ContainerStarted`, `ContainerTerminated`,
+   `KEDAScaleTargetDeactivated` on staging. This is the first telemetry this server has ever
+   delivered to Log Analytics.
+
+   Two things that cost time here, both worth carrying forward:
+
+   - **Read configuration back from ARM; the write response lies.** Both
+     `--export-to-resource-specific true` and an explicit PUT carrying
+     `"logAnalyticsDestinationType": "Dedicated"` **return it and store `null`** for this resource
+     type. Resource-specific export turns out to be **implicit** — confirmed by the live schema
+     (typed `ContainerAppName`/`Reason`/`RevisionName` columns, no `_s` suffixes), so per-table
+     retention *is* available to phase 7 despite the property reading null.
+   - **Beware `has` in the verification query.** A poll filtering
+     `where Type has 'ContainerApp'` returned nothing for 20 minutes *while records were arriving*,
+     because KQL `has` matches whole terms and `'ContainerAppSystemLogs' has 'ContainerApp'` is
+     false. Use `startswith`/`contains`, or query the table directly. A verification that fails
+     closed on its own bug is worse than none: it nearly produced a report that the fix had failed.
 3. ✅ **Done 2026-09-17: `publicNetworkAccessForIngestion` re-locked to `Disabled`**, restoring the
    hardening opened earlier that day while this was being diagnosed. It was never needed — the cause
    was authentication and destination, not network.
