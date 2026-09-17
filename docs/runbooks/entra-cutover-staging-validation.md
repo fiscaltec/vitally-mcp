@@ -309,9 +309,28 @@ vault window at all.
 flip. Do not read anything below as a step still to perform.**
 
 What this runbook is now: the **Entra acceptance suite**. Its checks assert Entra v2 endpoints,
-`mcp.access`, `AADSTS` responses and Graph, so it does not generalise to another provider — that
-would need its own. **Re-run everything above after any change to this app registration, the tenant,
-or the `mcp.access` scope**, and after a rollback or a re-flip.
+`mcp.access`, `AADSTS` responses and Graph, so it does not generalise to another provider.
+
+**Re-run everything above while Entra is the active provider** — after any change to this app
+registration, to the tenant, or to the `mcp.access` scope, and after a re-flip *to* Entra.
+
+⚠️ **Do not run it after a rollback to Auth0.** Every check above would fail, because none of what
+they assert is present on that path: no Entra v2 endpoints, no `mcp.access` in the merged scope, no
+`AADSTS` responses. Those failures would mean nothing, and the real risk is that someone reads them as
+a broken rollback and "fixes" the configuration back to Entra — undoing the rollback they had just
+deliberately performed, during an incident.
+
+What to check after an Auth0 rollback instead, which is short because most of the contract is
+provider-independent:
+
+1. `bash .github/scripts/verify-oauth-metadata.sh <origin>` — this one **does** still apply. It names
+   no provider: it asserts the façade contract (our own `issuer`, its byte-for-byte match with
+   `authorization_servers`, the advertised `iss` flag, `jwks_uri` absolute https with no fragment, no
+   null-serialised optionals), and that contract holds under either provider.
+2. `jwks_uri` should now read `fiscal-it.uk.auth0.com`. If it still names `login.microsoftonline.com`,
+   the variables did not take — check the revision actually serving traffic, not the desired template.
+3. One real sign-in, per tier. That is the only check that proves the client secret matches the client
+   id, which is the failure mode a rollback most often hits (see above).
 
 If a *future* target ever needs the five `OAuth__*` variables applied, they are in `CLAUDE.md`, and
 its Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the
