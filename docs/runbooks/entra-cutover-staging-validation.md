@@ -296,7 +296,13 @@ Staging rolls back in **two** steps. Both are required, and the order matters:
    its `OAuth__Audience` is production's Resource Server, and staging has its own. Staging's:
 
    ```bash
-   az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \n     --set-env-vars \n       "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \n       "OAuth__Audience=https://vitally-staging.fiscaltec.com/" \n       "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D" \n       "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret" \n     --remove-env-vars OAuth__UpstreamResourceScope
+   az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+     --set-env-vars \
+       "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \
+       "OAuth__Audience=https://vitally-staging.fiscaltec.com/" \
+       "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D" \
+       "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret" \
+     --remove-env-vars OAuth__UpstreamResourceScope
    ```
 
    `OAuth__Resource` and `OAuth__PublicBaseUrl` are untouched — they name staging's origin under either
