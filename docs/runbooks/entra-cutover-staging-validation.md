@@ -285,21 +285,26 @@ mistaken for something this change caused.
 
 ## If something fails
 
-Staging rolls back in **two** steps, and doing only the first leaves an app that boots, passes
-`/health`, and fails every sign-in:
+Staging rolls back in **two** steps. Both are required, and the order matters:
 
 1. **Replace the Container App secret** `oauth-shared-client-secret` with the **Auth0** client secret,
    fetched from Key Vault through the two-switch window (see below — it is not already on the app).
 2. **Then** revert the `OAuth__*` variables — values in *The Auth0 → Entra cutover and its rollback*
    in `CLAUDE.md`.
 
-**In that order, and the reason is the revision model rather than the pairing.** Either step alone
-leaves a mismatch — client id from one provider, secret from the other — and that is the
-`invalid_client` failure described below. But `az containerapp secret set` does **not** roll a
-revision: the running one keeps serving with the value it already has. The `--set-env-vars` update
-does roll one, and the new revision reads both the new variables and the new secret. So staging the
-secret first and letting the variable update roll the revision means a single transition, rather
-than two in which one revision is guaranteed to be mismatched.
+**In that order, and the reason is the revision model.** `az containerapp secret set` does **not**
+roll a revision — the running one keeps serving with the value it already loaded — whereas
+`--set-env-vars` does. The two orderings therefore fail differently:
+
+- **Variables first** breaks sign-in *immediately*: the update rolls a new revision carrying Auth0's
+  client id alongside the Entra secret still in the store, and every token exchange returns
+  `invalid_client` while the app boots clean and `/health` returns 200.
+- **Secret first** breaks nothing now — the running revision is untouched — but leaves a *latent*
+  mismatch: the next revision rolled for any reason would pair the Auth0 secret with Entra variables.
+  Step 2 rolls that revision seconds later with both values correct, which closes the window.
+
+So secret first is not a preference. It is the ordering whose failure mode is latent and immediately
+resolved, rather than live and user-visible.
 
 ⚠️ **"It is only staging" is true of the configuration and false of the data.** Nothing here
 changes production's Container App or its OAuth settings. But staging reads the **production**

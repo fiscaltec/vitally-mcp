@@ -1227,6 +1227,20 @@ origin under either provider.
 | `OAuth__SharedClientSecret` | `secretref:oauth-shared-client-secret` | `secretref:entra-oauth-client-secret` |
 | `OAuth__UpstreamResourceScope` | *(absent — `resource` is relayed)* | `https://vitally.fiscaltec.com/mcp.access` |
 
+⚠️ **That table is PRODUCTION's. Staging's Auth0 values are not identical, and using production's
+would leave staging unusable.** Under Auth0 each target had its **own Resource Server**, so each had
+its own audience — unlike Entra, where both share one App ID URI. Two rows differ for staging:
+
+| | staging, rolled back to Auth0 |
+|---|---|
+| `OAuth__Audience` | `https://vitally-staging.fiscaltec.com/` — **its own** Resource Server, retained per the teardown table |
+| `OAuth__SharedClientSecret` | `secretref:oauth-shared-client-secret` — the only name staging has, and it currently holds the **Entra** value, so it must be overwritten first (see the staging rollback steps in `docs/runbooks/entra-cutover-staging-validation.md`) |
+
+`Authority`, `SharedClientId` and the absent `UpstreamResourceScope` are the same as production's.
+**Confirm both against the Auth0 tenant before using them** — they are derived from the retained
+Resource Server identifiers recorded here, not read back from Auth0, and nothing has exercised this
+path since the flip.
+
 **What must still exist for this to work**, and must therefore not be deleted before you have decided
 to abandon the rollback: the Auth0 client above, both Resource Servers
 (`https://vitally.fiscaltec.com/` and `https://vitally-staging.fiscaltec.com/`), the
