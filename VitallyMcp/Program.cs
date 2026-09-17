@@ -318,9 +318,11 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 // Token ISSUANCE still happens upstream, but almost none of the RFC 8414 document points there.
 // `authorization_endpoint`, `token_endpoint` and `registration_endpoint` are all OURS — clients talk
 // to the proxy, which forwards — and only `jwks_uri` and `userinfo_endpoint` name the provider.
-// Do not "correct" the first three to the upstream URLs: that bypasses the proxy, breaks the DCR
-// shim and the `iss` injection, and violates RFC 8414 §3.3, which requires the issuer to match the
-// origin the document was served from. See the façade section in CLAUDE.md.
+// Do not "correct" the first three to the upstream URLs: that bypasses the proxy, so the DCR shim
+// never runs and /oauth/callback never injects `iss`. Note what this does NOT rest on — RFC 8414
+// §3.3 constrains the `issuer` FIELD to the origin that served the document, and says nothing about
+// where the endpoint URLs point. §3.3 is why `issuer` names us (see below); the endpoints are ours
+// because the proxy has to be in the path at all. See the façade section in CLAUDE.md.
 // Serialised with the SDK's own options rather than the ASP.NET Core defaults, because those
 // write every unset optional property as an explicit `null`. RFC 9728 §3.2 says an unused
 // metadata parameter is *omitted*, and strict clients enforce the difference: the published
@@ -386,8 +388,11 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
 // authorisation-code theft; never widen it. What follows validation is the substitution: save the
 // client's URI keyed by `state`, send our own fixed callback upstream, and at /oauth/callback look
 // the original up and redirect there. That is what lets random loopback ports and claude.ai's
-// hosted callback coexist with one registration, which neither provider supports natively — Auth0
-// has no loopback wildcard, and Entra requires every redirect URI to be registered exactly.
+// hosted callback coexist with one registration. Be precise about why, because the providers differ:
+// Auth0 has no loopback wildcard at all, whereas Entra DOES ignore the port on `http://localhost`
+// for public clients — so loopback alone would not have needed this. The hosted HTTPS callback does:
+// Entra requires every non-loopback redirect URI to be registered exactly, and we are a confidential
+// client with one registration serving every MCP client.
 app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
