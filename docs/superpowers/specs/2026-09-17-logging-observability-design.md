@@ -386,16 +386,25 @@ personal data — see the policy section.
 |---|---|---|
 | 0 | query path open | **done** 2026-09-17 |
 | 1 | audit reads by default | **done** — #139 / PR #140 |
-| 2 | diagnostic setting; verify arrival; re-lock ingestion | — |
 | 3 | logging configuration: noise + `HttpClient` PII | — |
+| 2 | diagnostic setting; verify arrival; re-lock ingestion | **3** |
 | **3a** | **access review — a gate, not a task**: confirm the 5 users are appropriate, review the 28 service principals, decide on table-level RBAC | — |
 | 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
 | 7 | routing and retention per tier | 2, 4, measured volume |
 
-2 and 3 are independent and both unblock the rest. 3 is worth doing before 4–6 so new records are not
-added to an unfiltered stream.
+⚠️ **3 must come before 2, and an earlier draft had them independent — which was wrong.** Phase 2
+turns on export of the *whole* console stream, and that stream today carries the `HttpClient` URLs
+with search terms (#143) plus `AuditLogger`'s object ids and resource paths. Enabling export first
+would ingest exactly the customer identifiers the data map says `ContainerAppConsoleLogs` must not
+hold, into the table with the **shortest** retention and the **broadest** access — the opposite of
+where the policy reversal put that data deliberately.
+
+The temptation is real, because 2 is an Azure setting that takes a minute and 3 is a code change
+needing a deploy. Do them in the order that does not contaminate the table.
+
+3 also comes before 4–6, so new records are not added to an unfiltered stream.
 
 ⚠️ **3a gates 4, and that ordering is the whole point.** Phase 4 is what starts writing customer
 personal data, and the policy reversal permitting it was taken *on the condition* that the store is
