@@ -5,9 +5,18 @@ resource "azurerm_log_analytics_workspace" "law" {
   sku                 = "PerGB2018"
   retention_in_days   = 30
 
-  # Privatised via AMPLS (ampls.tf): ingestion/query reachable only over the private endpoint.
-  internet_ingestion_enabled   = false
-  internet_query_enabled       = false
+  # Query was opened on 2026-09-17 so operators can read telemetry at all: it was PrivateOnly, and
+  # Azure Monitor supports no IP allowlist, so the only alternatives were public query or no query.
+  # Query is not an anonymous surface (Entra auth + workspace RBAC). Deliberate, see
+  # docs/superpowers/specs/2026-09-17-logging-observability-design.md.
+  internet_query_enabled = true
+
+  # ⚠️ TEMPORARY. Opened 2026-09-17 to test whether the CAE's log shipper was blocked by it. It was
+  # not — nothing arrived in 14 minutes, and the real fix is a diagnostic setting, which reaches the
+  # workspace over a private Microsoft channel regardless of this flag. Re-lock to false as part of
+  # #142, once that setting is verified delivering.
+  internet_ingestion_enabled = true
+
   local_authentication_enabled = false
 }
 
@@ -18,8 +27,15 @@ resource "azurerm_application_insights" "appi" {
   application_type    = "web"
   workspace_id        = azurerm_log_analytics_workspace.law.id
 
-  # Privatised via AMPLS (ampls.tf). Local auth (connection-string ingestion) is left ENABLED:
-  # the Container App emits telemetry via the instrumentation key, so disabling it would break it.
+  # ⚠️ This component receives NOTHING. Verified 2026-09-17: no APPLICATIONINSIGHTS_CONNECTION_STRING
+  # (or any ApplicationInsights* variable) on the Container App, no SDK package reference in
+  # VitallyMcp.csproj, and no code in VitallyMcp/ referencing it. An earlier version of this comment
+  # said "the Container App emits telemetry via the instrumentation key" — it does not, and never has.
+  # Wiring the SDK up is the planned route for audit, failure and performance telemetry, and it
+  # ingests over the private endpoint because the app's own traffic IS in the VNet — unlike the CAE's
+  # platform log shipper, which is why ingestion below can stay false.
   internet_ingestion_enabled = false
-  internet_query_enabled     = false
+
+  # Opened 2026-09-17 alongside the workspace, for the same reason and permanently.
+  internet_query_enabled = true
 }

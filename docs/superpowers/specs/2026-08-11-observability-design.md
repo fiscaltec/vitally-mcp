@@ -9,8 +9,9 @@ made the workspace readable for the first time:
 
 - it assumed the pipeline worked but could not be read. **Nothing from this server had ever reached
   Log Analytics** — `ContainerAppConsoleLogs_CL` had zero rows, ever.
-- it scoped this as improving observability. `Audit:IncludeReads` was `false` on every target, so
-  **no access to customer data had ever been recorded** (#139).
+- it scoped this as improving observability. Precisely: `Audit:IncludeReads` was `false` on every
+  target so **reads were never emitted** (#139), while mutations and denials *were* emitted by
+  `AuditLogger` and then never ingested. Two independent failures, same effect.
 
 Its "preferred long-term hardening" — peering to the FISCAL hub — would also have fixed *query* only,
 not ingestion: the Container Apps log shipper never ran inside this VNet. The replacement uses a

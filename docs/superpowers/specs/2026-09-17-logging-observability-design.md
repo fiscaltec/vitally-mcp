@@ -6,8 +6,10 @@ artefact. That spec's shape was right in outline and wrong in two load-bearing w
 
 - it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server has ever
   reached Log Analytics.**
-- it scoped the work as observability improvement. Read auditing was off, so **no access to customer
-  data had ever been recorded** — a compliance gap, not an improvement.
+- it scoped the work as observability improvement. It is a compliance gap, and precisely: **reads
+  were never emitted** (`IncludeReads` was `false` on every target, #139), while **mutations and
+  denials were emitted and then never ingested**. Two independent failures with the same effect —
+  no answer to "who accessed which customer record" — but different causes and different fixes.
 
 It also planned around a query/ingestion trade-off that does not exist in the form assumed; see
 *Pipeline* below.
@@ -58,11 +60,14 @@ did **not** restore shipping within 14 minutes of polling.
 | Routing, MCP server | 9 |
 | **audit records** | **0** |
 
-There is **no `appsettings.json`** in `VitallyMcp/` — only `appsettings.Example.json`, which is a
-template and is not loaded. No `Logging` section exists anywhere and no `Logging__*` variable is set
-on the Container App, so every category runs at the framework default of `Information`.
+**No logging configuration reaches the running app.** `appsettings.Example.json` *does* carry a
+`Logging` section (`Default: Information`, `Microsoft.AspNetCore: Warning`) — but it is a template
+that ASP.NET Core never loads, there is no `appsettings.json`, and no `Logging__*` variable is set on
+the Container App. So every category runs at the framework default of `Information`, and the sample
+above is what that produces. The Example file being *almost* right is the trap: it reads like
+configured behaviour and is inert.
 
-### The whole logging surface is seven call sites
+### The whole logging surface is eight call sites
 
 `AuditLogger` ×3, `GraphGroupPermissionResolver` ×2, `UpstreamOidcMetadata` ×1,
 `VitallyRateLimitHandler` ×1, `VitallyApiKeyProvider` ×1 (Debug). Plus exactly **one `LogError` in
@@ -109,6 +114,13 @@ for every Vitally and Graph call (#143). That is **not** made acceptable by this
 policy permits deliberate, structured, access-controlled audit records, not the same data scattered
 through diagnostic categories nobody configured, in a table with different retention and broader
 access. Close it as planned.
+
+**Which tools actually expose a term, corrected.** Only `Search_users` and `Search_admins` — they
+call `GetResourcesAsync("users/search" | "admins/search", …, additionalParams, …)`, and
+`additionalParams` becomes the query string. **`nameContains` does not**: `GetByNameContainsAsync`
+pages the list endpoint and applies the predicate *locally*, because Vitally has no name filter, so
+the term never leaves the process. An earlier draft attributed the exposure to it; that was wrong and
+would have sent whoever fixed this to the wrong call path.
 
 ## Design — code (what is emitted)
 
@@ -171,8 +183,13 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 ### System failures
 
 - **The CallTool filter swallows errors.** `Program.cs` catches every surfaceable exception and
-  returns it to the client without logging. Vitally 500s, validation failures and RBAC denials leave
-  no server-side trace. Log at `Error` (or `Warning` for expected denials) before returning.
+  returns it to the client without logging, so **Vitally upstream failures and `ArgumentException`
+  validation failures leave no server-side trace**. Log at `Error` before returning.
+
+  Correcting an earlier draft: **RBAC denials are not in this gap.** They are already recorded —
+  `VitallyService.SendAsync` calls `LogDenied`, and the SDK authorisation checkpoint calls
+  `LogToolCallDenied`, which exists precisely because that checkpoint rejects before `SendAsync`
+  runs. Denials are the best-covered path here, not the worst.
 - **`VitallyService.SendAsync`** throws on non-2xx with the response body; surfaced to the client,
   never logged. Log the status and resource — **never the body**, which can carry customer PII.
 - **Rate-limit exhaustion** — only the "nearing" threshold warns today; retries-exhausted is silent.
@@ -195,14 +212,29 @@ Note for whoever picks this up: the earlier "slow requests" investigation conclu
 rather than the server. That was reasoned, not measured — because there is nothing to measure with.
 This work makes that conclusion checkable.
 
-### Logging configuration
+### Logging configuration — in code, not `appsettings.json`
 
-Add an `appsettings.json` with an explicit `Logging` section. It does three jobs at once:
+⚠️ **`appsettings.json` cannot carry this, and the obvious fix silently does nothing.** Both
+`.gitignore` (line 111) and `.dockerignore` (line 18) exclude `appsettings.json` and
+`appsettings.*.json`, carving out only `!appsettings.Example.json`. So a file added there would not
+be committed, would not enter the build context, and would never reach the image — while working
+perfectly on a developer machine. That exclusion is deliberate and worth keeping: it is what stops a
+real `appsettings.json` with secrets being committed.
+
+Configure the levels **in `Program.cs`** via `builder.Logging.AddFilter(...)` instead. Same reasoning
+as `IncludeReads` in #139: it ships with the image, cannot drift per deployment, and is reviewable in
+the diff. Environment variables are explicitly rejected for the same reason they were there — a
+Container App recreate does not inherit them, so the constraint would lapse silently.
+
+It does three jobs at once:
 
 - cuts the framework noise that is ~90% of volume, which is what makes retaining the audit tiers
   affordable
-- **constrains `System.Net.Http.HttpClient.*`**, closing the query-string PII exposure above
-- makes levels reviewable in the repo rather than implicit in framework defaults
+- **constrains `System.Net.Http.HttpClient.*`**, closing the query-string exposure above
+- makes levels reviewable in source rather than implicit in framework defaults
+
+Keep `appsettings.Example.json`'s `Logging` section in step, or delete it — it currently documents
+behaviour that is not in force, which is how it misled this design's first draft.
 
 Give audit records a stable category or event name so they can be **routed**, not pattern-matched.
 `ILogger<AuditLogger>` already yields `VitallyMcp.AuditLogger`, which is a usable discriminator.
