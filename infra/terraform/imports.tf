@@ -253,3 +253,12 @@ import {
   to = azuread_app_role_assignment.gate1["Data Science Department"]
   id = "7904188d-4b34-4651-bf0f-6941fbcf6a8b/appRoleAssignment/Fcng-KaKYkq2-YLz7IcB6j5bm_KkIdJFryeAk792K5Q"
 }
+
+# Added 2026-09-17 with the diagnostic setting that finally gets Container App telemetry into the
+# workspace (#142). Like every block in this file, it is the adoption recipe rather than something
+# that has been run — `terraform apply` is never executed here; the live resource was created with
+# `az monitor diagnostic-settings create`.
+import {
+  to = azurerm_monitor_diagnostic_setting.cae_system_logs
+  id = "${local.rg_id}/providers/Microsoft.App/managedEnvironments/vitally-prod-cae-uksouth|cae-system-logs"
+}
