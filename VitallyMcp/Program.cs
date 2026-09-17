@@ -616,10 +616,12 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
 
     // Confidential-client auth: inject the secret server-side. Clients (Claude Code etc.)
     // never see it — they post as if they were a public client, we add the secret on the way
-    // upstream. Presenting the shared app as a confidential client is what lets it skip the consent
-    // screen: on Entra through tenant-wide admin consent plus `api.preAuthorizedApplications`, and on
-    // Auth0 — the rollback — through `skip_consent_for_verifiable_first_party_clients`. Different
-    // mechanisms, same requirement, which is why the secret injection is not provider-specific.
+    // upstream. This authenticates the token exchange and nothing else — it is NOT what suppresses the
+    // consent screen, and conflating the two invites removing the wrong setting. Consent suppression is
+    // provider-side configuration this code never touches: on Entra, tenant-wide admin consent plus
+    // `api.preAuthorizedApplications` naming the app itself; on Auth0 — the rollback —
+    // `skip_consent_for_verifiable_first_party_clients`. Remove the secret injection and the token
+    // exchange fails; remove the provider-side settings and every user sees a consent prompt instead.
     if (!string.IsNullOrWhiteSpace(o.SharedClientSecret))
     {
         pairs.RemoveAll(p => p.Key == "client_secret");

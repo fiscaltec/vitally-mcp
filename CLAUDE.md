@@ -564,8 +564,13 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 
 `OAuthOptions` (singleton, bound from `OAuth:` section):
 
-> **The targets now agree on all five.** They diverged while #108 was half-applied; the flip on 2026-09-16
-> reunified them. `Resource` and `PublicBaseUrl` still differ because each names its own origin — and
+> **The targets now agree on the five IDENTITY settings** — `Authority`, `Audience`,
+> `UpstreamResourceScope`, `SharedClientId` and the secret *value*. They diverged while #108 was
+> half-applied and the 2026-09-16 flip reunified them, so those five are what #102 collapses.
+>
+> ⚠️ **`Resource` and `PublicBaseUrl` are not among them and must not be swept into that collapse.**
+> Each names its own origin: give staging production's `Resource` and it publishes an RFC 9728
+> document naming a server it is not, which every strict client rejects. Same for `PublicBaseUrl` — and
 > so does the *Container App secret name* behind `SharedClientSecret`: production references
 > `entra-oauth-client-secret`, staging `oauth-shared-client-secret`, for the same underlying value.
 > That third difference is deliberate, not drift: production kept the old name for the retained Auth0

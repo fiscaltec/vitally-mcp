@@ -291,8 +291,11 @@ rollback* in `CLAUDE.md` for the values. A staging validation does not touch pro
 ⚠️ **Staging's secret revert is not a one-liner, unlike production's.** Staging carries a single
 Container App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the
 **Entra** value — the Auth0 value is not sitting there waiting. Reverting the variables without first
-re-fetching the Auth0 client secret from Key Vault pairs the Auth0 client id with the Entra secret,
-which fails silently at the token exchange rather than at startup. So a staging rollback needs the
+re-fetching the Auth0 client secret from Key Vault pairs the Auth0 client id with the Entra secret.
+That is not caught at startup — the app boots clean and `/health` returns 200 — and surfaces only at
+the token exchange, where the provider returns an authentication error (`invalid_client`) and sign-in
+fails for everyone. Late, not silent: if you are debugging one, the token endpoint's response is where
+the answer is. So a staging rollback needs the
 two-switch Key Vault window (`docs/runbooks/entra-app-registration.md`, driven under a
 `trap … EXIT INT TERM HUP`) *before* the variables move.
 

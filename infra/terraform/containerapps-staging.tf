@@ -51,8 +51,10 @@ resource "azurerm_container_app" "staging" {
   # production rollback skip the Key Vault window; staging has only this one name, so a staging
   # rollback would need the Auth0 secret re-fetched from the vault first.
   #
-  # Handing the wrong secret to either app is a silent failure at the token exchange, not a startup
-  # error. Collapse the variables and the names when Auth0 is retired (#102).
+  # Handing the wrong secret to either app is not caught at startup: the app boots and /health passes.
+  # It surfaces at the token exchange as an authentication error from the provider, so sign-in fails for
+  # everyone while the app looks healthy. Collapse the variables and the names when Auth0 is retired
+  # (#102).
   secret {
     name  = "oauth-shared-client-secret"
     value = var.staging_oauth_shared_client_secret
