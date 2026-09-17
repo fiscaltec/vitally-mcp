@@ -156,8 +156,23 @@ maintaining a list of permitted fields is the complexity this decision was taken
 
 ### The one boundary retained: arguments yes, response bodies no
 
-Tool **arguments** are recorded in full, including free-text search terms that may contain names or
-email addresses. Response **bodies** are not.
+Tool **arguments** are recorded, including free-text search terms that may contain names or email
+addresses. Upstream response **bodies** are not.
+
+**"In full" needs a bound, because a create/update `jsonBody` is unbounded.** Define the overflow
+rather than leaving it to the implementation:
+
+- cap each argument value (1 KB is consistent with `VitallyService`'s existing `Truncate(body, 1024)`
+  for error snippets) and the whole argument set (4 KB)
+- on overflow, truncate the **value** and set a `truncated` marker on the record — never drop the
+  argument, because its *presence and name* is part of the audit fact
+- **scoping identifiers are never truncated.** `organizationId`, `accountId` and their siblings are
+  short and are the fields the acceptance criterion depends on; truncating one would defeat the
+  record's purpose to save bytes
+
+So the criterion is met by the *identifiers*, which are always complete, while free-text and write
+payloads are best-effort within the cap. A record that says *"alice updated account X, fields
+{name, traits…} (truncated)"* still answers who, what and which customer.
 
 This is not a re-introduction of the old rule by the back door. Vitally holds meeting **transcripts**
 and arbitrary customer **traits**, so logging bodies would put entire meeting recordings and whatever
@@ -248,10 +263,28 @@ projection, and it has to cover the paged path (`GetFilteredAsync`) and the raw 
 record the count and mark ids unavailable for it — an explicit gap beats a record that appears
 complete and is not.
 
-⚠️ **Cap the id list.** The bounded auto-pager can fetch ten pages of a hundred, so an uncapped list
-is ~1000 ids in one record. Cap it (100 is a reasonable start), and **always** record the true count
-alongside, so a capped record still says *"read 640 organisations, first 100 listed"* rather than
-silently under-reporting. Beyond that threshold the meaningful audit fact is the bulk read itself.
+⚠️ **Cap the id list, and be honest about what the count means.** The bounded auto-pager can fetch ten
+pages of a hundred, so an uncapped list is ~1000 ids in one record. Cap it (100 is a reasonable
+start), and record the count alongside so a capped record says *"read 640 organisations, first 100
+listed"* rather than silently under-reporting.
+
+**The count is records *fetched*, not records *matching*, and the two differ.** `GetFilteredAsync`
+stops at `Vitally:MaxAutoPageFetches` and Vitally's envelope exposes only `next` — there is no total.
+So when the pager truncates, the true number of matching records is **unknowable without unbounded
+paging**, which is precisely what the cap exists to prevent. Requiring a "true count" would force
+either an overstatement or that unbounded paging.
+
+Record it as three fields rather than one, mirroring the envelope the tools already return
+(`{results, truncated, pagesFetched}`):
+
+| Field | Meaning |
+|---|---|
+| `recordsFetched` | how many were actually read |
+| `idsRecorded` | how many ids the cap allowed into the record |
+| `truncated` | `true` when the pager stopped early — the total is **unknown**, not equal to `recordsFetched` |
+
+A record saying *"fetched 1000, ids 100, truncated"* is honest about a bulk read of unknown extent.
+One saying *"read 1000"* would not be.
 
 #### The upstream record is kept
 
