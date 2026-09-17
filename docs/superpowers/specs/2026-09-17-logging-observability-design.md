@@ -55,8 +55,48 @@ and has never delivered a row.
 
 The wiring is not the fault: `appLogsConfiguration.destination = log-analytics` with `customerId`
 matching this workspace exactly, the AMPLS private endpoint present, and all five Azure Monitor
-private DNS zones linked to `vitally-prod-vnet-uksouth`. Enabling `publicNetworkAccessForIngestion`
-did **not** restore shipping within 14 minutes of polling.
+private DNS zones linked to `vitally-prod-vnet-uksouth`.
+
+### Root cause: shared-key authentication is disabled on the workspace
+
+```console
+$ az monitor log-analytics workspace show -n vitally-prod-law-uksouth -g vitally-prod-rg-uksouth \
+    --query "features.disableLocalAuth"
+true
+```
+
+**The CAE's `appLogsConfiguration` is a shared-key shipper** — it authenticates with the workspace id
+and primary shared key. `disableLocalAuth: true` refuses exactly that. So this path could never have
+delivered a row, from the day the workspace was created, and no amount of network configuration would
+have changed it.
+
+This explains the whole picture at once:
+
+| Observation | Explanation |
+|---|---|
+| `ContainerAppConsoleLogs_CL` has 0 rows, ever | shared-key auth refused from day one |
+| Key Vault and ACR data arrives normally | diagnostic settings do not use shared keys |
+| Enabling `publicNetworkAccessForIngestion` changed nothing in 14 minutes | the wrong control — authentication, not network |
+
+⚠️ **Two earlier hypotheses in this document were wrong**, and are recorded rather than quietly
+deleted because each looked convincing:
+
+1. *The `PrivateOnly` posture blocks the Container Apps platform shipper.* Tested by opening public
+   ingestion on 2026-09-17. Nothing arrived in 14 minutes of polling. Disproved.
+2. *The CAE's stored shared key is stale and needs re-applying.* Would also have failed — the
+   workspace refuses shared-key authentication whatever the key's value.
+
+**The diagnostic-setting fix is unaffected**, and this is now a stronger argument for it rather than a
+weaker one: diagnostic settings authenticate through the Azure Monitor control plane rather than a
+shared key, which is precisely why Key Vault and ACR records arrive into this same workspace today.
+
+It also means `internet_ingestion_enabled = true` was opened to test a hypothesis that turned out to
+be wrong and is **not needed by the fix at all** — so the re-lock (#142) can happen immediately
+rather than after the diagnostic setting is verified.
+
+**Do not "fix" this by re-enabling local authentication.** Disabling it is a deliberate hardening
+control, and turning it on to rescue a log-shipping path that has a better alternative would be
+trading a real control for a worse mechanism.
 
 ### The signal-to-noise ratio is inverted
 
@@ -199,6 +239,15 @@ One record per tool call, satisfying *user → tool → customers* directly:
 records that a hundred customers were read and names none — which fails the stated requirement.
 Ids are identifiers, not bodies, so this stays the right side of the boundary above.
 
+⚠️ **Extract them from the raw upstream response, not from the tool result.**
+`GetResourcesAsync` applies `FilterJsonFields` *after* `SendAsync`, so a caller passing
+`fields=name` gets results with **no `id` at all** — and the audit record would silently name nothing
+on exactly the calls a narrow projection was used for. The extraction point has to sit before field
+projection, and it has to cover the paged path (`GetFilteredAsync`) and the raw pass-throughs
+(`GetRawAsync`) too, not just the standard envelope. If that proves impractical for a given path,
+record the count and mark ids unavailable for it — an explicit gap beats a record that appears
+complete and is not.
+
 ⚠️ **Cap the id list.** The bounded auto-pager can fetch ten pages of a hundred, so an uncapped list
 is ~1000 ids in one record. Cap it (100 is a reasonable start), and **always** record the true count
 alongside, so a capped record still says *"read 640 organisations, first 100 listed"* rather than
@@ -212,7 +261,10 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 
 #### Also closed by this design
 
-- **sign-in records** — who authenticated and when is not captured at all. See *Open questions*:
+- **sign-in records — deliberately *not* a deliverable of phase 4.** Who authenticated and when is not
+  captured, and **this server cannot capture it**: it receives bearer tokens and never observes the
+  authentication that produced them. Building an in-process "sign-in audit" would record first *use*
+  of a token and mislabel it. Entra sign-in logs already hold the real thing — see *Open questions*:
   Entra sign-in logs may be the better source than anything built here.
 
 ### System failures
@@ -480,7 +532,7 @@ personal data — see the policy section.
 | **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | — |
 | **2b** | add **`ContainerAppConsoleLogs`** to that setting | 3, **4** |
 | **3a** | **access review — a gate, not a task**: confirm the 5 users are appropriate, review the 28 service principals, decide on table-level RBAC | — |
-| 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3, **3a** |
+| 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
 | 7 | routing and retention per tier | **2a, 2b**, 4, measured volume |
