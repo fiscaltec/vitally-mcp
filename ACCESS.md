@@ -230,7 +230,7 @@ request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is
 
 - **Sign-in:** Microsoft Entra, directly, on both production and staging (production since 2026-09-16). FISCAL staff sign in with their normal Microsoft account.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
-- **Auditing:** every action is logged with the acting user's Entra object id (resolvable with `az ad user show --id`; never their email), the operation and the outcome — queryable in Application Insights / Log Analytics.
+- **Auditing:** every action is logged with the acting user's Entra object id (resolvable with `az ad user show --id`), the operation and the outcome. ⚠️ **Not queryable yet** — the records are written to stdout and no export has ever delivered one to Log Analytics or Application Insights (verified 2026-09-17, tracked in #142). Treat the trail as existing but unretained until that lands. The design also now records tool arguments, which may include names or email addresses searched for: `docs/superpowers/specs/2026-09-17-logging-observability-design.md`.
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.
 
 Group membership is managed in Entra by the IT & Security team. Questions: contact the Infrastructure team.

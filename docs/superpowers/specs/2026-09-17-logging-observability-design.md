@@ -150,7 +150,13 @@ upstream record is kept as corroboration, not as the mechanism.
 
 An earlier draft of this design had it the other way round, on the reasoning that only the upstream
 path names a customer record. **That reasoning was wrong**, and the correction matters enough to
-record: the path names a customer only on get-by-id. Confirmed against today's live log sample —
+record — as does its own over-correction. The path names a customer on get-by-id **and on scoped
+lists**: `accounts/{accountId}/users` and `organizations/{organizationId}/users` both carry the
+parent id, which `ResourcePath` preserves. So the upstream record covers more than a first correction
+claimed.
+
+What it does **not** cover is **unscoped list and search**, where the identities exist only in the
+response body. Confirmed against today's live log sample —
 
 ```
 https://rest.vitally-eu.io/resources/organizations?<query>
@@ -261,6 +267,24 @@ It does three jobs at once:
 - **constrains `System.Net.Http.HttpClient.*`**, closing the query-string exposure above
 - makes levels reviewable in source rather than implicit in framework defaults
 
+Concretely, so an implementation cannot follow this document and still leave the exposure open:
+
+```csharp
+// The PII control. At Information these categories log outbound request URIs including query
+// strings — which carry Search_users / Search_admins terms. Warning keeps failures visible.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+
+// Noise. ~90% of console volume, and none of it is an audit or failure signal.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+```
+
+`Warning` rather than `None` throughout: a failing outbound call or a genuine authentication fault
+must still surface. It is the `Information`-level *success* chatter that carries both the volume and
+the URIs.
+
 Keep `appsettings.Example.json`'s `Logging` section in step, or delete it — it currently documents
 behaviour that is not in force, which is how it misled this design's first draft.
 
@@ -277,16 +301,21 @@ Two things have to be specified, not one:
 
 **1. The emitter, which decides the table.**
 
-| Emitter | Lands in | Notes |
+| Emitter | Lands in | |
 |---|---|---|
-| `TelemetryClient.TrackEvent` | `AppEvents` | structured name + properties; what the data map assumes |
-| `ILogger` + App Insights provider | `AppTraces` | no new dependency in `AuditLogger`, but shares a table with ordinary trace output |
+| **`TelemetryClient.TrackEvent`** | **`AppEvents`** | **chosen** |
+| `ILogger` + App Insights provider | `AppTraces` | rejected |
 
-Either is defensible; **pick one and make the data map match it.** The map currently says `AppEvents`,
-so `TrackEvent` is the default reading — but a design that keeps `AuditLogger` on `ILogger` must say
-`AppTraces` instead. What is not acceptable is naming a destination no emitter populates, which is
-what the draft did: retention and access controls would have been applied to an empty table while the
-records accumulated somewhere else.
+**`TrackEvent` is authoritative**, and this is a decision rather than an option, because phases 4 and
+7 apply retention and access controls to a named table and cannot do that against an unresolved
+choice. Reasons: `AppEvents` is a dedicated table, so per-table retention and table-level RBAC apply
+to the audit trail *and nothing else*; typed properties survive as queryable dimensions rather than
+being formatted into a message; and it does not share a table with ordinary trace output, which
+`AppTraces` would — putting the PII-bearing records back in with general diagnostics, which is the
+separation this design exists to create.
+
+Cost, stated so it is not a surprise: `AuditLogger` takes a `TelemetryClient` dependency alongside
+its `ILogger`. That is the trade for the table boundary.
 
 **2. Suppression from the console provider**, which is the part that actually protects the table:
 
