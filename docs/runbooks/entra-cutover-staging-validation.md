@@ -390,4 +390,9 @@ its Container App secret comes from the Key Vault secret `entra-mcp-client-secre
 two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a
 `trap … EXIT INT TERM HUP` so an interrupted run cannot leave a private vault reachable. The code
 ships ahead of the configuration and is inert until `OAuth__UpstreamResourceScope` is set, so setting
-the variables is the whole change and reverting them is the whole rollback.
+the variables is the whole change.
+
+⚠️ **Reverting them is the whole rollback only where the Auth0 secret is still on the app.** That is
+production's position, not staging's: staging overwrote its one secret at the flip, so rolling *it*
+back means restoring that secret first — see *If something fails* above, which is the procedure for
+this target. A new target inherits whichever position it is built into.

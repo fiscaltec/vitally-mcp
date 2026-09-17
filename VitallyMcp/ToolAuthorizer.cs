@@ -32,7 +32,8 @@ namespace VitallyMcp;
 /// removed the fall-through. Note what that did and did not change, because the two live states differ:
 /// <b>today</b>, both targets sign in against Entra directly, so no Auth0 Action is in the path and the
 /// claim is simply <i>absent</i> from their tokens; <b>after an Auth0 rollback</b> the Action runs again
-/// and the claim is minted, but still <i>unread</i>, because
+/// and mints the claim <i>on production</i> — its guard returns before adding one for staging's Resource
+/// Server, so a staging rollback stays claim-less — but a minted claim is still <i>unread</i>, because
 /// <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> stays on and #108 removed the only route from
 /// that mode to the claim. Unminted now, unreachable then — either way the tier does not come back, and
 /// a rollback restores the Action without restoring the fall-through. Keeping

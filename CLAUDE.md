@@ -1131,9 +1131,16 @@ Verified when written by running it both ways round: it **passes** against a loc
 ### The Auth0 → Entra cutover (#108) and its rollback
 
 Config-only, and deliberately so: the code shipped ahead of the switch and behaves identically until
-`OAuth__UpstreamResourceScope` is set, so **rolling back is reverting environment variables** — no
-redeploy, no revision pin. Keep it that way. If a future change ends up gated on the authority value,
-say so loudly rather than letting the rollback quietly stop being a config revert.
+`OAuth__UpstreamResourceScope` is set — no redeploy, no revision pin. Keep it that way. If a future
+change ends up gated on the authority value, say so loudly rather than letting the rollback quietly
+stop being a config revert.
+
+⚠️ **"Rolling back is reverting environment variables" is true of production only.** Production kept
+its Auth0 secret under the original name at the flip, so reverting its five variables is the whole
+operation. **Staging overwrote that secret**, so a staging rollback has to put the Auth0 value back
+*first* — revert the variables alone and the new revision pairs the Auth0 client id with the Entra
+secret, and every sign-in fails `invalid_client` while `/health` stays 200. Both steps, in that
+order, are in the rollback appendix below.
 
 Five variables per target, and the secret behind the sixth:
 
