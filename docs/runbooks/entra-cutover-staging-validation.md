@@ -292,8 +292,17 @@ Staging rolls back in **two** steps. Both are required, and the order matters:
    It is on *production's* Container App and is readable, so this needs no vault window. The two
    commands are in *The Auth0 → Entra cutover and its rollback* in `CLAUDE.md`, which is the only
    place they are written down.
-2. **Then** revert the `OAuth__*` variables — same section for the values, and note that staging's
-   `OAuth__Audience` is its **own** Auth0 Resource Server, not production's.
+2. **Then** revert the `OAuth__*` variables. **Do not paste production's command from `CLAUDE.md`** —
+   its `OAuth__Audience` is production's Resource Server, and staging has its own. Staging's:
+
+   ```bash
+   az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \n     --set-env-vars \n       "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \n       "OAuth__Audience=https://vitally-staging.fiscaltec.com/" \n       "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D" \n       "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret" \n     --remove-env-vars OAuth__UpstreamResourceScope
+   ```
+
+   `OAuth__Resource` and `OAuth__PublicBaseUrl` are untouched — they name staging's origin under either
+   provider. ⚠️ The audience and client id above are **derived** from the retained Auth0 Resource
+   Server recorded in `CLAUDE.md`, not read back from the Auth0 tenant, and nothing has exercised this
+   path since the flip. Confirm them in Auth0 before relying on them.
 
 **In that order, and the reason is the revision model.** `az containerapp secret set` does **not**
 roll a revision — the running one keeps serving with the value it already loaded — whereas

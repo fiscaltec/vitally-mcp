@@ -388,11 +388,15 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
 // authorisation-code theft; never widen it. What follows validation is the substitution: save the
 // client's URI keyed by `state`, send our own fixed callback upstream, and at /oauth/callback look
 // the original up and redirect there. That is what lets random loopback ports and claude.ai's
-// hosted callback coexist with one registration. Be precise about why, because the providers differ:
-// Auth0 has no loopback wildcard at all, whereas Entra DOES ignore the port on `http://localhost`
-// for public clients — so loopback alone would not have needed this. The hosted HTTPS callback does:
-// Entra requires every non-loopback redirect URI to be registered exactly, and we are a confidential
-// client with one registration serving every MCP client.
+// hosted callback coexist with one registration — and that is needed for EVERY client redirect_uri
+// here, loopback included. Entra does have a loopback exemption (it ignores the port on
+// `http://localhost`) but it applies to PUBLIC clients, and this registration is not one: entra.tf
+// declares a `web {}` block with two fixed HTTPS callbacks, i.e. a confidential client, which is what
+// lets the proxy inject the secret at /oauth/token. So the substitution is load-bearing for loopback
+// too, not only for claude.ai's hosted callback. Auth0 had no loopback wildcard at all.
+//
+// Do not narrow this to "only the hosted callback needs it" on the strength of Entra's general
+// loopback behaviour — that exemption is real and simply does not reach this app.
 app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
