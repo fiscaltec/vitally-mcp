@@ -6,10 +6,24 @@ using Microsoft.Extensions.Options;
 namespace VitallyMcp;
 
 /// <summary>
-/// Emits per-user audit records for Vitally actions. Called from <see cref="VitallyService.SendAsync"/>
-/// so every tool is covered in one place. Records the caller's Entra <b>object id</b> (see
-/// <see cref="CallerIdentity"/>), the HTTP verb, target resource path and outcome, using structured
-/// logging so the named properties are shaped as queryable dimensions.
+/// Emits per-user audit records for Vitally actions, using structured logging so the named properties
+/// are shaped as queryable dimensions. Every record is keyed on the caller's identity as
+/// <see cref="ResolveUserId(ClaimsPrincipal?)"/> resolves it — Entra <b>object id</b> first (see
+/// <see cref="CallerIdentity"/>), then the raw <c>sub</c>, then <c>NameIdentifier</c>, then
+/// <c>unknown</c>; an unauthenticated caller is <c>anonymous</c>.
+/// <para>
+/// <b>Three record shapes, not one</b>, because they are emitted at different points:
+/// <list type="bullet">
+///   <item><see cref="LogAction"/> — from <see cref="VitallyService.SendAsync"/> after each upstream
+///     response: identity, verb, resource path (query string stripped), status.</item>
+///   <item><see cref="LogDenied"/> — from the same choke point on an RBAC refusal: identity, verb,
+///     path. <b>No status</b>, because the call never happened.</item>
+///   <item><see cref="LogToolCallDenied"/> — from the SDK <c>[Authorize]</c> checkpoint, which rejects
+///     <i>before</i> <c>SendAsync</c> runs: identity, tool name, required permission. <b>No verb or
+///     path</b>, because no upstream call was attempted. This exists precisely because
+///     <see cref="LogDenied"/> would never see a tier mismatch.</item>
+/// </list>
+/// </para>
 /// <para>
 /// ⚠️ <b>Two things this comment used to claim are no longer true.</b> First, the records are
 /// <i>not</i> queryable: nothing this server logs has ever reached Application Insights or Log
