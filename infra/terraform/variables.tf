@@ -199,7 +199,7 @@ variable "oauth_shared_client_secret" {
 
 variable "auth0_rollback_client_secret" {
   type        = string
-  description = "The retained AUTH0 client secret, still held on the production Container App as 'oauth-shared-client-secret'. Nothing reads it while both targets run Entra; it exists so a rollback needs no Key Vault window. Remove it, and this variable, when Auth0 is retired (#102)."
+  description = "The retained AUTH0 client secret. Terraform DOES consume this — it populates the production Container App secret 'oauth-shared-client-secret' — so it is a required input, not a vestigial one. What does not read it is the running app, whose OAuth__SharedClientSecret points at 'entra-oauth-client-secret' instead. It exists so a rollback needs no Key Vault window. Remove it, and this variable, when Auth0 is retired (#102)."
   sensitive   = true
 }
 

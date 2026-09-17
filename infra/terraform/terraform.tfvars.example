@@ -11,8 +11,9 @@
 # They stay separate variables only until #102 collapses them.
 #
 # `auth0_rollback_client_secret` is a THIRD, different value: the retained Auth0 client secret, still
-# on the production Container App so a rollback needs no Key Vault window. Nothing reads it. It goes
-# when Auth0 is retired.
+# on the production Container App so a rollback needs no Key Vault window. Terraform consumes it to
+# populate that secret, so it must be supplied; what does not reference it is the running app, whose
+# OAuth__SharedClientSecret points at `entra-oauth-client-secret`. It goes when Auth0 is retired.
 
 oauth_shared_client_secret         = "<Entra app client secret, Key Vault 'entra-mcp-client-secret' — PRODUCTION>"
 auth0_rollback_client_secret       = "<retained Auth0 client secret — PRODUCTION rollback only>"
