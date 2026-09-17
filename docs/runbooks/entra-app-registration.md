@@ -314,9 +314,21 @@ the practical route.
 
 ## Client secret
 
-Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth`, referenced by the Container App
-through the user-assigned managed identity (`Key Vault Secrets User`) — the same pattern as
-`vitally-shared`.
+Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth` — as the **record of the value**.
+
+⚠️ **It is NOT the `vitally-shared` pattern, and the difference decides how rotation works.**
+`vitally-shared` really is fetched from Key Vault at runtime by the managed identity, through
+`VitallyApiKeyProvider`. This secret is not fetched by the app at all. It was **copied** into a
+Container App secret at the flip — `entra-oauth-client-secret` on production,
+`oauth-shared-client-secret` on staging — and `OAuth__SharedClientSecret` is a `secretRef` to that
+copy. Verified 2026-09-17: `properties.configuration.secrets[].keyVaultUrl` is empty on both apps,
+so neither is a Key Vault reference.
+
+```bash
+# what the app actually reads — a secretRef, not a vault URI
+az containerapp show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
+  --query "properties.configuration.secrets[].{name:name,keyVaultUrl:keyVaultUrl}" -o table
+```
 
 | | |
 |---|---|
@@ -427,9 +439,27 @@ rm -f secret.txt pw.json
 
 ### Rotation
 
-Same four steps, then **delete the superseded credential** by `keyId` once the Container App has
-picked up the new value (it caches Key Vault reads for `Vitally:SecretCacheDuration`, default 5
-minutes):
+⚠️ **This procedure was wrong as previously written, and following it would cause an outage at
+the last step.** No rotation has been performed yet — the secret was created 2026-09-02 and has not
+been due. It said to wait for the Container App to "pick up" a new Key Vault value within
+`Vitally:SecretCacheDuration` and then delete the old credential. Neither half holds: the app never
+reads Key Vault for this secret (see *Client secret* above), and `Vitally:SecretCacheDuration`
+governs the **Vitally API key** cache in `VitallyApiKeyProvider`, nothing here. Updating Key Vault
+alone changes nothing the app sends, so the wait achieves nothing and the delete removes the
+credential still in live use — every token exchange then fails `invalid_client`.
+
+**What a rotation actually has to touch**, in order. The full procedure has never been exercised and
+the wording below is deliberately a list of required effects rather than a script to paste — #138
+tracks writing and dry-running it before the **2027-03-01** expiry:
+
+1. Create the new Entra credential, overlapping the old one (never delete first).
+2. Update the Key Vault secret, which keeps the record and the expiry the scanner alerts on.
+3. **Update the Container App secret on every target** — this is the step that changes what the app
+   sends, and the one the old procedure omitted entirely.
+4. **Roll a revision.** `az containerapp secret set` does **not** roll one, so the running revision
+   keeps serving the old value until something else rolls it.
+5. Verify a real token exchange succeeds on the new revision.
+6. **Only then** delete the superseded credential by `keyId`:
 
 ```bash
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
