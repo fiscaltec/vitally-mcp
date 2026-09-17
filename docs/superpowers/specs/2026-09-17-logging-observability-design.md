@@ -27,7 +27,17 @@ partially and the other two barely at all:
 
 ## Verified current state (2026-09-17)
 
-All of the following was measured against production, not inferred.
+All of the following was verified rather than inferred, but by two different methods, and the
+distinction matters when re-checking it:
+
+- **Measured against production** — the KQL results, the `Usage` breakdown, the absence of
+  `MICROSOFT.APP` rows, the live console sample and its category counts, the Azure resource settings,
+  and the workspace role-assignment counts.
+- **Read from this repository** — the 14-call-site inventory, the absence of `Activity`/`Meter`, the
+  `.gitignore`/`.dockerignore` exclusions, and `appsettings.Example.json` being inert.
+
+The second set describes the code as committed, so it holds for any deployment of this revision; the
+first describes FISCAL's production estate on that date only.
 
 ### Nothing from the application arrives
 
@@ -349,15 +359,20 @@ the AMPLS was never the gate.
 
 Consequences, in order:
 
-1. Add a diagnostic setting on the CAE for **`ContainerAppConsoleLogs` and `ContainerAppSystemLogs`**,
-   exported **resource-specific** (a real table, not `_CL`, which is also what makes per-table
-   retention possible).
+1. Add a diagnostic setting on the CAE, exported **resource-specific** (a real table, not `_CL`,
+   which is also what makes per-table retention possible), in **two steps**:
 
-   **Both categories, because the justification needs both.** A `StartupGuards` failure throws and
-   writes to *stdout* → console logs; container crashes, OOM kills and scaling events are platform
-   events → system logs. An earlier draft enabled console only while citing crashes and OOM as the
-   reason to keep this setting at all, which would not have delivered the coverage it claimed.
-   System logs are low volume.
+   - **2a, immediately: `ContainerAppSystemLogs`.** Platform events — crashes, OOM kills, scaling,
+     revision changes. No customer data, no dependency on a code change, and it covers the most
+     acute gap: today the app can die leaving no record anywhere. Low volume.
+   - **2b, gated on phases 3 and 4: `ContainerAppConsoleLogs`.** Only once `AuditLogger` has moved
+     to `TrackEvent` and console suppression is in place, or this exports the customer identifiers
+     the data map says this table must not hold.
+
+   Note that neither alone covers everything: a `StartupGuards` failure throws and writes to
+   *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Until 2b
+   lands, read startup failures from the live stream with
+   `az containerapp logs show --type console`.
 2. Verify records arrive.
 3. **Re-lock `publicNetworkAccessForIngestion`** to `Disabled`, restoring the hardening opened on
    2026-09-17 while this was being diagnosed.
@@ -457,22 +472,34 @@ personal data — see the policy section.
 | 0 | query path open | **done** 2026-09-17 |
 | 1 | audit reads by default | **done** — #139 / PR #140 |
 | 3 | logging configuration: noise + `HttpClient` PII | — |
-| 2 | diagnostic setting; verify arrival; re-lock ingestion | **3** |
+| **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | — |
+| **2b** | add **`ContainerAppConsoleLogs`** to that setting | 3, **4** |
 | **3a** | **access review — a gate, not a task**: confirm the 5 users are appropriate, review the 28 service principals, decide on table-level RBAC | — |
 | 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
 | 7 | routing and retention per tier | 2, 4, measured volume |
 
-⚠️ **3 must come before 2, and an earlier draft had them independent — which was wrong.** Phase 2
-turns on export of the *whole* console stream, and that stream today carries the `HttpClient` URLs
-with search terms (#143) plus `AuditLogger`'s object ids and resource paths. Enabling export first
-would ingest exactly the customer identifiers the data map says `ContainerAppConsoleLogs` must not
-hold, into the table with the **shortest** retention and the **broadest** access — the opposite of
-where the policy reversal put that data deliberately.
+⚠️ **Console export is split out as 2b and gated, because the console stream carries customer
+identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in
+succession: the first had 2 and 3 independent; the second gated 2 on 3, which is still not enough,
+because phase 3 is noise and `HttpClient` filtering only — `AuditLogger` keeps writing object ids and
+resource paths to stdout until **phase 4** moves it to `TrackEvent` and adds the
+`ConsoleLoggerProvider` suppression.
 
-The temptation is real, because 2 is an Azure setting that takes a minute and 3 is a code change
-needing a deploy. Do them in the order that does not contaminate the table.
+So exporting console logs any earlier puts customer identifiers into
+`ContainerAppConsoleLogs` — the table with the **shortest** retention and the **broadest** access, and
+the one the data map declares customer-data-free. That is the opposite of where the policy reversal
+deliberately placed that data.
+
+**2a is not gated, and that is the point of splitting it.** `ContainerAppSystemLogs` carries platform
+events — crashes, OOM kills, scaling, revision changes — with no customer data and no dependency on
+any code change. It delivers the "the app died and we have no record" coverage immediately, which is
+the most acute gap, and it lets the ingestion re-lock happen straight away rather than waiting on
+phases 3 and 4.
+
+The temptation to do all of 2 at once is real, because it is an Azure setting that takes a minute
+while 3 and 4 are code changes needing a deploy. Split it.
 
 3 also comes before 4–6, so new records are not added to an unfiltered stream.
 
