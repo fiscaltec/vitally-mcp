@@ -333,9 +333,10 @@ its `ILogger`. That is the trade for the table boundary.
 builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLevel.None);
 ```
 
-Provider-specific, so audit records reach App Insights and **not** stdout. Without it, phase 2 exports
-them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad access,
-and a table documented as customer-data-free while carrying names and search terms.
+Provider-specific, so audit records reach App Insights and **not** stdout. Without it, **phase 2b**
+exports them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad
+access, and a table documented as customer-data-free while carrying names and search terms. This
+suppression is precisely why 2b is gated on phase 4 rather than shipping with 2a.
 
 Verify it by sampling the console stream after deploy and confirming no `Vitally audit:` line appears,
 rather than by reading the configuration.
@@ -371,8 +372,12 @@ Consequences, in order:
 
    Note that neither alone covers everything: a `StartupGuards` failure throws and writes to
    *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Until 2b
-   lands, read startup failures from the live stream with
-   `az containerapp logs show --type console`.
+   lands, read startup failures from the live stream, which is independent of the export path:
+
+   ```bash
+   az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
+     --type console --tail 100
+   ```
 2. Verify records arrive.
 3. **Re-lock `publicNetworkAccessForIngestion`** to `Disabled`, restoring the hardening opened on
    2026-09-17 while this was being diagnosed.
@@ -478,7 +483,7 @@ personal data — see the policy section.
 | 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
-| 7 | routing and retention per tier | 2, 4, measured volume |
+| 7 | routing and retention per tier | **2a, 2b**, 4, measured volume |
 
 ⚠️ **Console export is split out as 2b and gated, because the console stream carries customer
 identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in
