@@ -127,10 +127,24 @@ public class AuditLoggerTests
         message.Should().NotContain("limit=20", "the query string must be stripped from the audit record");
     }
 
+    /// <summary>
+    /// The default is the control, so it is asserted on <see cref="AuditOptions"/> itself rather than
+    /// through the helper above — which carries its own <c>includeReads: false</c> and would keep
+    /// passing if the real default regressed. Reads are 56 of the 93 tools, and this is the only
+    /// record of who accessed which customer record, so a false default means no meaningful trail.
+    /// It was false until 2026-09-17 and no deployed target overrode it (#139).
+    /// </summary>
     [Fact]
-    public void LogAction_SkipsReads_ByDefault()
+    public void IncludeReads_DefaultsToTrue()
     {
-        var (audit, logger) = Build(user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
+        new AuditOptions().IncludeReads.Should().BeTrue(
+            "reads are the only record of who accessed which customer record; turning them off must be a deliberate choice");
+    }
+
+    [Fact]
+    public void LogAction_SkipsReads_WhenIncludeReadsDisabled()
+    {
+        var (audit, logger) = Build(includeReads: false, user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
         audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/accounts", 200);
         logger.Entries.Should().BeEmpty();
     }
