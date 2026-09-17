@@ -8,8 +8,10 @@
 # federated credential) is persistent scaffolding that deliberately survives a teardown — see the
 # teardown table in CLAUDE.md before deleting any of it.
 #
-# WHY IT EXISTS. Authentication has the largest blast radius in this system, so the Entra migration
-# (#102) is validated here before production. The alternatives were both rejected: a local server
+# WHY IT EXISTS. Authentication has the largest blast radius in this system, so identity-provider
+# changes are validated here before production — which is what happened for the Entra migration
+# (#102): staging ran it from 2026-09-03 and production followed on 2026-09-16. It remains the
+# pre-production target for the next such change. The alternatives were both rejected: a local server
 # behind an ephemeral HTTPS tunnel orphans one identity-provider app registration per run (identifier
 # URIs are immutable and must equal the server origin), and validating straight against production is
 # the failure mode the staging-first design exists to avoid.
@@ -42,12 +44,18 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # NOT the same value as production's, despite the identical Container App secret name. Staging
-  # flipped to Entra on 2026-09-03 and production has not, so this holds the *Entra* app's secret
-  # while `containerapps.tf` holds the *Auth0* client's. Handing production's secret to staging (or
-  # the reverse) is a silent authentication failure at the token exchange, not a startup error.
-  # Reunify the two variables once production flips — the Entra registration's redirect URIs already
-  # carry both origins' /oauth/callback, so one secret will serve both again.
+  # The SAME value as production's, under a different Container App secret name. Both targets run the
+  # one Entra app registration — staging since 2026-09-03, production since 2026-09-16 — so this and
+  # production's `entra-oauth-client-secret` hold the same secret. Production kept the name
+  # `oauth-shared-client-secret` for the retained *Auth0* value instead, which is what lets a
+  # production rollback change nothing but variables. Staging has only this one name, so a staging
+  # rollback must put its Auth0 secret back first — copied from production's Container App, NOT from
+  # Key Vault, which holds only entra-mcp-client-secret and vitally-shared. Commands in CLAUDE.md.
+  #
+  # Handing the wrong secret to either app is not caught at startup: the app boots and /health passes.
+  # It surfaces at the token exchange as an authentication error from the provider, so sign-in fails for
+  # everyone while the app looks healthy. Collapse the variables and the names when Auth0 is retired
+  # (#102).
   secret {
     name  = "oauth-shared-client-secret"
     value = var.staging_oauth_shared_client_secret
@@ -108,9 +116,14 @@ resource "azurerm_container_app" "staging" {
         name  = "AZURE_CLIENT_ID"
         value = var.managed_identity_client_id
       }
-      # Staging is pointed at a new identity provider first and production follows once it has
-      # passed. Staging has been on Entra since 2026-09-03; **production is still on Auth0** until
-      # the #108 configuration flip is applied there, so the two deliberately differ here.
+      # Standing policy: a new identity provider goes to staging first and production follows only
+      # once it has passed there. That is how the Entra move ran — staging 2026-09-03, production
+      # 2026-09-16, both complete — so the five IDENTITY variables now agree and are ready to be collapsed onto the
+      # oauth_* ones: authority, audience, upstream_resource_scope, shared_client_id and the secret
+      # value. NOT staging_oauth_resource or staging_public_base_url — each target publishes its own
+      # origin, and collapsing those makes staging advertise production's, which strict RFC 9728
+      # clients reject. Tracked in #102; not done here to keep this change to current-state
+      # corrections.
       env {
         name  = "OAuth__Authority"
         value = var.staging_oauth_authority

@@ -18,8 +18,9 @@ namespace VitallyMcp.Tests;
 /// </summary>
 /// <remarks>
 /// A separate fixture rather than extra cases on the existing ones, because the switch is a
-/// composition-time option and the two postures must both stay pinned: the Auth0 relay is still live
-/// in production until the cutover deploys, and it is what a rollback returns to.
+/// composition-time option and the two postures must both stay pinned. Both targets terminate the
+/// parameter now — staging since 2026-09-03, production since 2026-09-16 — and the Auth0 relay is
+/// what a rollback returns to, so it stays covered here for as long as that rollback is retained.
 /// </remarks>
 public class OAuthProxyResourceTerminationTests : IClassFixture<OAuthProxyResourceTerminationTests.Factory>
 {

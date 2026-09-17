@@ -10,7 +10,7 @@ Point your MCP client at:
 https://vitally.fiscaltec.com/mcp
 ```
 
-On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Production currently reaches Entra via Auth0 federation; staging goes to Entra directly, and production will once the #108 switch is made. Either way you sign in with your normal Microsoft account and see the same screen.)
+On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Both production and staging go to Entra directly — production since 2026-09-16. You sign in with your normal Microsoft account.)
 
 **Claude Code** — run:
 
@@ -91,8 +91,8 @@ regardless of any `sg-vitally-*` membership.
 >
 > | App | Role |
 > |---|---|
-> | **FISCAL IT Auth0** | gates production sign-in **today** |
-> | **Vitally MCP** | gates staging today, and production once the switch is made |
+> | **Vitally MCP** | gates sign-in on **both** production and staging |
+> | **FISCAL IT Auth0** | no longer gates sign-in — retained as the rollback, so it must stay at parity |
 >
 > Assigning only one is the single most common way to break access here, and it has happened twice —
 > because this page used to name only *FISCAL IT Auth0*. A department assigned to just one app works
@@ -228,7 +228,7 @@ request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is
 
 ## How it's set up (in brief)
 
-- **Sign-in:** Microsoft Entra — reached via Auth0 federation on production today, directly on staging, and directly on production once the #108 switch is made. FISCAL staff sign in with their normal Microsoft account in every case.
+- **Sign-in:** Microsoft Entra, directly, on both production and staging (production since 2026-09-16). FISCAL staff sign in with their normal Microsoft account.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
 - **Auditing:** every action is logged with the acting user's Entra object id (resolvable with `az ad user show --id`; never their email), the operation and the outcome — queryable in Application Insights / Log Analytics.
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.

@@ -167,8 +167,9 @@ resource "azuread_service_principal" "vitally_mcp" {
   client_id = azuread_application.vitally_mcp.client_id
   owners    = [data.azuread_client_config.current.object_id]
 
-  # Gate 1 — sign-in is restricted to principals assigned below, mirroring what
-  # `FISCAL IT Auth0` enforces today.
+  # Gate 1 — sign-in is restricted to principals assigned below. This app enforces it for both
+  # targets since the 2026-09-16 flip; `FISCAL IT Auth0` must keep an identical list only so a rollback
+  # does not lock anyone out.
   app_role_assignment_required = true
 }
 
@@ -209,11 +210,11 @@ resource "azuread_app_role_assignment" "gate1" {
 # ---------------------------------------------------------------------------------------------
 
 output "entra_app_client_id" {
-  description = "appId of the Vitally MCP Entra app — becomes OAuth:SharedClientId at the #108 cutover."
+  description = "appId of the Vitally MCP Entra app — the live OAuth:SharedClientId on both targets since the 2026-09-16 cutover."
   value       = azuread_application.vitally_mcp.client_id
 }
 
 output "entra_app_id_uri" {
-  description = "App ID URI — becomes OAuth:Audience at cutover. Note the ABSENCE of a trailing slash, unlike OAuth:Resource."
+  description = "App ID URI — the live OAuth:Audience on both targets since the 2026-09-16 cutover. Note the ABSENCE of a trailing slash, unlike OAuth:Resource."
   value       = one(azuread_application.vitally_mcp.identifier_uris)
 }

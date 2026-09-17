@@ -31,7 +31,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
 | ~~Subnet (func)~~ | ~~`snet-func`~~ | **Never built** — the scanner became a Container Apps Job, which needs no subnet of its own |
-| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (while it remains the production sign-in path), Vitally, Graph, Teams |
+| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (retained for the rollback only since the 2026-09-16 flip — egress kept so a rollback works), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
 | KV private endpoint | `vitally-prod-pe-kv-uksouth` | in `snet-pe` |

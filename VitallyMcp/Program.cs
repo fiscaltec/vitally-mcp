@@ -46,7 +46,7 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureC
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
 // Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
 // unreachable Graph can stall a tool call; it does NOT buy a fallback. #108 removed the
-// token-claim route, so what a timeout reaches is the retained stale set
+// fall-through to the token claim, so what a timeout reaches is the retained stale set
 // (Authorization:LiveGroupStaleSeconds) and, past that window, a denial — see
 // GraphGroupPermissionResolver. This comment said "degrades to the token-claim fallback"
 // for long enough to outlive the fallback itself.
@@ -315,8 +315,14 @@ static string GetServerBaseUrl(HttpContext ctx, string? publicBaseUrl)
 // resource-path-suffixed variant (…/mcp) that RFC 9728 and the MCP SDK prefer. Clients probe
 // either, so serving both removes a discovery failure mode. Points clients at the authorization
 // server, which for the DCR-proxy variant is *us* (so we can intercept registration). The actual
-// token issuance still happens at Auth0 — our discovery doc points to Auth0's endpoints for
-// everything except registration_endpoint.
+// Token ISSUANCE still happens upstream, but almost none of the RFC 8414 document points there.
+// `authorization_endpoint`, `token_endpoint` and `registration_endpoint` are all OURS — clients talk
+// to the proxy, which forwards — and only `jwks_uri` and `userinfo_endpoint` name the provider.
+// Do not "correct" the first three to the upstream URLs: that bypasses the proxy, so the DCR shim
+// never runs and /oauth/callback never injects `iss`. Note what this does NOT rest on — RFC 8414
+// §3.3 constrains the `issuer` FIELD to the origin that served the document, and says nothing about
+// where the endpoint URLs point. §3.3 is why `issuer` names us (see below); the endpoints are ours
+// because the proxy has to be in the path at all. See the façade section in CLAUDE.md.
 // Serialised with the SDK's own options rather than the ASP.NET Core defaults, because those
 // write every unset optional property as an explicit `null`. RFC 9728 §3.2 says an unused
 // metadata parameter is *omitted*, and strict clients enforce the difference: the published
@@ -333,10 +339,10 @@ app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetad
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
 // `issuer` names our *own* origin, not Auth0's. §3.3 requires the issuer to correspond to the URL
 // the document was fetched from (an anti-mix-up control), and from the client's point of view we
-// genuinely are the authorization server: authorize, token and register are all ours. Auth0 still
-// issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream — and why they
-// are read from the provider's own discovery document rather than assembled from Authority, which
-// only ever produced Auth0-shaped paths. Declaring our origin here is coupled to the `iss` injection
+// genuinely are the authorization server: authorize, token and register are all ours. The upstream
+// provider still issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream —
+// and why they are read from its own discovery document rather than assembled from Authority, whose
+// concatenation only ever produced Auth0-shaped paths and cannot produce Entra's. Declaring our origin here is coupled to the `iss` injection
 // in /oauth/callback below — see the façade section in CLAUDE.md before changing either.
 app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IOptions<OAuthOptions> oauth, UpstreamOidcMetadata upstream) =>
 {
@@ -371,12 +377,26 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
     });
 });
 
-// OAuth 2.0 Authorization Code proxy. The `Vitally MCP — Claude Code (shared)` Auth0 app
-// has a single fixed callback URL (our /oauth/callback) — we accept any client redirect_uri
-// here, save the mapping, replace with our fixed URL for the upstream Auth0 request, and
-// at /oauth/callback look the original up and redirect there. This sidesteps Auth0's lack
-// of RFC 8252 loopback wildcard support and lets random localhost ports + claude.ai's
-// hosted callback URL coexist with one Auth0 app.
+// OAuth 2.0 Authorization Code proxy. The shared upstream app — the Entra registration
+// `Vitally MCP` on both deployed targets — registers ONE callback per origin
+// (`https://vitally.fiscaltec.com/oauth/callback` and the staging equivalent), not one globally:
+// each target sends its own, so removing either breaks that target's sign-in.
+//
+// The client's `redirect_uri` is VALIDATED, not merely accepted — `IsRedirectUriAllowed` permits
+// RFC 8252 loopback URIs on any port plus the configured `AllowedClientRedirectUris`, and rejects
+// everything else. That check is the only thing between this proxy and an open redirector with
+// authorisation-code theft; never widen it. What follows validation is the substitution: save the
+// client's URI keyed by `state`, send our own fixed callback upstream, and at /oauth/callback look
+// the original up and redirect there. That is what lets random loopback ports and claude.ai's
+// hosted callback coexist with one registration — and that is needed for EVERY client redirect_uri
+// here, loopback included. Entra does have a loopback exemption (it ignores the port on
+// `http://localhost`) but it applies to PUBLIC clients, and this registration is not one: entra.tf
+// declares a `web {}` block with two fixed HTTPS callbacks, i.e. a confidential client, which is what
+// lets the proxy inject the secret at /oauth/token. So the substitution is load-bearing for loopback
+// too, not only for claude.ai's hosted callback. Auth0 had no loopback wildcard at all.
+//
+// Do not narrow this to "only the hosted callback needs it" on the strength of Entra's general
+// loopback behaviour — that exemption is real and simply does not reach this app.
 app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oauth, IMemoryCache cache, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
@@ -600,8 +620,12 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
 
     // Confidential-client auth: inject the secret server-side. Clients (Claude Code etc.)
     // never see it — they post as if they were a public client, we add the secret on the way
-    // upstream. This is what lets the shared Auth0 app be "verifiable first-party" and skip
-    // the consent screen.
+    // upstream. This authenticates the token exchange and nothing else — it is NOT what suppresses the
+    // consent screen, and conflating the two invites removing the wrong setting. Consent suppression is
+    // provider-side configuration this code never touches: on Entra, tenant-wide admin consent plus
+    // `api.preAuthorizedApplications` naming the app itself; on Auth0 — the rollback —
+    // `skip_consent_for_verifiable_first_party_clients`. Remove the secret injection and the token
+    // exchange fails; remove the provider-side settings and every user sees a consent prompt instead.
     if (!string.IsNullOrWhiteSpace(o.SharedClientSecret))
     {
         pairs.RemoveAll(p => p.Key == "client_secret");

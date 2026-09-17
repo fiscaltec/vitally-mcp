@@ -34,9 +34,22 @@ resource "azurerm_container_app" "app" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
+  # TWO secrets, and both are load-bearing. `entra-oauth-client-secret` is what the app uses;
+  # `oauth-shared-client-secret` still holds the **Auth0** client secret and is the reason a
+  # rollback needs no Key Vault window. The 2026-09-16 flip added the Entra value under a new name
+  # rather than overwriting the Auth0 one, precisely so the old value survived.
+  #
+  # Do not "tidy" these into one. Collapsing them discards the rollback credential, and this
+  # capture would then no longer reproduce the live app — which is the point of it existing.
+  # They merge when Auth0 is retired (#102).
+  secret {
+    name  = "entra-oauth-client-secret"
+    value = var.oauth_shared_client_secret
+  }
+
   secret {
     name  = "oauth-shared-client-secret"
-    value = var.oauth_shared_client_secret
+    value = var.auth0_rollback_client_secret
   }
 
   ingress {
@@ -119,7 +132,7 @@ resource "azurerm_container_app" "app" {
       }
       env {
         name        = "OAuth__SharedClientSecret"
-        secret_name = "oauth-shared-client-secret"
+        secret_name = "entra-oauth-client-secret"
       }
       env {
         name  = "OAuth__AllowedClientRedirectUris__0"

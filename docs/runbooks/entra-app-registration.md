@@ -1,12 +1,13 @@
 # Entra app registration — Vitally MCP (#107)
 
-The app registration that **will replace** the Auth0 client + Resource Server pair at the #108
-cutover. Live on staging; **production has not been flipped yet.** It is **both** the shared OAuth client and the API resource, because that is what the
+The app registration that **replaced** the Auth0 client + Resource Server pair at the #108 cutover.
+Live on **both** targets — staging since 2026-09-03, production since 2026-09-16. Auth0 is retained as
+the rollback only. It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
-Serving staging since 2026-09-03. **Production still signs in through Auth0.** The cutover code is merged and deployed, but it is inert until `OAuth__UpstreamResourceScope` and the other four `OAuth__*` variables are set, and that configuration flip has not happened yet. Staging runs Entra.
+Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first, and ran from the moment it shipped — OIDC discovery, the proxy and the `resource` validation were all live on production before the flip. What stayed inert was the Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relayed `resource` exactly as it always had. Setting that and the other four `OAuth__*` variables is what the flip did.
 
 | | |
 |---|---|
@@ -19,7 +20,7 @@ Serving staging since 2026-09-03. **Production still signs in through Auth0.** T
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
 | Sign-in gate | `appRoleAssignmentRequired = true` + nine department groups, assigned **directly** |
-| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-03-01 |
+| Client secret | Entra credential `keyId` `e17e0e9e-…`, expires 2027-03-01. The vault's `entra-mcp-client-secret` is the **record**; what the app sends is a **copy** in each target's Container App secret — see *Client secret* below before rotating anything |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
 above (no slash, because Entra refuses to register one); `Resource` stays
@@ -168,7 +169,7 @@ The two gates are separate mechanisms and should stay that way:
 | | Question it answers | Mechanism |
 |---|---|---|
 | Gate 1 | may this person sign in at all? | direct department assignment on this app |
-| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, which is the live path on production today |
+| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, retained for the rollback window |
 
 Gate 2 is IdP-independent — it survives the cutover untouched.
 
@@ -224,9 +225,9 @@ fi
 app is skipped rather than re-POSTed, because Graph refuses a duplicate assignment and a naive loop
 would report the apps out of parity in the very state it had just fixed.
 
-**And it covers both apps on purpose — do not reduce it to one.** `FISCAL IT Auth0` is still the
-live production sign-in gate until the #108 configuration flip is applied, and the rollback path for
-a period after it; `Vitally MCP` gates staging now and production after. Omitting either locks the
+**And it covers both apps on purpose — do not reduce it to one.** `Vitally MCP` gates **both** targets since
+the 2026-09-16 flip. `FISCAL IT Auth0` gates nothing for this server any more — it is retained purely as
+the rollback, and its assignments matter only because a rollback would start using them again. Omitting either locks the
 new department out of that one, silently, until it is the app being used — which is exactly how
 Development and Data Science were missed, both times by following a procedure that named one app.
 
@@ -313,9 +314,21 @@ the practical route.
 
 ## Client secret
 
-Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth`, referenced by the Container App
-through the user-assigned managed identity (`Key Vault Secrets User`) — the same pattern as
-`vitally-shared`.
+Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth` — as the **record of the value**.
+
+⚠️ **It is NOT the `vitally-shared` pattern, and the difference decides how rotation works.**
+`vitally-shared` really is fetched from Key Vault at runtime by the managed identity, through
+`VitallyApiKeyProvider`. This secret is not fetched by the app at all. It was **copied** into a
+Container App secret at the flip — `entra-oauth-client-secret` on production,
+`oauth-shared-client-secret` on staging — and `OAuth__SharedClientSecret` is a `secretRef` to that
+copy. Verified 2026-09-17: `properties.configuration.secrets[].keyVaultUrl` is empty on both apps,
+so neither is a Key Vault reference.
+
+```bash
+# what the app actually reads — a secretRef, not a vault URI
+az containerapp show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
+  --query "properties.configuration.secrets[].{name:name,keyVaultUrl:keyVaultUrl}" -o table
+```
 
 | | |
 |---|---|
@@ -341,10 +354,18 @@ own creation on 2026-08-18, not from the day it was changed), and this secret wa
 > The first credential (`a7d71deb-…`, 12 months) was created and then replaced this way, which is why
 > the `keyId` above is not the one in the earlier commit message.
 
-> ⚠️ **An expired Key Vault secret cannot be read at all** — Key Vault refuses `GET` once `exp`
-> passes, it does not merely warn. So each expiry date above is a hard outage date: on 2027-02-14
-> the server stops being able to fetch the Vitally API key, and on 2027-03-01 the token exchange
-> stops working. The scanner's 30-day warning is the whole safety margin.
+> ⚠️ **Both dates are hard outage dates, but by two different mechanisms — do not renew the wrong
+> object.**
+>
+> | | 2027-02-14 — `vitally-shared` | 2027-03-01 — the OAuth client secret |
+> |---|---|---|
+> | What fails | the server cannot fetch the Vitally API key | `/oauth/token` returns `invalid_client`; every sign-in fails |
+> | Why | Key Vault refuses `GET` once `exp` passes — it does not merely warn | **Entra** rejects its own expired credential. Key Vault is not in this path at all |
+> | Renew | the Key Vault secret | the **Entra credential**, then the Container App copy on every target (see *Rotation*) |
+>
+> Letting the vault's `entra-mcp-client-secret` expire is therefore not itself an outage — but keep
+> its expiry in step anyway, because that is the only thing the scanner can see. The scanner's
+> 30-day warning is the whole safety margin for both.
 
 > ⚠️ **Set the expiry on the Key Vault secret, not only on the Entra credential.** The scheduled
 > scanner (`infra/terraform/scan/run.py`, a Container Apps Job) alerts on the **Key Vault secret's**
@@ -426,9 +447,32 @@ rm -f secret.txt pw.json
 
 ### Rotation
 
-Same four steps, then **delete the superseded credential** by `keyId` once the Container App has
-picked up the new value (it caches Key Vault reads for `Vitally:SecretCacheDuration`, default 5
-minutes):
+⚠️ **This procedure was wrong as previously written, and following it would cause an outage at
+the last step.** No rotation has been performed yet — the secret was created 2026-09-02 and has not
+been due. It said to wait for the Container App to "pick up" a new Key Vault value within
+`Vitally:SecretCacheDuration` and then delete the old credential. Neither half holds: the app never
+reads Key Vault for this secret (see *Client secret* above), and `Vitally:SecretCacheDuration`
+governs the **Vitally API key** cache in `VitallyApiKeyProvider`, nothing here. Updating Key Vault
+alone changes nothing the app sends, so the wait achieves nothing and the delete removes the
+credential still in live use — every token exchange then fails `invalid_client`.
+
+**What a rotation actually has to touch**, in order. The full procedure has never been exercised and
+the wording below is deliberately a list of required effects rather than a script to paste — #138
+tracks writing and dry-running it before the **2027-03-01** expiry:
+
+1. Create the new Entra credential, overlapping the old one (never delete first).
+2. Update the Key Vault secret — **and set the expiry explicitly, as a second call**.
+   `az keyvault secret set` writes a new *version*; follow it with `az keyvault secret
+   set-attributes --expires` carrying the new credential's `endDateTime`, exactly as creation
+   steps 2 and 3 above do. Do this whether or not a new version would inherit the old `exp` —
+   setting it is harmless either way, and the scanner's view of `attributes.exp` is the only
+   thing watching this deadline.
+3. **Update the Container App secret on every target** — this is the step that changes what the app
+   sends, and the one the old procedure omitted entirely.
+4. **Roll a revision.** `az containerapp secret set` does **not** roll one, so the running revision
+   keeps serving the old value until something else rolls it.
+5. Verify a real token exchange succeeds on the new revision.
+6. **Only then** delete the superseded credential by `keyId`:
 
 ```bash
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
@@ -456,20 +500,21 @@ configuration — worth raising after #108 rather than during it.
   a separate object in `identity.tf`.
 - **No implicit grant.** Authorization code + PKCE only.
 
-## The cutover (#108) — code deployed 2026-09-03, production flip outstanding
+## The cutover (#108) — code deployed 2026-09-03, flip complete 2026-09-16
 
-Config-only, as designed — and only half applied. **Staging** was flipped on 2026-09-03 and has run
-Entra since; **production** still signs in through Auth0, because the five `OAuth__*` variables have
-not been set there. The code is deployed to both and *runs* on both — the OIDC discovery, the
-proxy and the `resource` validation are all live on production today. What is inactive there is the
-Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relays `resource` exactly as
-it did before, which is why the deploy was a no-op and the flip is the whole change.
+Config-only, as designed, and now **fully applied**. **Staging** was flipped on 2026-09-03; **production**
+followed on 2026-09-16 once the five `OAuth__*` variables were set there. The code had been deployed to both
+and running on both throughout — the OIDC discovery, the proxy and the `resource` validation were live
+on production before the flip. What the flip changed was the **posture**: with
+`OAuth__UpstreamResourceScope` empty the proxy had been relaying `resource` exactly as it always had,
+which is why the deploy was a no-op and setting the variables was the whole change. Both targets now
+terminate `resource` and name the API by scope; the relay is the rollback posture.
 
 The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → Entra cutover (#108)
 and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is
 what the cutover **learned about this registration**, since that is what the next person changing it
 needs — and those lessons come from the staging flip and the validation against the live tenant, so
-they hold regardless of when production follows.
+they held for the staging flip and still hold now that production has followed.
 
 ### `resource` had to be dropped, not reshaped — and the reason recorded earlier was wrong
 

@@ -1,7 +1,15 @@
 # Adoption via import (Terraform 1.5+ import blocks).
-# These resources ALREADY EXIST (deployed manually). Run `terraform plan` to preview the import
-# + any drift, then `terraform apply` to bring them under management. Do NOT apply without first
-# reviewing the plan — the goal is to ADOPT, not recreate.
+#
+# ⚠⚠ ADOPTION HAS NEVER BEEN PERFORMED, AND `terraform apply` MUST NOT BE RUN HERE. The standing
+# rule is in .github/ISSUE_TEMPLATE/ops.yml: this directory is back-filled documentation of record
+# and the live resources are managed with `az cli`. Since the 2026-09-16 flip that includes the
+# OAuth secrets — production carries TWO, and the retained Auth0 one is what keeps a rollback free
+# of a Key Vault window. An apply from incomplete or stale variables destroys it.
+#
+# These resources ALREADY EXIST (deployed manually). Adopting them so Terraform becomes the source
+# of truth remains the intended end state, but it is a separately approved migration rather than a
+# step anyone runs in passing — see infra/terraform/README.md, which describes the sequence as a
+# plan rather than a copy-pasteable recipe.
 #
 # Sub: 282207c6-4107-47fa-9d4e-b2fa9b3066cb  RG: vitally-prod-rg-uksouth
 #

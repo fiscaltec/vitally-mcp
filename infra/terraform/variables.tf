@@ -32,30 +32,35 @@ variable "managed_identity_client_id" {
   default = "d93687a0-ef76-4df8-804e-d941067abdeb"
 }
 
-# ---- PRODUCTION OAuth inputs: the LIVE values, which are still Auth0 ----
+# ---- PRODUCTION OAuth inputs: the LIVE values, Entra since 2026-09-16 ----
 #
-# This directory is an as-built capture, so these record what production is configured with *now* —
-# not what #108 moves it to. Changing them to the Entra values is part of applying the flip, not
-# preparation for it: a capture that runs ahead of reality is how a plan comes to propose a change
-# nobody asked for, and how a reader concludes the cutover already happened. The Entra target values
-# live in CLAUDE.md, under "The Auth0 → Entra cutover (#108) and its rollback".
+# This directory is an as-built capture, so these record what production is configured with *now*.
+# They held the Auth0 values until the #108 flip was applied on 2026-09-16 and were updated with it — a
+# capture that runs ahead of reality is how a plan comes to propose a change nobody asked for, and
+# one that lags is how a reader concludes a cutover has not happened. The Auth0 values these
+# replaced are kept in CLAUDE.md under "The Auth0 → Entra cutover and its rollback", which is the
+# canonical record of the rollback posture.
 #
-# Staging has its own `staging_oauth_*` variables below and is already on Entra.
+# Staging has its own `staging_oauth_*` variables below. The identity ones — authority, audience,
+# client id, upstream scope, client secret — now hold the same values and are what #102 collapses.
+# `staging_oauth_resource` and `staging_public_base_url` are NOT among them: each target publishes its
+# own origin, so those stay per-target after any collapse.
 variable "oauth_authority" {
   type        = string
-  description = "Upstream OIDC issuer for PRODUCTION — currently Auth0. Endpoints are read from the issuer's discovery document, not built from this."
-  default     = "https://fiscal-it.uk.auth0.com/"
+  description = "Upstream OIDC issuer for PRODUCTION — Entra. Endpoints are read from the issuer's discovery document, not built from this."
+  default     = "https://login.microsoftonline.com/75bd6050-92a8-4bde-a406-50000b310c86/v2.0"
 }
 
 # oauth_audience and oauth_resource are NOT the same value and must not be reconciled — though note
-# the reason differs by provider, and production is still on Auth0.
+# the reason differs by provider. Both targets are on Entra; the Auth0 row is the rollback posture.
 #
-#   Auth0 (production today): the Resource Server identifier carries a trailing slash, so Audience
+#   Auth0 (rollback only): the Resource Server identifier carries a trailing slash, so Audience
 #     and Resource happen to look identical. That coincidence is what made them one variable
 #     originally, and is why they are two now.
-#   Entra (staging today, production at the flip): Audience follows the App ID URI, which cannot
+#   Entra (both targets, live): Audience follows the App ID URI, which cannot
 #     carry a trailing slash — Entra refuses to register one on identifierUris — while Resource keeps
-#     it. The no-slash rule is Entra's, not a general one; do not "correct" the live Auth0 value.
+#     it. The no-slash rule is Entra's, not a general one; the slash-suffixed Auth0 form is the
+#     rollback value, not a mistake to "correct".
 #
 # Resource is published in the RFC 9728 document and keeps the slash either way, because that is the
 # form Claude Code normalises to and then compares.
@@ -63,8 +68,8 @@ variable "oauth_authority" {
 # lets the two forms name one resource.
 variable "oauth_audience" {
   type        = string
-  description = "Identifier validated against the JWT aud claim for PRODUCTION — currently the Auth0 Resource Server identifier, WITH the trailing slash. Becomes the slash-less Entra App ID URI at the flip."
-  default     = "https://vitally.fiscaltec.com/"
+  description = "Identifier validated against the JWT aud claim for PRODUCTION — the Entra App ID URI, with NO trailing slash (Entra refuses to register one on identifierUris). Was the slash-suffixed Auth0 Resource Server identifier before the flip."
+  default     = "https://vitally.fiscaltec.com"
 }
 
 variable "oauth_resource" {
@@ -75,14 +80,14 @@ variable "oauth_resource" {
 
 variable "oauth_upstream_resource_scope" {
   type        = string
-  description = "PRODUCTION only. Setting it terminates the RFC 8707 `resource` parameter at the proxy instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty while production is on Auth0, where the relayed parameter is what binds the audience."
-  default     = ""
+  description = "The PRODUCTION variable; staging carries the same value in `staging_oauth_upstream_resource_scope` until #102 collapses the pair. Set, so the proxy terminates the RFC 8707 `resource` parameter instead of relaying it — required under Entra, whose v2 authorize endpoint refuses any `resource` that does not match the requested scopes (AADSTS9010010), whatever its spelling. Empty is the Auth0 posture, which only a rollback would use."
+  default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 
 variable "oauth_shared_client_id" {
   type        = string
-  description = "Shared OAuth client_id for PRODUCTION — currently the Auth0 native app. Becomes the Entra app registration appId at the flip."
-  default     = "VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D"
+  description = "Shared OAuth client_id for PRODUCTION — the Entra app registration appId (#107). Was the Auth0 native app before the flip; that value is in CLAUDE.md's rollback section."
+  default     = "c3812e7d-a413-4169-b57e-803326611ba3"
 }
 
 variable "public_base_url" {
@@ -116,10 +121,15 @@ variable "entra_group_admin" {
 # `sg-vitally-*` tier group ids — is deliberately the same, so a staging failure points at what
 # changed rather than at the environment.
 #
-# The identity provider is NOT shared while #108 is half-applied: staging is on the Entra app
-# registration, production is still on the Auth0 client, so the client id, upstream scope and client
-# secret each have a `staging_*` variable below holding a different value. They reunify when
-# production flips.
+# The identity provider IS shared again: both targets point at the Entra app registration since the
+# 2026-09-16 production flip. FIVE variables are therefore duplicated and ready to collapse onto
+# their `oauth_*` counterparts: authority, audience, upstream_resource_scope, shared_client_id and
+# the shared client secret VALUE. They exist separately only because the targets diverged during
+# the migration. Deliberately not collapsed here: see #102.
+#
+# NOT `staging_oauth_resource` and NOT `staging_public_base_url`. Each target publishes its own
+# origin, so collapsing those makes staging advertise production's — an RFC 9728 document naming a
+# server it is not, which strict clients reject outright. They stay per-target permanently.
 variable "staging_app_name" {
   type        = string
   description = "Staging Container App name. Deliberately outside the name_prefix convention: it is a second app inside the production RG and Container Apps Environment, not a second environment."
@@ -154,20 +164,23 @@ variable "staging_oauth_resource" {
   default     = "https://vitally-staging.fiscaltec.com/"
 }
 
-# These are STAGING's OAuth client, and they are NOT the production values above: staging flipped to
-# the Entra app registration on 2026-09-03 while production is still on the Auth0 client. That is the
-# current split, not a future one — do not feed `oauth_shared_client_id` / `oauth_shared_client_secret`
-# to the staging app, which would point staging back at Auth0 while its authority says Entra.
-# These variables and the production ones reunify only once production flips too.
+# These are STAGING's OAuth client. They now hold the SAME values as the production `oauth_*` ones —
+# both targets point at the Entra app registration, staging since 2026-09-03 and production since
+# 2026-09-16 — and exist separately only because the targets diverged during the migration. Collapsing
+# them is tracked in #102 and deliberately not done here.
+#
+# One asymmetry survives the collapse and must not be lost with it: production holds its secret as
+# the Container App secret `entra-oauth-client-secret`, keeping the retained Auth0 value under
+# `oauth-shared-client-secret` for rollback; staging has only the one name.
 variable "staging_oauth_shared_client_id" {
   type        = string
-  description = "Shared OAuth client_id for STAGING — the Entra app registration appId (#107), since staging flipped on 2026-09-03."
+  description = "Same value as `oauth_shared_client_id` — the Entra app registration appId (#107). Staging flipped 2026-09-03, production 2026-09-16; separate only until #102 collapses the pair."
   default     = "c3812e7d-a413-4169-b57e-803326611ba3"
 }
 
 variable "staging_oauth_upstream_resource_scope" {
   type        = string
-  description = "STAGING only. Set, because staging is on Entra: the proxy terminates the RFC 8707 `resource` parameter and names the API by this scope instead."
+  description = "Same value as `oauth_upstream_resource_scope` — both targets are on Entra, so the proxy terminates the RFC 8707 `resource` parameter and names the API by this scope. Separate only until #102 collapses the pair."
   default     = "https://vitally.fiscaltec.com/mcp.access"
 }
 
@@ -180,13 +193,19 @@ variable "staging_public_base_url" {
 # ---- Secrets (DO NOT hardcode/commit — supply via TF_VAR_* or an untracked tfvars) ----
 variable "oauth_shared_client_secret" {
   type        = string
-  description = "Client secret for PRODUCTION's `oauth_shared_client_id` (Container App secret 'oauth-shared-client-secret') — currently the Auth0 client's. Becomes the Entra one at the flip."
+  description = "Client secret for PRODUCTION's `oauth_shared_client_id` — the Entra app's, sourced from the Key Vault secret `entra-mcp-client-secret`. Held on the Container App as 'entra-oauth-client-secret'; the retained Auth0 value is still present under 'oauth-shared-client-secret' for rollback."
+  sensitive   = true
+}
+
+variable "auth0_rollback_client_secret" {
+  type        = string
+  description = "The retained AUTH0 client secret. Terraform DOES consume this — it populates the production Container App secret 'oauth-shared-client-secret' — so it is a required input, not a vestigial one. What does not read it is the running app, whose OAuth__SharedClientSecret points at 'entra-oauth-client-secret' instead. It exists so a rollback needs no Key Vault window. Remove it, and this variable, when Auth0 is retired (#102)."
   sensitive   = true
 }
 
 variable "staging_oauth_shared_client_secret" {
   type        = string
-  description = "Client secret for STAGING's `staging_oauth_shared_client_id` — the Entra app's, sourced from the Key Vault secret `entra-mcp-client-secret`. Expires 2027-03-01; see docs/runbooks/entra-app-registration.md."
+  description = "Same value as `oauth_shared_client_secret` — the Entra app's, from the Key Vault secret `entra-mcp-client-secret`. Held on the staging Container App under the name `oauth-shared-client-secret`, where production uses `entra-oauth-client-secret`; that naming difference is why the two are still separate variables. Expires 2027-03-01; see docs/runbooks/entra-app-registration.md."
   sensitive   = true
 }
 
