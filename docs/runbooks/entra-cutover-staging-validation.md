@@ -306,9 +306,14 @@ Staging rolls back in **two** steps. Both are required, and the order matters:
    ```
 
    `OAuth__Resource` and `OAuth__PublicBaseUrl` are untouched — they name staging's origin under either
-   provider. ⚠️ The audience and client id above are **derived** from the retained Auth0 Resource
-   Server recorded in `CLAUDE.md`, not read back from the Auth0 tenant, and nothing has exercised this
-   path since the flip. Confirm them in Auth0 before relying on them.
+   provider.
+
+   ⚠️ **Confirm the audience and client id in the tenant before relying on them.** Neither was read
+   back from Auth0: the audience is staging's retained **Resource Server** identifier (Auth0 →
+   Applications → APIs) and the client id is the retained **Application** (Auth0 → Applications →
+   Applications), assumed to be the same native client production used. They are two different
+   objects — looking for the client id among the APIs finds nothing — and nothing has exercised this
+   path since staging flipped on 2026-09-03.
 
 **In that order, and the reason is the revision model.** `az containerapp secret set` does **not**
 roll a revision — the running one keeps serving with the value it already loaded — whereas

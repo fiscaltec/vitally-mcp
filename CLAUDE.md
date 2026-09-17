@@ -1276,10 +1276,20 @@ its own audience — unlike Entra, where both share one App ID URI. Two rows dif
 | `OAuth__Audience` | `https://vitally-staging.fiscaltec.com/` — **its own** Resource Server, retained per the teardown table |
 | `OAuth__SharedClientSecret` | `secretref:oauth-shared-client-secret` — the only name staging has, and it currently holds the **Entra** value, so it must be overwritten first (see the staging rollback steps in `docs/runbooks/entra-cutover-staging-validation.md`) |
 
-`Authority`, `SharedClientId` and the absent `UpstreamResourceScope` are the same as production's.
-**Confirm both against the Auth0 tenant before using them** — they are derived from the retained
-Resource Server identifiers recorded here, not read back from Auth0, and nothing has exercised this
-path since the flip.
+`Authority`, `SharedClientId` and the absent `UpstreamResourceScope` are assumed to be the same as
+production's.
+
+⚠️ **Production's values above are known-good; staging's two rows are not.** Production ran on exactly
+those five values until 2026-09-16, so they are a record of a working configuration rather than a
+reconstruction. Staging's are assembled from what is recorded here — its audience from the retained
+Resource Server in the teardown table, its `SharedClientId` and `Authority` assumed to match
+production's — and nothing has exercised that path since staging flipped on 2026-09-03. Confirm them
+in the tenant first.
+
+**They are two different Auth0 objects, and it matters when you go looking.** The *audience* is a
+**Resource Server** identifier (Auth0 → Applications → APIs). The *client id* is an **Application**
+(Auth0 → Applications → Applications) — the retained native client. Looking for the client id among
+the APIs, mid-incident, finds nothing.
 
 **What must still exist for this to work**, and must therefore not be deleted before you have decided
 to abandon the rollback: the Auth0 client above, both Resource Servers
