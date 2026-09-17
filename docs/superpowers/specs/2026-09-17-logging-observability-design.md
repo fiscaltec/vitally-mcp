@@ -100,15 +100,26 @@ trading a real control for a worse mechanism.
 
 ### The signal-to-noise ratio is inverted
 
-202 lines sampled from the live console stream:
+202 lines sampled from the live console stream. **89 of them carry a logger category** — the rest are
+continuation lines of multi-line messages (`Authorization failed. These requirements were not met:`
+and its detail lines, for instance), which belong to the same records and inflate the line count
+without adding signal. Counting by category:
 
-| Category | Lines |
-|---|---|
-| `Microsoft.AspNetCore.Hosting.Diagnostics` (request start/finish) | 42 |
-| `JwtBearerHandler` + `DefaultAuthorizationService` | 18 |
-| `System.Net.Http.HttpClient.*` (Graph, Vitally, upstream) | 20 |
-| Routing, MCP server | 9 |
-| **audit records** | **0** |
+| Category | Lines | Share of the 89 |
+|---|---|---|
+| `Microsoft.AspNetCore.Hosting.Diagnostics` (request start/finish) | 42 | 47% |
+| `System.Net.Http.HttpClient.*` (Graph, Vitally, upstream) | 20 | 22% |
+| `JwtBearerHandler` + `DefaultAuthorizationService` | 18 | 20% |
+| Routing, MCP server | 9 | 10% |
+| **audit records** | **0** | **0%** |
+
+So **100% of the categorised sample is framework output and none of it is an audit or failure
+signal.** The "~90% noise" figure used elsewhere in this document is the conservative claim: the four
+framework categories above are what the phase 3 filters target, and they are the whole sample.
+
+The zero is not an artefact of the window. Reads were unaudited until #139, and the only authenticated
+call made during the sample was a `List_organizations` GET, which `LogAction` skipped for exactly that
+reason.
 
 **No logging configuration reaches the running app.** `appsettings.Example.json` *does* carry a
 `Logging` section (`Default: Information`, `Microsoft.AspNetCore: Warning`) — but it is a template
@@ -610,7 +621,7 @@ it.
 | Correlation id becomes a per-call-site convention that drifts | carry it through the existing `CallerIdentity`/`AuditLogger` choke points, which already exist for exactly this reason |
 | **Personal data sits in a table whose access is inherited, not controlled** | review the 28 service principals; table-level RBAC once the broad roles are narrowed. This is the condition the policy reversal rests on — treat it as in scope, not follow-up |
 | **An erasure request arrives and nobody has done one** | purge is asynchronous and per-table; rehearse once before it is needed, as #138 does for rotation |
-| Returned-id capture inflates records on paged reads | cap the list (100) and always record the true count, so a capped record still reports the real magnitude rather than under-reporting silently |
+| Returned-id capture inflates records on paged reads | cap the ids (100) and record `recordsFetched` / `idsRecorded` / `truncated`, so a capped record reports its real magnitude — and, when the pager stopped early, says the total is unknown rather than implying `recordsFetched` was all of them |
 | The withdrawn PII rule is reinstated by a later reader who sees "no PII" as obviously correct | the reversal and its reasoning are recorded in `CLAUDE.md` and here; it was a deliberate trade, not an oversight |
 
 ## Decisions taken (2026-09-17, @searledan)
@@ -622,7 +633,7 @@ Recorded so they are not re-litigated:
 | May the audit trail hold customer personal data? | **Yes** — the previous no-PII rule is withdrawn. Arguments in full; response bodies still excluded |
 | What is the acceptance criterion? | *this user* called *this tool* and accessed/modified/deleted data for *these customers* |
 | Primary audit mechanism | **Tool call**, with arguments and returned record ids — not the upstream path, which names customers only on get-by-id |
-| Bulk reads | Record returned ids, capped, always with the true count. Not accepted as a gap |
+| Bulk reads | Record returned ids, capped, with `recordsFetched` / `idsRecorded` / `truncated`. Not accepted as a gap — but the *matching* total is unknowable once the pager truncates, so the record says so rather than guessing |
 | Destination | One workspace, separated by table. App Insights SDK for app telemetry, ingesting over the private endpoint |
 | Why Log Analytics remains | It is the same store — workspace-based App Insights writes into it |
 | Access control | A condition of the policy reversal, not a follow-up |
