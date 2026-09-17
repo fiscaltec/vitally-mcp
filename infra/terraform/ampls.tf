@@ -43,8 +43,26 @@ resource "azurerm_monitor_private_link_scope" "ampls" {
   name                = "${var.name_prefix}-ampls-uksouth"
   resource_group_name = data.azurerm_resource_group.rg.name
 
+  # These govern traffic FROM networks connected through the private endpoint — whether such a
+  # network may also reach Azure Monitor resources outside this scope. They are NOT the control on
+  # whether a resource accepts public traffic; that is internet_*_enabled in monitoring.tf.
+  #
+  # Two consequences that cost time on 2026-09-17 before the docs were read properly:
+  #  - Log Analytics ingestion uses resource-specific endpoints and does not adhere to these modes
+  #    at all, so this was never what blocked the Container Apps log shipper.
+  #  - data delivered by a DIAGNOSTIC SETTING travels a private Microsoft channel and is governed by
+  #    neither these modes nor internet_ingestion_enabled. That is why Key Vault and ACR records
+  #    arrive while the CAE's shared-key shipper delivers nothing, and it is the fix in #142.
   ingestion_access_mode = "PrivateOnly"
-  query_access_mode     = "PrivateOnly"
+
+  # Opened 2026-09-17 so operators can query at all.
+  #
+  # ⚠️ Do NOT read this as "ingestion is private". An earlier version of this comment said so and was
+  # wrong twice over: this mode governs traffic FROM private-endpoint networks, not public ingress
+  # (see above), and monitoring.tf currently has internet_ingestion_enabled = true on the workspace —
+  # temporarily, pending the re-lock in #142. The workspace's public ingestion endpoint is reachable
+  # today. See monitoring.tf and docs/superpowers/specs/2026-09-17-logging-observability-design.md.
+  query_access_mode = "Open"
 }
 
 resource "azurerm_monitor_private_link_scoped_service" "law" {

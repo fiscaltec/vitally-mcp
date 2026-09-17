@@ -110,7 +110,9 @@ public IP (~£3/mo), scanner Job (pennies, no storage), 2 private DNS zones (~£
   subnets built here were `snet-app` (env) + `snet-pe` (private endpoints).
 - **A third subnet was added later, after this runbook was written.** `snet-pe-monitor`
   (10.80.0.96/27) came with the Azure Monitor Private Link Scope in August 2026 and is modelled in
-  `infra/terraform/ampls.tf`; see `docs/superpowers/specs/2026-08-11-observability-design.md`. So the
+  `infra/terraform/ampls.tf`; see `docs/superpowers/specs/2026-09-17-logging-observability-design.md`
+  (which supersedes the 2026-08-11 spec this used to point at — that one is a dated artefact now, and
+  its account of the AMPLS access modes is one of the things the replacement corrects). So the
   live VNet has **three** subnets, not the two this section listed — which is what the banner at the
   top means by reading the phases as a June record rather than a current inventory.
 - **Scanner:** implemented as a **Container Apps Job** `vitally-prod-secscan-uksouth` (cron `0 8 * * 1`),

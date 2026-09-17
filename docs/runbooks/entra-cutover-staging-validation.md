@@ -272,9 +272,22 @@ working, but the wrong answer. Check `transitiveMembers` for that user before as
 
 With a reader account, the write tools should not appear in `tools/list` at all (discovery
 filtering). To see the enforcement rather than the filtering, the denial is recorded by
-`AuditLogger.LogToolCallDenied` — in Application Insights, look for the tool name, the caller's
-subject id and the required permission. **No email, no tool arguments.** If either appears, that is a
-defect worth raising on its own.
+`AuditLogger.LogToolCallDenied` — look for the tool name, the caller's object id and the required
+permission.
+
+⚠️ **Not in Application Insights — it receives nothing, and neither does Log Analytics** (verified
+2026-09-17; #142). Read it from the container's live stream instead, which is independent of the
+broken export path:
+
+```bash
+az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+  --type console --tail 100 | grep "Vitally audit"
+```
+
+The old expectation of **"no tool arguments"** is also now obsolete by decision, not by defect: the
+2026-09-17 design deliberately records arguments so the trail can say *which customer* was accessed.
+Do not raise their presence as a finding. An **email in the actor field** would still be one — the
+actor is keyed on the object id.
 
 ### 5. Sanity-check the logs
 

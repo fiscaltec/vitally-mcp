@@ -1,7 +1,21 @@
 # Observability for the Vitally MCP server — design
 
 **Date:** 2026-08-11
-**Status:** Approved
+**Status:** ⚠️ **SUPERSEDED on 2026-09-17** by `2026-09-17-logging-observability-design.md`. Kept as a
+dated artefact — do not work from it.
+
+Its outline was right and two load-bearing assumptions were wrong, both found once its own Phase 1
+made the workspace readable for the first time:
+
+- it assumed the pipeline worked but could not be read. **Nothing from this server had ever reached
+  Log Analytics** — `ContainerAppConsoleLogs_CL` had zero rows, ever.
+- it scoped this as improving observability. Precisely: `Audit:IncludeReads` was `false` on every
+  target so **reads were never emitted** (#139), while mutations and denials *were* emitted by
+  `AuditLogger` and then never ingested. Two independent failures, same effect.
+
+Its "preferred long-term hardening" — peering to the FISCAL hub — would also have fixed *query* only,
+not ingestion: the Container Apps log shipper never ran inside this VNet. The replacement uses a
+diagnostic setting, which reaches the workspace over a private Microsoft channel regardless.
 
 ## Problem
 
