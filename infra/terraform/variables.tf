@@ -122,10 +122,14 @@ variable "entra_group_admin" {
 # changed rather than at the environment.
 #
 # The identity provider IS shared again: both targets point at the Entra app registration since the
-# 2026-09-16 production flip. The `staging_*` client id, upstream scope and client secret variables
-# below are still defined separately — they exist only because the targets diverged during the
-# migration — but they now carry the same values as their `oauth_*` counterparts, so the two sets
-# are ready to be collapsed. Deliberately not done here: see #102.
+# 2026-09-16 production flip. FIVE variables are therefore duplicated and ready to collapse onto
+# their `oauth_*` counterparts: authority, audience, upstream_resource_scope, shared_client_id and
+# the shared client secret VALUE. They exist separately only because the targets diverged during
+# the migration. Deliberately not collapsed here: see #102.
+#
+# NOT `staging_oauth_resource` and NOT `staging_public_base_url`. Each target publishes its own
+# origin, so collapsing those makes staging advertise production's — an RFC 9728 document naming a
+# server it is not, which strict clients reject outright. They stay per-target permanently.
 variable "staging_app_name" {
   type        = string
   description = "Staging Container App name. Deliberately outside the name_prefix convention: it is a second app inside the production RG and Container Apps Environment, not a second environment."

@@ -286,7 +286,14 @@ mistaken for something this change caused.
 ## If something fails
 
 Staging rolls back by reverting its `OAuth__*` variables — see *The Auth0 → Entra cutover and its
-rollback* in `CLAUDE.md` for the values. A staging validation does not touch production.
+rollback* in `CLAUDE.md` for the values.
+
+⚠️ **"It is only staging" is true of the configuration and false of the data.** Nothing here
+changes production's Container App or its OAuth settings. But staging reads the **production**
+`vitally-shared` Vitally key — one tenant, no sandbox — so any write or delete tool call made during
+this validation mutates real customer records. `Authorization__ReadOnly=true` is what prevents that,
+and steps 3 and 4 deliberately remove it. Put it back the moment they are done, and verify it is
+back on the revision serving traffic rather than on the desired template.
 
 ⚠️ **Staging's secret revert is not a one-liner, unlike production's.** Staging carries a single
 Container App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the
@@ -314,23 +321,26 @@ What this runbook is now: the **Entra acceptance suite**. Its checks assert Entr
 **Re-run everything above while Entra is the active provider** — after any change to this app
 registration, to the tenant, or to the `mcp.access` scope, and after a re-flip *to* Entra.
 
-⚠️ **Do not run it after a rollback to Auth0.** Every check above would fail, because none of what
-they assert is present on that path: no Entra v2 endpoints, no `mcp.access` in the merged scope, no
-`AADSTS` responses. Those failures would mean nothing, and the real risk is that someone reads them as
-a broken rollback and "fixes" the configuration back to Entra — undoing the rollback they had just
-deliberately performed, during an incident.
+⚠️ **After a rollback to Auth0, most of this suite still applies — but two checks do not, and
+running those two will produce failures that mean nothing.** Read them as inapplicable, not as a
+broken rollback: the risk is that someone "fixes" the configuration back to Entra and undoes, during
+an incident, the rollback they had just deliberately performed.
 
-What to check after an Auth0 rollback instead, which is short because most of the contract is
-provider-independent:
+| after an Auth0 rollback | |
+|---|---|
+| `verify-oauth-metadata.sh` | **still applies** — it names no provider, asserting only the façade contract (our own `issuer`, its byte-for-byte match with `authorization_servers`, the `iss` flag, `jwks_uri` absolute https, no null optionals), all of which hold under either |
+| the app booting at all | **still applies** — it proves OIDC discovery resolved and matched whatever `OAuth:Authority` now names |
+| `POST /mcp` unauthenticated / bad token | **still applies** — exactly 401 with `resource_metadata` and `error="invalid_token"` is our own behaviour |
+| `resource` we do not publish / do publish | **still applies** — 400 `invalid_target` / 302 is our own validation, unchanged by provider |
+| `POST /oauth/register` | **still applies**, but expect the **Auth0** client id back, not `c3812e7d-…` |
+| `/oauth/authorize` → upstream | **inapplicable** — it asserts Entra's v2 endpoint, `resource` **absent** and `mcp.access` merged. On Auth0 the endpoint differs and `resource` is *relayed*, which is the correct rollback behaviour |
+| following that to the provider | **inapplicable** — there is no `AADSTS` code to assert |
+| the token-claim table | **inapplicable** — `iss`, `aud` and `scp` all name Entra values |
 
-1. `bash .github/scripts/verify-oauth-metadata.sh <origin>` — this one **does** still apply. It names
-   no provider: it asserts the façade contract (our own `issuer`, its byte-for-byte match with
-   `authorization_servers`, the advertised `iss` flag, `jwks_uri` absolute https with no fragment, no
-   null-serialised optionals), and that contract holds under either provider.
-2. `jwks_uri` should now read `fiscal-it.uk.auth0.com`. If it still names `login.microsoftonline.com`,
-   the variables did not take — check the revision actually serving traffic, not the desired template.
-3. One real sign-in, per tier. That is the only check that proves the client secret matches the client
-   id, which is the failure mode a rollback most often hits (see above).
+Add one check the Entra suite does not need: `jwks_uri` should now read `fiscal-it.uk.auth0.com`. If
+it still names `login.microsoftonline.com`, the variables did not take — check the revision actually
+serving traffic, not the desired template. And one real sign-in per tier, which is the only check
+that proves the client secret matches the client id — the failure a rollback most often hits.
 
 If a *future* target ever needs the five `OAuth__*` variables applied, they are in `CLAUDE.md`, and
 its Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the

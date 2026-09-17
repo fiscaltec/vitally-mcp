@@ -58,8 +58,15 @@ means the capture disagrees with the live estate, which is a thing to investigat
 reconcile. Only then the apply that performs the imports. Afterwards, comment out `imports.tf`.
 
 ⚠️ Before any of that, confirm the OAuth secret layout: production carries **two** Container App
-secrets (`entra-oauth-client-secret`, live; `oauth-shared-client-secret`, the retained Auth0 value)
-and an apply driven from incomplete variables would collapse them and take the rollback with it.
+secrets — `entra-oauth-client-secret` (live) and `oauth-shared-client-secret` (the retained Auth0
+value, which is what makes a production rollback free of a Key Vault window).
+
+Being precise about the hazard, because the obvious guess is wrong: *omitting*
+`auth0_rollback_client_secret` is safe — it has no default, so Terraform prompts or fails before it
+can change anything. What destroys the rollback is supplying the **wrong value** for it, most
+plausibly the Entra secret again out of muscle memory, which overwrites the Auth0 credential with a
+copy of the live one and leaves two names holding the same useless value. Applying a stale capture
+does the same by a different route. Read the plan output for both secrets by name before proceeding.
 
 A few resources need an ID looked up before their import block works (see notes in `imports.tf`):
 role assignments (`az role assignment list --scope <id> --query "[].id"`), diagnostic settings
