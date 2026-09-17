@@ -55,8 +55,13 @@ resource "azurerm_monitor_private_link_scope" "ampls" {
   #    arrive while the CAE's shared-key shipper delivers nothing, and it is the fix in #142.
   ingestion_access_mode = "PrivateOnly"
 
-  # Opened 2026-09-17 so operators can query at all; ingestion stays private. See monitoring.tf and
-  # docs/superpowers/specs/2026-09-17-logging-observability-design.md.
+  # Opened 2026-09-17 so operators can query at all.
+  #
+  # ⚠️ Do NOT read this as "ingestion is private". An earlier version of this comment said so and was
+  # wrong twice over: this mode governs traffic FROM private-endpoint networks, not public ingress
+  # (see above), and monitoring.tf currently has internet_ingestion_enabled = true on the workspace —
+  # temporarily, pending the re-lock in #142. The workspace's public ingestion endpoint is reachable
+  # today. See monitoring.tf and docs/superpowers/specs/2026-09-17-logging-observability-design.md.
   query_access_mode = "Open"
 }
 

@@ -264,8 +264,42 @@ It does three jobs at once:
 Keep `appsettings.Example.json`'s `Logging` section in step, or delete it — it currently documents
 behaviour that is not in force, which is how it misled this design's first draft.
 
-Give audit records a stable category or event name so they can be **routed**, not pattern-matched.
-`ILogger<AuditLogger>` already yields `VitallyMcp.AuditLogger`, which is a usable discriminator.
+### Routing the audit records — a category is not a route
+
+⚠️ **An earlier draft said "give audit records a stable category so they can be routed", citing
+`ILogger<AuditLogger>`'s `VitallyMcp.AuditLogger`. That does not work, and taken literally it would
+put customer data in the wrong table.** `AddFilter` sets *levels per provider*; it does not send
+records to different destinations. `AuditLogger` writes through `ILogger`, so its records go wherever
+the registered providers go — today the console, and therefore `ContainerAppConsoleLogs`, which the
+data map says must **not** hold customer data.
+
+Two things have to be specified, not one:
+
+**1. The emitter, which decides the table.**
+
+| Emitter | Lands in | Notes |
+|---|---|---|
+| `TelemetryClient.TrackEvent` | `AppEvents` | structured name + properties; what the data map assumes |
+| `ILogger` + App Insights provider | `AppTraces` | no new dependency in `AuditLogger`, but shares a table with ordinary trace output |
+
+Either is defensible; **pick one and make the data map match it.** The map currently says `AppEvents`,
+so `TrackEvent` is the default reading — but a design that keeps `AuditLogger` on `ILogger` must say
+`AppTraces` instead. What is not acceptable is naming a destination no emitter populates, which is
+what the draft did: retention and access controls would have been applied to an empty table while the
+records accumulated somewhere else.
+
+**2. Suppression from the console provider**, which is the part that actually protects the table:
+
+```csharp
+builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLevel.None);
+```
+
+Provider-specific, so audit records reach App Insights and **not** stdout. Without it, phase 2 exports
+them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad access,
+and a table documented as customer-data-free while carrying names and search terms.
+
+Verify it by sampling the console stream after deploy and confirming no `Vitally audit:` line appears,
+rather than by reading the configuration.
 
 ## Design — pipeline (where it goes)
 
@@ -286,8 +320,15 @@ the AMPLS was never the gate.
 
 Consequences, in order:
 
-1. Add a diagnostic setting on the CAE for `ContainerAppConsoleLogs`, exported **resource-specific**
-   (a real table, not `_CL`, which is also what makes per-table retention possible).
+1. Add a diagnostic setting on the CAE for **`ContainerAppConsoleLogs` and `ContainerAppSystemLogs`**,
+   exported **resource-specific** (a real table, not `_CL`, which is also what makes per-table
+   retention possible).
+
+   **Both categories, because the justification needs both.** A `StartupGuards` failure throws and
+   writes to *stdout* → console logs; container crashes, OOM kills and scaling events are platform
+   events → system logs. An earlier draft enabled console only while citing crashes and OOM as the
+   reason to keep this setting at all, which would not have delivered the coverage it claimed.
+   System logs are low volume.
 2. Verify records arrive.
 3. **Re-lock `publicNetworkAccessForIngestion`** to `Disabled`, restoring the hardening opened on
    2026-09-17 while this was being diagnosed.
