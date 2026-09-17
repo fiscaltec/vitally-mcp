@@ -20,7 +20,7 @@ Serving staging since 2026-09-03 and **production since 2026-09-16** — both ta
 | Redirect URIs | `https://vitally.fiscaltec.com/oauth/callback`, `https://vitally-staging.fiscaltec.com/oauth/callback` |
 | Token version | `2` |
 | Sign-in gate | `appRoleAssignmentRequired = true` + nine department groups, assigned **directly** |
-| Client secret | `entra-mcp-client-secret` in `vitally-prod-kv-uksouth`, expires 2027-03-01 |
+| Client secret | Entra credential `keyId` `e17e0e9e-…`, expires 2027-03-01. The vault's `entra-mcp-client-secret` is the **record**; what the app sends is a **copy** in each target's Container App secret — see *Client secret* below before rotating anything |
 
 **`OAuth:Audience` and `OAuth:Resource` must NOT match under Entra.** `Audience` is the App ID URI
 above (no slash, because Entra refuses to register one); `Resource` stays
@@ -354,10 +354,18 @@ own creation on 2026-08-18, not from the day it was changed), and this secret wa
 > The first credential (`a7d71deb-…`, 12 months) was created and then replaced this way, which is why
 > the `keyId` above is not the one in the earlier commit message.
 
-> ⚠️ **An expired Key Vault secret cannot be read at all** — Key Vault refuses `GET` once `exp`
-> passes, it does not merely warn. So each expiry date above is a hard outage date: on 2027-02-14
-> the server stops being able to fetch the Vitally API key, and on 2027-03-01 the token exchange
-> stops working. The scanner's 30-day warning is the whole safety margin.
+> ⚠️ **Both dates are hard outage dates, but by two different mechanisms — do not renew the wrong
+> object.**
+>
+> | | 2027-02-14 — `vitally-shared` | 2027-03-01 — the OAuth client secret |
+> |---|---|---|
+> | What fails | the server cannot fetch the Vitally API key | `/oauth/token` returns `invalid_client`; every sign-in fails |
+> | Why | Key Vault refuses `GET` once `exp` passes — it does not merely warn | **Entra** rejects its own expired credential. Key Vault is not in this path at all |
+> | Renew | the Key Vault secret | the **Entra credential**, then the Container App copy on every target (see *Rotation*) |
+>
+> Letting the vault's `entra-mcp-client-secret` expire is therefore not itself an outage — but keep
+> its expiry in step anyway, because that is the only thing the scanner can see. The scanner's
+> 30-day warning is the whole safety margin for both.
 
 > ⚠️ **Set the expiry on the Key Vault secret, not only on the Entra credential.** The scheduled
 > scanner (`infra/terraform/scan/run.py`, a Container Apps Job) alerts on the **Key Vault secret's**
@@ -453,7 +461,12 @@ the wording below is deliberately a list of required effects rather than a scrip
 tracks writing and dry-running it before the **2027-03-01** expiry:
 
 1. Create the new Entra credential, overlapping the old one (never delete first).
-2. Update the Key Vault secret, which keeps the record and the expiry the scanner alerts on.
+2. Update the Key Vault secret — **and set the expiry explicitly, as a second call**.
+   `az keyvault secret set` writes a new *version*; follow it with `az keyvault secret
+   set-attributes --expires` carrying the new credential's `endDateTime`, exactly as creation
+   steps 2 and 3 above do. Do this whether or not a new version would inherit the old `exp` —
+   setting it is harmless either way, and the scanner's view of `attributes.exp` is the only
+   thing watching this deadline.
 3. **Update the Container App secret on every target** — this is the step that changes what the app
    sends, and the one the old procedure omitted entirely.
 4. **Roll a revision.** `az containerapp secret set` does **not** roll one, so the running revision
