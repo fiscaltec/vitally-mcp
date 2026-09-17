@@ -69,47 +69,104 @@ on the Container App, so every category runs at the framework default of `Inform
 the entire application** (`ToolAuthorizer.cs`). No `Stopwatch`, `Activity`, `Meter` or counter
 anywhere.
 
-## Constraint: no customer PII in telemetry
+## Policy: the audit trail may contain customer personal data — reversed 2026-09-17
 
-Carried forward from the superseded spec and reaffirmed. `AuditLogger` honours it deliberately —
-object id not email, resource path with the **query string stripped**, never request or response
-bodies.
+**The previous "no customer PII in telemetry" rule is withdrawn** (decision: @searledan, 2026-09-17).
+It was written when nothing was ingested, and it made the trail unable to answer the question the
+trail exists for. The replacement policy is stated as an outcome rather than a field list, because
+maintaining a list of permitted fields is the complexity this decision was taken to avoid:
 
-⚠️ **One path does not honour it.** `System.Net.Http.HttpClient.*` logs outbound request URIs
-*including query strings*, at `Information`, for every Vitally and Graph call. In the sample taken,
-the parameters were benign (`$select`, `limit`, `fields`). But `Search_users`, `Search_admins` and the
-`nameContains` filters put **search terms** in the query string — potentially names or email
-addresses. This is a latent leak of exactly the data `AuditLogger` strips, through a category nobody
-configured. Not observed firing; structurally present. Closing it is part of this work.
+> **The audit trail must show that *this user* called *this tool* and accessed, modified or deleted
+> data for *these customers*.** Log whatever is needed to establish that, in the simplest way that
+> works.
+
+### The one boundary retained: arguments yes, response bodies no
+
+Tool **arguments** are recorded in full, including free-text search terms that may contain names or
+email addresses. Response **bodies** are not.
+
+This is not a re-introduction of the old rule by the back door. Vitally holds meeting **transcripts**
+and arbitrary customer **traits**, so logging bodies would put entire meeting recordings and whatever
+a CSM has typed into a custom field into telemetry — a second copy of the customer database under
+weaker access control, which is a different thing from an audit trail. Arguments plus returned record
+ids satisfy the requirement above; bodies add only content the requirement does not ask for.
+
+### What this obliges
+
+Recorded so a future reader does not mistake these for oversights:
+
+- **Retention becomes an obligation, not a preference.** Personal data needs a defined period that is
+  then honoured.
+- **Erasure requests reach the logs.** Azure supports purge, but it is asynchronous — know this
+  before being asked, not during.
+- **Access control is now a control, not hygiene** — see *Who can read this* below. This is the
+  condition attached to the decision: the data is acceptable to store *because* it is restricted.
+
+### The framework leak still has to be closed
+
+`System.Net.Http.HttpClient.*` logs outbound request URIs *including query strings* at `Information`,
+for every Vitally and Graph call (#143). That is **not** made acceptable by this policy change: the
+policy permits deliberate, structured, access-controlled audit records, not the same data scattered
+through diagnostic categories nobody configured, in a table with different retention and broader
+access. Close it as planned.
 
 ## Design — code (what is emitted)
 
-### Audit: two tiers, correlated
+### Audit: the tool call is the record; the upstream call corroborates it
 
-Both tiers are kept. They answer different questions and neither substitutes for the other.
+**The tool call is the primary audit record**, carrying arguments and returned record ids. The
+upstream record is kept as corroboration, not as the mechanism.
 
-| Tier | Records | Answers |
+An earlier draft of this design had it the other way round, on the reasoning that only the upstream
+path names a customer record. **That reasoning was wrong**, and the correction matters enough to
+record: the path names a customer only on get-by-id. Confirmed against today's live log sample —
+
+```
+https://rest.vitally-eu.io/resources/organizations?<query>
+```
+
+— a list call returning twenty customers, naming none of them, because the identities are in the
+response body. `Search_users` is the same. List and search are the majority of reads, so the upstream
+path answers the customer-access question for a minority of traffic.
+
+It is also the wrong layer on principle: it records what the *server happened to call*, so the trail
+is coupled to implementation detail (`Get_organization_summary`'s fan-out is four calls today), it
+captures incidental reads as audit events (that tool lists the whole custom-object catalogue to
+resolve names to ids), and it is derived by string-parsing a URL.
+
+#### The record
+
+One record per tool call, satisfying *user → tool → customers* directly:
+
+| Field | Source | Why |
 |---|---|---|
-| **Tool call** (new) | caller, tool name, outcome, duration, correlation id | who used which capability, and did it work |
-| **Upstream call** (exists, extend) | caller, verb, resource path, status, duration, correlation id | **which customer record was touched** |
+| caller | `CallerIdentity` object id | the same identity the authorisation decision used |
+| tool name | SDK | captured only on denial today |
+| **arguments** | tool invocation, **in full** | the scope the user asked for — `organizationId`, `nameContains`, search terms |
+| **returned record ids** | response, ids only | names the customers a **list or search** touched |
+| result count | response | magnitude; and the fallback when ids are capped |
+| outcome, duration | filter | success/failure and performance in one place |
+| correlation id | generated per call | ties the upstream records below to this one |
 
-**The upstream tier is the compliance-critical one, and that is counter-intuitive.** Tool arguments
-are deliberately never logged, so a tool-call record says *alice ran `Get_organization_summary`* but
-not **which** organisation. Only the upstream path — `GET /resources/organizations/{id}` — names the
-record accessed. "Did anyone access this customer's data" is answerable from the upstream tier alone.
+**Returned record ids close the bulk-read gap.** Without them, `List_organizations(limit=100)`
+records that a hundred customers were read and names none — which fails the stated requirement.
+Ids are identifiers, not bodies, so this stays the right side of the boundary above.
 
-So the tiers must not be traded against each other for volume. Where cost forces a choice, it is a
-**retention** decision made per tier on evidence, and the upstream tier is not the cheap one to drop.
+⚠️ **Cap the id list.** The bounded auto-pager can fetch ten pages of a hundred, so an uncapped list
+is ~1000 ids in one record. Cap it (100 is a reasonable start), and **always** record the true count
+alongside, so a capped record still says *"read 640 organisations, first 100 listed"* rather than
+silently under-reporting. Beyond that threshold the meaningful audit fact is the bulk read itself.
 
-**Correlation id is the missing piece, not either record.** `Get_organization_summary` makes four
-upstream calls and the bounded auto-pager can make ten; today those are orphans. One id per tool call,
-carried onto every upstream record it causes, is what turns two streams into a trail.
+#### The upstream record is kept
 
-Gaps closed by this tier design:
+Still worth having, correlated to the tool call: it shows what the server actually did, which is what
+diagnoses a failure or an unexpected fan-out. It is no longer load-bearing for customer identity, so
+if volume ever forces a cut, this is the tier to cut — the reverse of the earlier draft.
 
-- **tool name on success** — currently captured only on denial
-- **no sign-in record** — who authenticated and when is not captured at all; add one
-- **no result magnitude** — reading 1 record and 250 are indistinguishable; record the count
+#### Also closed by this design
+
+- **sign-in records** — who authenticated and when is not captured at all. See *Open questions*:
+  Entra sign-in logs may be the better source than anything built here.
 
 ### System failures
 
@@ -187,11 +244,81 @@ FISCAL hub so query returns to private — still stands.
 ⚠️ Correcting that spec: peering would fix **query** only. It would not have fixed ingestion, because
 the CAE's shipper never ran inside this VNet. The diagnostic setting is the ingestion answer.
 
+### One workspace, not two destinations
+
+Worth stating plainly, because "App Insights **and** Log Analytics" reads like a split and is not:
+**workspace-based Application Insights *is* the Log Analytics workspace.** `vitally-prod-appi-uksouth`
+has `workspaceResourceId` → `vitally-prod-law-uksouth` (verified), so the SDK writes into that same
+workspace under `App*` tables. It is an SDK and a query experience over the workspace, not a second
+store. Everything below lives in **one** workspace, separated by table so retention and access can
+differ per tier.
+
+### Where the data lives
+
+The map, so a future incident does not start with "where would that even be":
+
+| Data | Table | Written by | Contains customer data | Retention |
+|---|---|---|---|---|
+| **Audit trail** | `AppEvents` | App Insights SDK, in-process | **yes** — arguments and record ids | long, deliberate |
+| Failures, warnings | `AppTraces` | App Insights SDK | incidental only | medium |
+| Upstream call detail | `AppDependencies` | SDK auto-collection, **sanitised** | ids in paths | medium |
+| Performance counters | `AppMetrics` | `Meter` via SDK | no | short |
+| Container stdout / **app failed to start** | `ContainerAppConsoleLogs` | CAE diagnostic setting (#142) | should not — #143 | short |
+| Platform events, scaling | `ContainerAppSystemLogs` | CAE diagnostic setting | no | short |
+| Key Vault access | `AzureDiagnostics` | Key Vault diagnostic setting | no | as-is |
+| ACR pulls, pushes | `ContainerRegistry*` | ACR diagnostic setting | no | as-is |
+
+**Why the CAE diagnostic setting is kept even though the SDK covers the app.** It catches what
+in-process telemetry cannot: `StartupGuards` throwing on an unreachable OIDC document — a live
+failure mode, the app refuses to start — plus container crashes and OOM kills. The SDK never
+initialises in exactly the scenario where the log matters most.
+
+⚠️ **`AppDependencies` needs a sanitising telemetry processor from the outset.** SDK auto-collection
+records outbound HTTP URLs, which reintroduces #143's exposure through a different door and into a
+table with different retention from the audit one. Strip query strings there; the audit record is
+where arguments belong.
+
+### Who can read this
+
+The policy reversal above is conditional on this, so it is a design element rather than an operational
+afterthought: *the data is acceptable to store because it is restricted.*
+
+Measured 2026-09-17 on `vitally-prod-law-uksouth`:
+
+| | Count |
+|---|---|
+| Role assignments **at the workspace** | **0** |
+| Distinct **users** with read-capable roles | 5 (4 Owner, 1 Reader) |
+| **Service principals** with read-capable roles | 28 (11 Contributor, 9 Log Analytics Contributor, 3 Reader, 3 Monitoring Contributor, 2 Owner) |
+
+Five people is a defensible set. Two things are not:
+
+1. **Nothing is assigned at the workspace**, so access is entirely inherited from the subscription and
+   management group. It is not controlled here and will drift whenever subscription RBAC changes —
+   nobody editing subscription roles is thinking about this table.
+2. **28 automation principals**, several holding broad `Contributor`, is a wide surface for a store
+   that now holds customer personal data.
+
+Proportionate response, deliberately not a re-platform:
+
+- **Review the 28 service principals** and confirm each needs workspace read. Several are Defender and
+  platform automation and probably do.
+- **Consider table-level RBAC** on the audit table. Log Analytics supports per-table access, so the
+  audit table can be restricted while diagnostics stay broadly readable. Note the limit honestly: an
+  inherited subscription `Contributor` still reads everything, so this only bites once the broad roles
+  are narrowed — it is worth doing in that order, not instead of it.
+- **Do not build a separate workspace for audit.** It would give the cleanest boundary and costs a
+  second ingestion path, DNS, private endpoint and query surface — disproportionate to moving five
+  users and reviewing a service-principal list.
+
 ### Retention
 
 Deferred until volume is measurable, which needs the above. Decide per tier, on evidence, against the
 stated one-year requirement — currently 30 days workspace-wide. Do not set retention before the audit
 tiers and the noise reduction land, or the number will be measured against the wrong traffic.
+
+Retention on the audit table is now an **obligation** rather than a preference, because it holds
+personal data — see the policy section.
 
 ## Phasing
 
@@ -217,14 +344,32 @@ added to an unfiltered stream.
 | PII reaching telemetry through a framework category nobody configured | 3 constrains `HttpClient`; `ContainerAppHTTPLogs` evaluated separately before enabling |
 | Re-locking ingestion breaks delivery again | verify arrival at step 2 *before* re-locking, and re-verify after |
 | Correlation id becomes a per-call-site convention that drifts | carry it through the existing `CallerIdentity`/`AuditLogger` choke points, which already exist for exactly this reason |
+| **Personal data sits in a table whose access is inherited, not controlled** | review the 28 service principals; table-level RBAC once the broad roles are narrowed. This is the condition the policy reversal rests on — treat it as in scope, not follow-up |
+| **An erasure request arrives and nobody has done one** | purge is asynchronous and per-table; rehearse once before it is needed, as #138 does for rotation |
+| Returned-id capture inflates records on paged reads | cap the list (100) and always record the true count, so a capped record still reports the real magnitude rather than under-reporting silently |
+| The withdrawn PII rule is reinstated by a later reader who sees "no PII" as obviously correct | the reversal and its reasoning are recorded in `CLAUDE.md` and here; it was a deliberate trade, not an oversight |
+
+## Decisions taken (2026-09-17, @searledan)
+
+Recorded so they are not re-litigated:
+
+| Question | Decision |
+|---|---|
+| May the audit trail hold customer personal data? | **Yes** — the previous no-PII rule is withdrawn. Arguments in full; response bodies still excluded |
+| What is the acceptance criterion? | *this user* called *this tool* and accessed/modified/deleted data for *these customers* |
+| Primary audit mechanism | **Tool call**, with arguments and returned record ids — not the upstream path, which names customers only on get-by-id |
+| Bulk reads | Record returned ids, capped, always with the true count. Not accepted as a gap |
+| Destination | One workspace, separated by table. App Insights SDK for app telemetry, ingesting over the private endpoint |
+| Why Log Analytics remains | It is the same store — workspace-based App Insights writes into it |
+| Access control | A condition of the policy reversal, not a follow-up |
 
 ## Open questions
 
-- **Destination for the audit tiers.** Console logs via diagnostic setting, or App Insights custom
-  events from inside the app (which ingests over the private endpoint, since the app's own traffic
-  *is* in the VNet)? The latter separates audit from diagnostics natively and gives #93 its dedicated
-  table without parsing — but nothing sends to App Insights today, so it is new wiring.
-- **Sign-in records** — the server sees tokens, not sign-ins. Entra sign-in logs may be the better
-  source; check before building one.
-- **Result magnitude** — a count is cheap and useful; confirm it cannot become a data-volume oracle
-  over customer records in a way that matters.
+- **Sign-in records** — the server sees tokens, not sign-ins, so it cannot record an authentication
+  it never observes. Entra sign-in logs already hold this and are the likely answer; confirm they are
+  retained long enough to pair with this trail before building anything here.
+- **Table-level RBAC sequencing** — worth confirming against the live tenant that restricting the
+  audit table behaves as expected once the inherited roles are narrowed, rather than assuming it from
+  the documentation.
+- **Erasure mechanics** — Azure Monitor purge is asynchronous and per-table. Worth rehearsing once
+  before it is needed against a real request, in the same spirit as #138's rotation dry-run.
