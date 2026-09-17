@@ -285,9 +285,20 @@ mistaken for something this change caused.
 
 ## If something fails
 
-Staging rolls back by reverting its `OAuth__*` variables and its Container App secret to the previous
-provider's — see *The Auth0 → Entra cutover (#108) and its rollback* in `CLAUDE.md`. Production is
-untouched throughout and needs nothing.
+Staging rolls back by reverting its `OAuth__*` variables — see *The Auth0 → Entra cutover and its
+rollback* in `CLAUDE.md` for the values. A staging validation does not touch production.
+
+⚠️ **Staging's secret revert is not a one-liner, unlike production's.** Staging carries a single
+Container App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the
+**Entra** value — the Auth0 value is not sitting there waiting. Reverting the variables without first
+re-fetching the Auth0 client secret from Key Vault pairs the Auth0 client id with the Entra secret,
+which fails silently at the token exchange rather than at startup. So a staging rollback needs the
+two-switch Key Vault window (`docs/runbooks/entra-app-registration.md`, driven under a
+`trap … EXIT INT TERM HUP`) *before* the variables move.
+
+Production is the opposite: its flip added `entra-oauth-client-secret` alongside the retained
+`oauth-shared-client-secret` rather than overwriting it, so its rollback is variables only, with no
+vault window at all.
 
 ## After it passes
 
