@@ -285,8 +285,21 @@ mistaken for something this change caused.
 
 ## If something fails
 
-Staging rolls back by reverting its `OAuth__*` variables — see *The Auth0 → Entra cutover and its
-rollback* in `CLAUDE.md` for the values.
+Staging rolls back in **two** steps, and doing only the first leaves an app that boots, passes
+`/health`, and fails every sign-in:
+
+1. **Replace the Container App secret** `oauth-shared-client-secret` with the **Auth0** client secret,
+   fetched from Key Vault through the two-switch window (see below — it is not already on the app).
+2. **Then** revert the `OAuth__*` variables — values in *The Auth0 → Entra cutover and its rollback*
+   in `CLAUDE.md`.
+
+**In that order, and the reason is the revision model rather than the pairing.** Either step alone
+leaves a mismatch — client id from one provider, secret from the other — and that is the
+`invalid_client` failure described below. But `az containerapp secret set` does **not** roll a
+revision: the running one keeps serving with the value it already has. The `--set-env-vars` update
+does roll one, and the new revision reads both the new variables and the new secret. So staging the
+secret first and letting the variable update roll the revision means a single transition, rather
+than two in which one revision is guaranteed to be mismatched.
 
 ⚠️ **"It is only staging" is true of the configuration and false of the data.** Nothing here
 changes production's Container App or its OAuth settings. But staging reads the **production**
@@ -321,10 +334,11 @@ What this runbook is now: the **Entra acceptance suite**. Its checks assert Entr
 **Re-run everything above while Entra is the active provider** — after any change to this app
 registration, to the tenant, or to the `mcp.access` scope, and after a re-flip *to* Entra.
 
-⚠️ **After a rollback to Auth0, most of this suite still applies — but two checks do not, and
-running those two will produce failures that mean nothing.** Read them as inapplicable, not as a
-broken rollback: the risk is that someone "fixes" the configuration back to Entra and undoes, during
-an incident, the rollback they had just deliberately performed.
+⚠️ **After a rollback to Auth0, most of this suite still applies — but not all of it, and the parts
+that do not will produce failures that mean nothing.** The table below says which is which; read the
+inapplicable rows as inapplicable, not as a broken rollback. The risk is that someone "fixes" the
+configuration back to Entra and undoes, during an incident, the rollback they had just deliberately
+performed.
 
 | after an Auth0 rollback | |
 |---|---|

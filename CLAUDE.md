@@ -648,7 +648,7 @@ Scoped. Resolution order on each call to `GetApiKeyAsync()`:
 2. Check `IMemoryCache` for `"vitally-api-key::{DefaultSecretRef}"`. Return if hit.
 3. Call `SecretClient.GetSecretAsync(DefaultSecretRef)` (uses the Container App's user-assigned managed identity), cache the value for `SecretCacheDuration`, return.
 
-This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache expires on its own). Per-user keys could be re-introduced by extending the provider to select a different secret name per caller, keyed off a claim or the caller's group membership — no other architecture changes needed. (An Auth0 Action used to mint a `secret_ref` claim for this; it went with the rest of the Auth0 configuration at the #108 cutover, and Vitally API keys are tenant-global anyway, so the idea needs a new motivation before it needs a mechanism.)
+This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache expires on its own). Per-user keys could be re-introduced by extending the provider to select a different secret name per caller, keyed off a claim or the caller's group membership — no other architecture changes needed. (An Auth0 Action used to mint a `secret_ref` claim for this. The Action still **exists** — it is retained with the rest of the Auth0 configuration for the rollback window, see the rollback appendix — but nothing reaches it while both targets sign in against Entra, and this code stopped reading that claim at the #108 cutover regardless. Vitally API keys are tenant-global anyway, so the idea needs a new motivation before it needs a mechanism.)
 
 ### HTTP Service (VitallyService.cs)
 
