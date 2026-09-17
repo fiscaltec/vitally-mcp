@@ -287,10 +287,13 @@ mistaken for something this change caused.
 
 Staging rolls back in **two** steps. Both are required, and the order matters:
 
-1. **Replace the Container App secret** `oauth-shared-client-secret` with the **Auth0** client secret,
-   fetched from Key Vault through the two-switch window (see below — it is not already on the app).
-2. **Then** revert the `OAuth__*` variables — values in *The Auth0 → Entra cutover and its rollback*
-   in `CLAUDE.md`.
+1. **Replace the Container App secret** `oauth-shared-client-secret` with the **Auth0** client secret.
+   It is **not** in Key Vault — that vault holds only `entra-mcp-client-secret` and `vitally-shared`.
+   It is on *production's* Container App and is readable, so this needs no vault window. The two
+   commands are in *The Auth0 → Entra cutover and its rollback* in `CLAUDE.md`, which is the only
+   place they are written down.
+2. **Then** revert the `OAuth__*` variables — same section for the values, and note that staging's
+   `OAuth__Audience` is its **own** Auth0 Resource Server, not production's.
 
 **In that order, and the reason is the revision model.** `az containerapp secret set` does **not**
 roll a revision — the running one keeps serving with the value it already loaded — whereas

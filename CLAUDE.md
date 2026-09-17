@@ -1206,11 +1206,34 @@ Rollback of **production** is one `az containerapp update` — no redeploy, no K
 revision pin — because the Auth0 client secret was never overwritten. It is still on that Container
 App under its original name, `oauth-shared-client-secret`, alongside the Entra one added at the flip.
 
-⚠️ **Staging is not in the same position.** It carries a single Container App secret,
-`oauth-shared-client-secret`, and that one now holds the **Entra** value — verified against the live
-app. So rolling staging back needs the Auth0 client secret re-fetched from Key Vault first, which
-means a Key Vault window, unlike production. Production is the
-target a rollback actually matters for; do not read the command below as covering both.
+⚠️ **Staging needs one extra step, and this is the only place it is written down.** It carries a
+single Container App secret, `oauth-shared-client-secret`, and that one now holds the **Entra**
+value — verified against the live app — so its Auth0 credential has to be put back before the
+variables move.
+
+**The Auth0 client secret is NOT in Key Vault.** That vault holds exactly two secrets,
+`entra-mcp-client-secret` and `vitally-shared` — verified 2026-09-17 by listing it. Earlier drafts of
+this section told you to re-fetch it from the vault through the two-switch window. That was
+impossible to follow and would have stranded whoever tried it mid-incident.
+
+It is on **production's Container App**, under the name the flip deliberately left alone, and it is
+readable — so a staging rollback needs **no Key Vault window at all**:
+
+```bash
+# 1. read the retained Auth0 secret off production (no vault, no firewall change)
+S=$(az containerapp secret show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
+      --secret-name oauth-shared-client-secret --query value -o tsv)
+[ -n "$S" ] || { echo "NOT ASSESSED — could not read the retained secret; stop here"; false; }
+
+# 2. put it on staging. Step 3 (reverting staging's OAuth__* variables) rolls the revision that
+#    picks up both — see the staging runbook for why that order matters.
+az containerapp secret set -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
+  --secrets "oauth-shared-client-secret=$S"
+unset S
+```
+
+If production has itself been rolled back first, that secret is still the same value: a rollback
+changes which secret the env var *references*, not the secret's contents.
 
 ```bash
 az containerapp update -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth   --set-env-vars     "OAuth__Authority=https://fiscal-it.uk.auth0.com/"     "OAuth__Audience=https://vitally.fiscaltec.com/"     "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D"     "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"   --remove-env-vars OAuth__UpstreamResourceScope

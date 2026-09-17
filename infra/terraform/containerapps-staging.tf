@@ -115,9 +115,9 @@ resource "azurerm_container_app" "staging" {
         name  = "AZURE_CLIENT_ID"
         value = var.managed_identity_client_id
       }
-      # Staging is pointed at a new identity provider first and production follows once it has
-      # passed. That is what happened here: staging moved to Entra on 2026-09-03 and production on
-      # 2026-09-16, so the five IDENTITY variables now agree and are ready to be collapsed onto the
+      # Standing policy: a new identity provider goes to staging first and production follows only
+      # once it has passed there. That is how the Entra move ran — staging 2026-09-03, production
+      # 2026-09-16, both complete — so the five IDENTITY variables now agree and are ready to be collapsed onto the
       # oauth_* ones: authority, audience, upstream_resource_scope, shared_client_id and the secret
       # value. NOT staging_oauth_resource or staging_public_base_url — each target publishes its own
       # origin, and collapsing those makes staging advertise production's, which strict RFC 9728
