@@ -48,8 +48,9 @@ resource "azurerm_container_app" "staging" {
   # one Entra app registration — staging since 2026-09-03, production since 2026-09-16 — so this and
   # production's `entra-oauth-client-secret` hold the same secret. Production kept the name
   # `oauth-shared-client-secret` for the retained *Auth0* value instead, which is what lets a
-  # production rollback skip the Key Vault window; staging has only this one name, so a staging
-  # rollback would need the Auth0 secret re-fetched from the vault first.
+  # production rollback change nothing but variables. Staging has only this one name, so a staging
+  # rollback must put its Auth0 secret back first — copied from production's Container App, NOT from
+  # Key Vault, which holds only entra-mcp-client-secret and vitally-shared. Commands in CLAUDE.md.
   #
   # Handing the wrong secret to either app is not caught at startup: the app boots and /health passes.
   # It surfaces at the token exchange as an authentication error from the provider, so sign-in fails for

@@ -1147,11 +1147,13 @@ Five variables per target, and the secret behind the sixth:
 
 `OAuth__SharedClientSecret` moved to a **new** `secretRef`. Production now points at
 `entra-oauth-client-secret`, added at the flip alongside the retained `oauth-shared-client-secret`
-rather than overwriting it — which is what keeps the rollback free of a Key Vault window. (Staging
-kept the original name and overwrote the value, so only staging would need the window on a rollback.)
+rather than overwriting it. Staging kept the original name and overwrote the value, so on a rollback
+staging needs its Auth0 secret put back first — **copied from production's Container App, not from
+Key Vault, which does not hold it.** The two commands are in the rollback appendix below.
 
-Reading `entra-mcp-client-secret` from the vault — needed to stage that value, and again at rotation
-— requires the two-switch Key Vault window described in `docs/runbooks/entra-app-registration.md`.
+Reading `entra-mcp-client-secret` from the vault — needed to stage that value at the flip, and again
+at rotation — requires the two-switch Key Vault window described in
+`docs/runbooks/entra-app-registration.md`. That is the *Entra* credential; no rollback needs it.
 Note the egress IP must be resolved with `curl -4`: this workstation egresses over IPv6 by default and
 Key Vault network ACLs are IPv4-only, so the rule add fails outright rather than degrading. Drive the
 window from a shell with a `trap … EXIT INT TERM HUP` that closes it, so an interrupted run cannot
@@ -1225,8 +1227,8 @@ S=$(az containerapp secret show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uk
       --secret-name oauth-shared-client-secret --query value -o tsv)
 [ -n "$S" ] || { echo "NOT ASSESSED — could not read the retained secret; stop here"; false; }
 
-# 2. put it on staging. Step 3 (reverting staging's OAuth__* variables) rolls the revision that
-#    picks up both — see the staging runbook for why that order matters.
+# 2. put it on staging. Reverting staging's OAuth__* variables next rolls the revision that picks
+#    up both — see the staging runbook for why that order matters.
 az containerapp secret set -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
   --secrets "oauth-shared-client-secret=$S"
 unset S

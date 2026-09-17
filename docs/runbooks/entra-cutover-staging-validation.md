@@ -316,16 +316,17 @@ this validation mutates real customer records. `Authorization__ReadOnly=true` is
 and steps 3 and 4 deliberately remove it. Put it back the moment they are done, and verify it is
 back on the revision serving traffic rather than on the desired template.
 
-⚠️ **Staging's secret revert is not a one-liner, unlike production's.** Staging carries a single
-Container App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the
-**Entra** value — the Auth0 value is not sitting there waiting. Reverting the variables without first
-re-fetching the Auth0 client secret from Key Vault pairs the Auth0 client id with the Entra secret.
-That is not caught at startup — the app boots clean and `/health` returns 200 — and surfaces only at
-the token exchange, where the provider returns an authentication error (`invalid_client`) and sign-in
-fails for everyone. Late, not silent: if you are debugging one, the token endpoint's response is where
-the answer is. So a staging rollback needs the
-two-switch Key Vault window (`docs/runbooks/entra-app-registration.md`, driven under a
-`trap … EXIT INT TERM HUP`) *before* the variables move.
+⚠️ **Staging needs its secret put back; production does not.** Staging carries a single Container
+App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the **Entra**
+value — the Auth0 value is not sitting there waiting. Revert the variables without restoring it and
+you pair the Auth0 client id with the Entra secret. That is not caught at startup — the app boots
+clean and `/health` returns 200 — and surfaces only at the token exchange, where the provider
+returns `invalid_client` and sign-in fails for everyone. Late, not silent: if you are debugging one,
+the token endpoint's response is where the answer is.
+
+**Restoring it needs no Key Vault window.** The Auth0 secret is not in that vault at all — it holds
+only `entra-mcp-client-secret` and `vitally-shared`. It is on *production's* Container App and is
+readable; the two commands are in *The Auth0 → Entra cutover and its rollback* in `CLAUDE.md`.
 
 Production is the opposite: its flip added `entra-oauth-client-secret` alongside the retained
 `oauth-shared-client-secret` rather than overwriting it, so its rollback is variables only, with no
