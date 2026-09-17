@@ -7,7 +7,27 @@ resource "azurerm_container_app_environment" "env" {
   name                           = "${var.name_prefix}-cae-uksouth"
   resource_group_name            = data.azurerm_resource_group.rg.name
   location                       = var.location
-  log_analytics_workspace_id     = azurerm_log_analytics_workspace.law.id
+  # Changed 2026-09-17 from the default "log-analytics" destination, which writes directly to the
+  # workspace using its SHARED KEY. That never worked here and never could: monitoring.tf sets
+  # local_authentication_enabled = false, so the workspace refuses shared-key writes — which is why
+  # ContainerAppConsoleLogs_CL had zero rows for the workspace's entire lifetime.
+  #
+  # It is also unsupported by design. Microsoft's Container Apps log-options documentation states:
+  #
+  #   "Private link: Sending logs directly to a Log Analytics Workspace through Private Link isn't
+  #    supported. However, you can use Azure Monitor and send your logs to the same Log Analytics
+  #    Workspace. This indirection is required to prevent system log data loss."
+  #
+  # With "azure-monitor", the categories and destination are configured by DIAGNOSTIC SETTINGS
+  # instead (diagnostics.tf) — which reach the workspace over the Azure Monitor control plane rather
+  # than a shared key, so they work with ingestion private and local auth disabled.
+  #
+  # ⚠️ The diagnostic settings are NOT optional with this value: set "azure-monitor" without them and
+  # logs go nowhere silently, which is the state this repo was in before 2026-09-17 in the other
+  # direction. log_analytics_workspace_id is deliberately absent — it belongs to the destination that
+  # was removed, and the live resource's logAnalyticsConfiguration is now null.
+  logs_destination = "azure-monitor"
+
   infrastructure_subnet_id       = azurerm_subnet.app.id
   internal_load_balancer_enabled = false # external ingress — app stays internet-facing
 

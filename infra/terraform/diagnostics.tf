@@ -12,7 +12,17 @@
 # Microsoft channel that is governed by neither internet_ingestion_enabled nor the AMPLS access
 # modes. That is precisely why Key Vault and ACR records reach this workspace today with ingestion
 # private and local auth disabled — and it is why this is the right mechanism rather than a
-# workaround.
+# workaround. Microsoft says so directly for this case:
+#
+#   "Private link: Sending logs directly to a Log Analytics Workspace through Private Link isn't
+#    supported. However, you can use Azure Monitor and send your logs to the same Log Analytics
+#    Workspace. This indirection is required to prevent system log data loss."
+#
+# ⚠️ THIS FILE IS HALF THE MECHANISM. A diagnostic setting is INERT unless the environment's
+# logs_destination is "azure-monitor" (containerapps.tf). With the default "log-analytics" the CAE
+# keeps using the shared-key shipper and ignores diagnostic settings entirely — which is exactly what
+# happened on 2026-09-17: this setting was created, nothing arrived for 18 minutes, and the cause was
+# the destination, not the setting. Change the two together or neither.
 #
 # Design: docs/superpowers/specs/2026-09-17-logging-observability-design.md. Issue: #142.
 
@@ -21,11 +31,17 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   target_resource_id         = azurerm_container_app_environment.env.id
   log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
 
-  # "Dedicated" = resource-specific export, so records land in the real ContainerAppSystemLogs table
-  # rather than the generic AzureDiagnostics/_CL shape. Load-bearing rather than cosmetic: per-table
-  # retention and table-level RBAC are only possible against a real table, and both are required by
-  # the retention work in #93.
-  log_analytics_destination_type = "Dedicated"
+  # ⚠️ log_analytics_destination_type is deliberately NOT set, and an earlier version of this file
+  # set it to "Dedicated" — which was wrong in a way worth recording, because the API does not tell
+  # you. Both `az monitor diagnostic-settings create --export-to-resource-specific true` and an
+  # explicit PUT carrying "logAnalyticsDestinationType": "Dedicated" RETURN it in their response and
+  # then store null. Reading the setting back from ARM is the only way to see that. Claiming it here
+  # would document a property the live resource does not have.
+  #
+  # It appears to be implicit for this resource type: Microsoft's Container Apps log-options
+  # documentation refers to ContainerAppSystemLogs and ContainerAppConsoleLogs as the tables records
+  # become queryable in, which are the resource-specific names rather than AzureDiagnostics.
+  # Confirm against the live tables once records flow rather than trusting that reading.
 
   enabled_log {
     category = "ContainerAppSystemLogs"
