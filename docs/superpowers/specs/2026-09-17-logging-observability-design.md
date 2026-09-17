@@ -67,12 +67,31 @@ the Container App. So every category runs at the framework default of `Informati
 above is what that produces. The Example file being *almost* right is the trap: it reads like
 configured behaviour and is inert.
 
-### The whole logging surface is eight call sites
+### The whole logging surface is 14 call sites, and 11 of them are warnings
 
-`AuditLogger` ×3, `GraphGroupPermissionResolver` ×2, `UpstreamOidcMetadata` ×1,
-`VitallyRateLimitHandler` ×1, `VitallyApiKeyProvider` ×1 (Debug). Plus exactly **one `LogError` in
-the entire application** (`ToolAuthorizer.cs`). No `Stopwatch`, `Activity`, `Meter` or counter
-anywhere.
+| File | Sites |
+|---|---|
+| `AuditLogger` | 3 (1 Information, 2 Warning) |
+| `ToolAuthorizer` | 3 (2 Warning, **1 Error**) |
+| `VitallyRateLimitHandler` | 3 (Warning) |
+| `GraphGroupPermissionResolver` | 2 (Warning) |
+| `UpstreamOidcMetadata` | 1 (Warning) |
+| `VitallyApiKeyProvider` | 1 (Debug) |
+| `Program.cs` | 1 (Warning) |
+
+By level: **11 `LogWarning`, 1 `LogInformation`, 1 `LogError`, 1 `LogDebug`.**
+
+⚠️ **Two earlier drafts of this section said "seven" and then "eight", and both were wrong** — the
+survey behind them used a regex requiring `_logger.`, which cannot match `_logger?.LogWarning`. The
+null-conditional call sites were invisible to it, which is most of `ToolAuthorizer` and
+`VitallyRateLimitHandler`, plus `Program.cs`'s `app.Logger`. Recorded because the same mistake
+silently under-reports any future audit of this surface: match `[A-Za-z_]+\??\.Log[A-Z]`.
+
+The shape of the finding survives the correction and is arguably starker: **one Error-level call site
+in fourteen**, on a service whose failures are otherwise handed to the client and forgotten.
+
+No `Stopwatch`, `Activity`, `ActivitySource`, `Meter`, counter or histogram anywhere — verified with
+a pattern wide enough to catch all of them.
 
 ## Policy: the audit trail may contain customer personal data — reversed 2026-09-17
 
@@ -190,9 +209,18 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
   `VitallyService.SendAsync` calls `LogDenied`, and the SDK authorisation checkpoint calls
   `LogToolCallDenied`, which exists precisely because that checkpoint rejects before `SendAsync`
   runs. Denials are the best-covered path here, not the worst.
-- **`VitallyService.SendAsync`** throws on non-2xx with the response body; surfaced to the client,
-  never logged. Log the status and resource — **never the body**, which can carry customer PII.
-- **Rate-limit exhaustion** — only the "nearing" threshold warns today; retries-exhausted is silent.
+- **`VitallyService.SendAsync` non-2xx is *partly* covered, and an earlier draft overstated this.**
+  `_audit.LogAction(method, url, (int)response.StatusCode)` runs **before** the throw, for every
+  response — so the status code *is* recorded. What is missing is an **Error-level record carrying
+  the reason**: the body snippet goes into the exception message for the client and is never logged.
+  Log the status and resource at `Error` — **never the body**, which can carry customer PII, which is
+  presumably why it was left out and why the failure became invisible.
+
+  Note the interaction with #139: before `IncludeReads` defaulted true, a failed **GET** produced no
+  record at all, because `LogAction` returns early for GETs. That is now covered.
+- **Rate-limit exhaustion is already logged**, correcting an earlier draft — `VitallyRateLimitHandler`
+  warns *"retries exhausted, returning 429 to caller"*. The gap is that it is a log line rather than a
+  **counter**, so pressure against the 1000 req/min budget cannot be trended or alerted on.
 - **Key Vault fetch failure** throws unlogged.
 
 ### Performance
@@ -360,13 +388,21 @@ personal data — see the policy section.
 | 1 | audit reads by default | **done** — #139 / PR #140 |
 | 2 | diagnostic setting; verify arrival; re-lock ingestion | — |
 | 3 | logging configuration: noise + `HttpClient` PII | — |
-| 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3 |
+| **3a** | **access review — a gate, not a task**: confirm the 5 users are appropriate, review the 28 service principals, decide on table-level RBAC | — |
+| 4 | audit tiers: tool-call record, correlation id, sign-in, result count | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
 | 7 | routing and retention per tier | 2, 4, measured volume |
 
 2 and 3 are independent and both unblock the rest. 3 is worth doing before 4–6 so new records are not
 added to an unfiltered stream.
+
+⚠️ **3a gates 4, and that ordering is the whole point.** Phase 4 is what starts writing customer
+personal data, and the policy reversal permitting it was taken *on the condition* that the store is
+restricted. Building 4 first would leave the condition unmet while the data it authorises accumulates
+— which is the failure mode of every "we'll tighten access later" plan. If 3a turns out to be
+harder than expected, that is a reason to re-open the policy decision, not a reason to proceed past
+it.
 
 ## Risks
 
