@@ -9,13 +9,12 @@ namespace VitallyMcp.Tests;
 /// <summary>
 /// Pins the log-level filters configured in <c>Program.cs</c>.
 ///
-/// <para>The first of these is a <b>PII control, not noise reduction</b>, which is why it is tested
-/// rather than left to review. At <c>Information</c> the <c>System.Net.Http.HttpClient.*</c>
-/// categories log every outbound request URI <i>including its query string</i>, and
-/// <c>Search_users</c> / <c>Search_admins</c> put caller-supplied search terms — potentially names or
-/// email addresses — into that query string. That is exactly the data
-/// <c>AuditLogger.ResourcePath</c> strips on purpose, escaping through a framework category nobody
-/// configured (#143).</para>
+/// <para>⚠️ <b>#143 framed the <c>HttpClient</c> filter as a PII control and that premise was
+/// wrong.</b> .NET redacts query <i>values</i> by default — the logged form is
+/// <c>GET .../users/search?*</c>, where <c>?*</c> is the redaction marker rather than a truncation
+/// — so <c>Search_users</c> terms never reached the logs. Verified by probe and against live
+/// production logs, where every query in the stream is <c>?*</c>. The filters are <b>noise
+/// reduction</b>: 86.8% of console bytes between them.</para>
 ///
 /// <para>These assertions compose the real host, so they fail if the filters are removed, reordered
 /// behind a provider that ignores them, or moved to a config file that does not reach the image —
@@ -140,8 +139,9 @@ public class LoggingFilterTests
         var logger = ComposeAndGetLogger(category);
 
         logger.IsEnabled(LogLevel.Information).Should().BeFalse(
-            "Information on this category logs the outbound request URI including its query string, " +
-            "and Search_users/Search_admins put caller-supplied search terms there");
+            "these categories log an outbound request URI per call and are 19.5% of console bytes; " +
+            "note the query VALUES are redacted by .NET regardless, so this is noise reduction " +
+            "rather than the PII control #143 originally claimed");
     }
 
     [Theory]

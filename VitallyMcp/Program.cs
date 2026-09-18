@@ -23,17 +23,21 @@ var builder = WebApplication.CreateBuilder(args);
 // code (#139): a Container App recreate does not inherit them, so the constraint would lapse
 // silently on any target someone forgot.
 //
-// ⚠️ The FIRST filter is a PII control, not noise reduction. At Information these categories log
-// every outbound request URI *including its query string*, and `Search_users` / `Search_admins`
-// put caller-supplied search terms — potentially names or email addresses — in that query string
-// (they reach `GetResourcesAsync("users/search", …, additionalParams, …)`, and additionalParams
-// becomes the query). That is precisely the data `AuditLogger.ResourcePath` strips on purpose,
-// leaking through a framework category nobody configured, into whichever table has the shortest
-// retention and the broadest access. See #143.
+// ⚠️ #143 raised this as a PII control, and that premise was WRONG. Recorded rather than quietly
+// dropped, because the mistaken version is the intuitive one and will be re-derived otherwise.
 //
-// `nameContains` is NOT one of those paths, despite the obvious guess: `GetByNameContainsAsync`
-// pages the list endpoint and applies the predicate locally, because Vitally has no name filter,
-// so that term never leaves the process.
+// The claim was that these categories log the outbound URI including its query string, so a
+// `Search_users` / `Search_admins` term — potentially a name or email — would reach the logs.
+// **.NET redacts query VALUES by default**: the logged form is
+// `GET https://rest.vitally-eu.io/resources/users/search?*`, and the `?*` is the redaction marker,
+// not a truncation. Verified twice — by a probe that drove a request carrying a marker through a
+// typed client and found the marker absent from every record, and by reading live production logs,
+// where every query in the stream is `?*`. Nothing here disables it (no `DisableUriRedaction`
+// switch, no `UriRedaction` configuration).
+//
+// So this filter is NOISE REDUCTION, worth 19.5% of console bytes, with defence-in-depth as a
+// footnote: if redaction were ever disabled the filter would still keep the URIs out. Path segments
+// are not redacted, but those carry record ids, which `AuditLogger` deliberately records anyway.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 // Noise. Measured against live production on 2026-09-18 over a 300-record sample: these four

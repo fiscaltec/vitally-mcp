@@ -634,11 +634,16 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 
 > ⚠️ **Log levels are a security control here, and they live in `Program.cs`. Do not move them.**
 >
-> `builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning)` is a **PII control, not
-> noise reduction**. At `Information` those framework categories log every outbound request URI
-> *including its query string*, and `Search_users` / `Search_admins` put caller-supplied search terms —
-> potentially names or email addresses — into that query string. It is exactly the data
-> `AuditLogger.ResourcePath` strips on purpose, escaping through a category nobody configured (#143).
+> ⚠️ **#143 raised `builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning)` as a
+> PII control. That premise was wrong**, and it is recorded here because the mistaken version is the
+> intuitive one: the concern was that `Search_users` / `Search_admins` terms reach logs via the
+> outbound request URI. **.NET redacts query values by default** — the logged form is
+> `GET .../users/search?*`, where `?*` is the redaction marker, not a truncation. Verified 2026-09-18
+> by probe and against live production logs, in which every query is `?*`; nothing here disables it.
+>
+> So the filter is **noise reduction** (19.5% of console bytes), with defence-in-depth as a footnote
+> should redaction ever be turned off. Path segments are *not* redacted, but they carry record ids,
+> which `AuditLogger` deliberately records anyway.
 > Four `Microsoft.AspNetCore.*` noise filters sit beside it, all `Warning` rather than `None` so
 > framework *warnings* still surface — this application has exactly **one** `LogError` call site of
 > its own, so those are most of what reports a fault.

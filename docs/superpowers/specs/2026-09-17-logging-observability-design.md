@@ -121,7 +121,7 @@ was expected, since reads were unaudited until #139.
 | | Share of console bytes |
 |---|---|
 | The four framework noise categories | **67.3%** |
-| `System.Net.Http.HttpClient.*` (the PII control) | 19.5% |
+| `System.Net.Http.HttpClient.*` | 19.5% |
 | Everything retained | 13.2% |
 
 **Phase 3 removes both of the first two rows — 86.8% together.** The 67.3% figure is the noise filters alone; quote it only when the `HttpClient` PII filter is excluded, since that one is kept regardless of volume.
@@ -217,18 +217,22 @@ Recorded so a future reader does not mistake these for oversights:
 
 ### The framework leak still has to be closed
 
-`System.Net.Http.HttpClient.*` logs outbound request URIs *including query strings* at `Information`,
-for every Vitally and Graph call (#143). That is **not** made acceptable by this policy change: the
-policy permits deliberate, structured, access-controlled audit records, not the same data scattered
-through diagnostic categories nobody configured, in a table with different retention and broader
-access. Close it as planned.
+⚠️ **#143 claimed `System.Net.Http.HttpClient.*` leaks search terms through outbound request URIs.
+That premise was wrong and the issue is closed on those grounds.** .NET redacts query **values** by
+default: the logged form is `GET .../users/search?*`, where `?*` is the redaction marker rather than
+a truncation. Verified 2026-09-18 by a probe carrying a marker through a typed client — absent from
+every record — and against live production logs, where every query in the stream is `?*`. Nothing
+here disables it.
 
-**Which tools actually expose a term, corrected.** Only `Search_users` and `Search_admins` — they
-call `GetResourcesAsync("users/search" | "admins/search", …, additionalParams, …)`, and
-`additionalParams` becomes the query string. **`nameContains` does not**: `GetByNameContainsAsync`
-pages the list endpoint and applies the predicate *locally*, because Vitally has no name filter, so
-the term never leaves the process. An earlier draft attributed the exposure to it; that was wrong and
-would have sent whoever fixed this to the wrong call path.
+The filter still lands, as **noise reduction** (19.5% of console bytes) with defence-in-depth as a
+footnote. Path segments are not redacted, but they carry record ids, which `AuditLogger` records
+deliberately.
+
+**For the record, since two drafts argued about it before the premise collapsed:** the only tools
+that put a caller term in an outbound query string are `Search_users` and `Search_admins`, via
+`additionalParams` on `GetResourcesAsync`. `nameContains` does **not** — `GetByNameContainsAsync`
+pages the list endpoint and filters locally, so the term never leaves the process. Both facts remain
+true; neither now matters, because the query values are redacted before they are logged.
 
 ## Design — code (what is emitted)
 
@@ -393,8 +397,8 @@ It does three jobs at once:
 Concretely, so an implementation cannot follow this document and still leave the exposure open:
 
 ```csharp
-// The PII control. At Information these categories log outbound request URIs including query
-// strings — which carry Search_users / Search_admins terms. Warning keeps failures visible.
+// Outbound request URIs, one pair per call. NOTE: query VALUES are redacted by .NET (`?*`),
+// so this is noise reduction — #143 framed it as a PII control and that was wrong.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 // Noise. 67.3% of console bytes, measured 2026-09-18. Kept for live-stream readability, not cost.
