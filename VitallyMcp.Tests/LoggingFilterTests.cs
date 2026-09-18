@@ -231,9 +231,23 @@ public class LoggingFilterTests
         entry.Level.Should().Be(LogLevel.Warning,
             "Information would be removed by the Microsoft.AspNetCore.Authentication filter");
 
+        // The structural assertion is what actually proves the security property, and the marker
+        // check below is deliberately secondary.
+        //
+        // ⚠️ The marker alone would be a hollow test. It sits in the token's payload, but this token
+        // has an unverifiable signature and points at an unreachable authority — so validation fails
+        // at metadata retrieval or signature checking, BEFORE `aud`/`iss` are ever evaluated. The
+        // resulting Exception.Message therefore need not contain the marker at all, and a revert to
+        // logging Message would sail past a marker-only assertion.
+        //
+        // Matching the whole rendered message against a single-token shape catches that revert
+        // regardless of what the exception says: `Message` cannot be appended without breaking it.
+        entry.Message.Should().MatchRegex(@"^Bearer token validation failed: \w+$",
+            "the record must carry the exception TYPE and nothing else — appending Exception.Message " +
+            "would embed caller-controlled claim values that may contain newlines");
+
         entry.Message.Should().NotContain(marker,
-            "no part of the token may reach the log — IdentityModel messages embed claims such as " +
-            "aud and iss, which are caller-controlled and may carry newlines");
+            "belt and braces: no part of the token may reach the log");
     }
 
     /// <summary>
@@ -326,16 +340,26 @@ public class LoggingFilterTests
     }
 
     /// <summary>
-    /// Restores a snapshot, clearing anything this class set first — those keys are not necessarily
-    /// in the snapshot (if they were unset before), and leaving them behind is the leak the whole
-    /// mechanism exists to prevent. Always called after the factory is disposed, so the host is not
-    /// reading a half-restored environment while it shuts down.
+    /// Restores a snapshot, clearing <b>everything</b> under the configuration prefixes first rather
+    /// than just the keys this class is known to set. Always called after the factory is disposed,
+    /// so the host is not reading a half-restored environment while it shuts down.
+    ///
+    /// <para>Clearing by prefix rather than by list, for the same reason
+    /// <see cref="SnapshotAndClearConfiguration"/> does: an earlier version cleared only
+    /// <see cref="RequiredSettings"/>, so the auth-on integration test — which additionally sets
+    /// <c>OAuth__Authority</c> and <c>OAuth__Audience</c> — leaked both into the process and could
+    /// change how a later host composed. A list has to be updated every time a test sets something
+    /// new; a prefix sweep does not.</para>
     /// </summary>
     private static void RestoreConfiguration((string Key, string? Value)[] previous)
     {
-        foreach (var (key, _) in RequiredSettings)
+        foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
-            Environment.SetEnvironmentVariable(key, null);
+            var key = (string)e.Key;
+            if (ConfigurationPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            {
+                Environment.SetEnvironmentVariable(key, null);
+            }
         }
 
         foreach (var (key, value) in previous)

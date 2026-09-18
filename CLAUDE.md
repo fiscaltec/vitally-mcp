@@ -639,9 +639,27 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > *including its query string*, and `Search_users` / `Search_admins` put caller-supplied search terms —
 > potentially names or email addresses — into that query string. It is exactly the data
 > `AuditLogger.ResourcePath` strips on purpose, escaping through a category nobody configured (#143).
-> Four `Microsoft.AspNetCore.*` noise filters sit beside it; all are `Warning` rather than `None`
-> deliberately, so genuine faults still surface — this application has exactly **one** `LogError` call
-> site of its own, so framework warnings are most of what reports a fault.
+> Four `Microsoft.AspNetCore.*` noise filters sit beside it, all `Warning` rather than `None` so
+> framework *warnings* still surface — this application has exactly **one** `LogError` call site of
+> its own, so those are most of what reports a fault.
+>
+> ⚠️ **But two framework signals are logged at `Information`, and these filters do suppress them.**
+> An earlier version of this note claimed all faults stay visible; that was wrong, and the exception
+> matters when reading an incident:
+>
+> | Suppressed | Replacement |
+> |---|---|
+> | `Microsoft.AspNetCore.Authorization` — *"Authorization failed. These requirements were not met…"* | For an **authenticated** caller, `AuditLogger.LogToolCallDenied` at `Warning` with the object id, tool and required permission. For an **anonymous** one, **nothing** — that is the normal MCP probe, and it still returns a 401 |
+> | `JwtBearerHandler` — *"Bearer was not authenticated. Failure message…"* | `Program.cs`'s own `OnAuthenticationFailed`, at `Warning` under `VitallyMcp.Authentication`, logging the exception **type only** |
+>
+> The authentication one is re-emitted because nothing else would record it: an unauthenticated
+> caller never reaches `SendAsync` or the `[Authorize]` checkpoint, so a signing-key rotation, clock
+> skew or a run of forged tokens would otherwise be indistinguishable from silence. It logs the type
+> and **never** `Exception.Message` — IdentityModel builds those from the token's own claims, so the
+> text carries caller-controlled values that may contain newlines.
+>
+> What is genuinely given up: a flood of anonymous 401s is invisible in logs. If that needs watching
+> it belongs in a counter or `ContainerAppHTTPLogs`, not Information-level framework text.
 >
 > **Two places it must not move to, both of which look reasonable and silently do nothing:**
 >
