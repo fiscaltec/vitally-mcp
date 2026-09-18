@@ -211,6 +211,35 @@ if (!noAuth)
 
                     context.HandleResponse();
                     return Task.CompletedTask;
+                },
+
+                // The replacement for a signal the logging filters suppress, and the reason they can
+                // safely suppress it. JwtBearerHandler reports a failed token at INFORMATION
+                // ("Bearer was not authenticated. Failure message: …"), which
+                // `AddFilter("Microsoft.AspNetCore.Authentication", Warning)` removes.
+                //
+                // Unlike the authorisation case, nothing else would record it: an unauthenticated
+                // caller never reaches VitallyService.SendAsync or the SDK's [Authorize] checkpoint,
+                // so neither LogDenied nor LogToolCallDenied fires. Without this the failures that
+                // matter most would be invisible — an Entra signing-key rotation, clock skew, or a
+                // run of forged tokens all look identical to silence, and you would learn about them
+                // from users rather than from logs.
+                //
+                // Warning so it outlives the filter. The exception TYPE and message only: never the
+                // token, and never the raw header. Validation messages are shaped like
+                // "IDX10223: Lifetime validation failed" and carry no credential material, which is
+                // exactly the diagnostic needed to tell an expiry apart from a bad signature.
+                OnAuthenticationFailed = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("VitallyMcp.Authentication")
+                        .LogWarning(
+                            "Bearer token validation failed: {FailureType}: {FailureMessage}",
+                            context.Exception.GetType().Name,
+                            context.Exception.Message);
+
+                    return Task.CompletedTask;
                 }
             };
         });

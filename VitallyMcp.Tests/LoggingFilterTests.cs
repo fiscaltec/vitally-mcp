@@ -136,6 +136,37 @@ public class LoggingFilterTests
     }
 
     /// <summary>
+    /// The second suppressed signal, and its replacement.
+    ///
+    /// <para><c>JwtBearerHandler</c> reports a failed token at <c>Information</c> ("Bearer was not
+    /// authenticated. Failure message: …"), which the
+    /// <c>Microsoft.AspNetCore.Authentication</c> filter removes. This case is worse than the
+    /// authorisation one: an unauthenticated caller never reaches <c>VitallyService.SendAsync</c> or
+    /// the SDK's <c>[Authorize]</c> checkpoint, so <b>no</b> <c>AuditLogger</c> record would fire
+    /// either. A signing-key rotation, clock skew or a run of forged tokens would all look exactly
+    /// like silence.</para>
+    ///
+    /// <para><c>Program.cs</c> therefore logs its own <c>OnAuthenticationFailed</c> event at
+    /// <c>Warning</c> under <c>VitallyMcp.Authentication</c>. This pins that the replacement
+    /// <i>survives the filters</i> — which is the concern the filters create. It does not assert the
+    /// event fires; that is framework behaviour, and proving it needs a real JWT path rather than
+    /// the test auth scheme the sibling suites use.</para>
+    /// </summary>
+    [Fact]
+    public void AuthenticationFailureRecord_SurvivesTheFilters()
+    {
+        var framework = ComposeAndGetLogger("Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerHandler");
+        var ours = ComposeAndGetLogger("VitallyMcp.Authentication");
+
+        framework.IsEnabled(LogLevel.Information).Should().BeFalse(
+            "this is the suppressed signal — invalid-token diagnostics are Information here");
+
+        ours.IsEnabled(LogLevel.Warning).Should().BeTrue(
+            "OnAuthenticationFailed is the only record of a rejected token once the framework's " +
+            "Information diagnostic is filtered; nothing else fires for an unauthenticated caller");
+    }
+
+    /// <summary>
     /// The audit trail must survive the noise filters. <c>AuditLogger</c> writes its action record at
     /// <c>Information</c>, so a broad filter applied to the wrong prefix would silently delete the
     /// thing the whole trail exists for.
