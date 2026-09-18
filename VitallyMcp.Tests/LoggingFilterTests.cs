@@ -40,6 +40,67 @@ public class LoggingFilterTests
     /// <c>Information</c>, or dropping to <c>None</c>, for one client while the suite stays
     /// green.</para>
     /// </summary>
+    private const string DefaultHttpClientName = "Default";
+
+    /// <summary>
+    /// Proves the name used above for the unnamed client, rather than trusting it.
+    ///
+    /// <para>The risk this guards against is specific: every category under
+    /// <c>System.Net.Http.HttpClient.</c> is disabled at <c>Information</c> by the prefix filter, so
+    /// a <b>wrong</b> name in the theory data would pass while testing a logger nothing creates —
+    /// exactly how this file's discovery-client name was wrong and green earlier in this PR.</para>
+    ///
+    /// <para>So it records which categories the framework actually asks for when an unnamed client
+    /// is built, and asserts the expected pair is among them.</para>
+    /// </summary>
+    [Fact]
+    public void UnnamedHttpClient_LogsUnderTheDefaultCategory()
+    {
+        var seen = new CategoryRecordingProvider();
+
+        var previous = SnapshotAndClearConfiguration();
+        foreach (var (key, value) in RequiredSettings)
+        {
+            Environment.SetEnvironmentVariable(key, value);
+        }
+
+        try
+        {
+            using var baseFactory = new WebApplicationFactory<Program>();
+            using var factory = baseFactory.WithWebHostBuilder(
+                b => b.ConfigureLogging(l => l.AddProvider(seen)));
+
+            // Building the handler chain is what creates the logging handlers, and therefore the
+            // categories. This is the same call Program.cs makes for /oauth/token.
+            using var _ = factory.Services.GetRequiredService<IHttpClientFactory>().CreateClient();
+        }
+        finally
+        {
+            RestoreConfiguration(previous);
+        }
+
+        seen.Categories.Should().Contain(
+            $"System.Net.Http.HttpClient.{DefaultHttpClientName}.LogicalHandler",
+            "the unnamed client's category is what the theory data above claims it is; if the " +
+            "framework ever changes this substitution, that data silently stops covering it");
+    }
+
+    /// <summary>Records every logger category the host asks for, so a name can be proven.</summary>
+    private sealed class CategoryRecordingProvider : ILoggerProvider
+    {
+        private readonly System.Collections.Concurrent.ConcurrentBag<string> _categories = [];
+
+        public IReadOnlyCollection<string> Categories => _categories;
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            _categories.Add(categoryName);
+            return Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        }
+
+        public void Dispose() { }
+    }
+
     public static TheoryData<string> AllHttpClientCategories()
     {
         // Every name derived from its registration, never a literal. `AddHttpClient<TClient>` and
@@ -53,6 +114,14 @@ public class LoggingFilterTests
                      nameof(VitallyService),
                      nameof(IGroupPermissionResolver),
                      UpstreamOidcMetadata.HttpClientName,
+                     // The UNNAMED client, used by the OAuth proxy for /oauth/token
+                     // (Program.cs: `factory.CreateClient()`). Its outbound requests carry the
+                     // upstream token exchange, so it is as much a PII surface as the others.
+                     // "Default" is the substitution LoggingHttpMessageHandlerBuilderFilter makes
+                     // for an empty name — asserted rather than assumed by
+                     // UnnamedHttpClient_LogsUnderTheDefaultCategory below, because a wrong name
+                     // here would still pass under the prefix filter while testing nothing.
+                     DefaultHttpClientName,
                  })
         {
             foreach (var stage in new[] { "LogicalHandler", "ClientHandler" })
