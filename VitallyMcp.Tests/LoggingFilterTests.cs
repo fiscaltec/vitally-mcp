@@ -172,7 +172,12 @@ public class LoggingFilterTests
         var previous = Environment.GetEnvironmentVariables()
             .Cast<System.Collections.DictionaryEntry>()
             .Select(e => (Key: (string)e.Key, Value: e.Value as string))
-            .Where(e => ConfigurationPrefixes.Any(p => e.Key.StartsWith(p, StringComparison.Ordinal)))
+            // OrdinalIgnoreCase, not Ordinal: .NET configuration keys are case-insensitive, so
+            // `oauth__publicbaseurl` binds exactly as `OAuth__PublicBaseUrl` does — while an
+            // Ordinal prefix match leaves it in place. Verified rather than reasoned: exporting
+            // that lowercase key with an invalid value failed all 17 tests here before this
+            // changed. On Linux the two are genuinely distinct variables, so CI is where it bites.
+            .Where(e => ConfigurationPrefixes.Any(p => e.Key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
 
         foreach (var (key, _) in previous)
