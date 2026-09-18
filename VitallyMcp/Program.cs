@@ -44,10 +44,27 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warnin
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
 
-// Warning rather than None throughout: a failing outbound call or a genuine authentication fault
-// must still surface. It is the Information-level *success* chatter that carries both the volume
-// and the URIs — and this server has exactly one LogError call site of its own, so the framework's
-// warnings are most of what would report a fault today.
+// Warning rather than None, so a failing outbound call still surfaces — this server has exactly one
+// LogError call site of its own, so framework warnings are most of what reports a fault today.
+//
+// ⚠️ One exception, stated because an earlier version of this comment claimed otherwise and was
+// wrong: `Microsoft.AspNetCore.Authorization` logs its *failures* at Information, not Warning
+// ("Authorization failed. These requirements were not met: DenyAnonymousAuthorizationRequirement").
+// So this filter does suppress a genuine failure signal rather than only success chatter.
+//
+// Accepted deliberately, because the signal is covered better elsewhere or is not worth recording:
+//
+//   - an AUTHENTICATED caller denied a tool is recorded by AuditLogger.LogToolCallDenied at
+//     Warning, with the caller's object id, the tool name and the required permission — strictly
+//     more useful than the framework line, and it survives these filters (pinned by
+//     LoggingFilterTests).
+//   - an ANONYMOUS request failing DenyAnonymousAuthorizationRequirement is the normal MCP
+//     unauthenticated probe. It was ~10% of a live console sample, it produces a 401 the client
+//     expects, and recording every one as a "failure" is what made the trail unreadable.
+//
+// What this gives up: a flood of anonymous 401s is no longer visible in logs. If that ever needs
+// watching it belongs in a counter or ContainerAppHTTPLogs (design phase 6), not in Information-level
+// framework text — a metric can be alerted on, and these lines never could be.
 
 // PostConfigure + a forced IOptions resolution after WebApplicationBuilder.Build() gives
 // us fail-fast startup validation without the boilerplate of a separate IValidateOptions

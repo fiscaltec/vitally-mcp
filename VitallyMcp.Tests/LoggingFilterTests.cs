@@ -26,24 +26,18 @@ namespace VitallyMcp.Tests;
 public class LoggingFilterTests
 {
     /// <summary>
-    /// The concrete categories the framework uses for a typed client are
-    /// <c>System.Net.Http.HttpClient.{Name}.LogicalHandler</c> and <c>.ClientHandler</c>. Asserting
-    /// on those rather than the prefix proves the filter actually applies to the categories that
-    /// appear in the live log stream, not merely to a name that happens to match.
-    /// </summary>
-    /// <summary>
-    /// The discovery client is named from <see cref="UpstreamOidcMetadata.HttpClientName"/> rather
-    /// than a literal, because a literal got this wrong once already: an earlier version asserted on
-    /// <c>…HttpClient.upstream.ClientHandler</c>, which is not a registered client at all — the name
-    /// is <c>upstream-oidc-discovery</c>, and the truncation came from a grep pattern that stopped at
-    /// the hyphen. The prefix filter covers any child category, so the bad name still passed while
-    /// testing a logger nothing creates.
-    /// </summary>
-    /// <summary>
     /// <b>Every</b> typed-client category, both handler stages, driven from one source so the two
-    /// theories below cannot drift apart. The filter is a single prefix today, so any one entry
-    /// would prove it works — the completeness is insurance against a future per-category override
-    /// re-enabling `Information` (or dropping to `None`) for one client while the suite stays green.
+    /// theories below cannot drift apart.
+    ///
+    /// <para>The concrete categories the framework uses are
+    /// <c>System.Net.Http.HttpClient.{Name}.LogicalHandler</c> and <c>.ClientHandler</c>. Asserting
+    /// on those rather than on the prefix proves the filter applies to the categories that actually
+    /// appear in the live log stream, not merely to a name that happens to match it.</para>
+    ///
+    /// <para>The filter is a single prefix today, so any one entry would prove it works — the
+    /// completeness is insurance against a future per-category override re-enabling
+    /// <c>Information</c>, or dropping to <c>None</c>, for one client while the suite stays
+    /// green.</para>
     /// </summary>
     public static TheoryData<string> AllHttpClientCategories()
     {
@@ -101,14 +95,44 @@ public class LoggingFilterTests
         var logger = ComposeAndGetLogger(category);
 
         logger.IsEnabled(LogLevel.Information).Should().BeFalse(
-            "these were ~90% of console volume in a live sample and carry no audit or failure signal");
+            "these dominated a live console sample and are the volume the audit trail has to be " +
+            "affordable alongside");
 
         // Asserted in the same test rather than left implied: a regression from Warning to None
-        // would satisfy the line above while silently hiding authentication, authorisation and
-        // routing faults — and those framework warnings are most of what reports a fault here,
-        // since the application has exactly one LogError call site of its own.
+        // would satisfy the line above while silently hiding faults — and framework warnings are
+        // most of what reports one here, since the application has exactly one LogError call site.
         logger.IsEnabled(LogLevel.Warning).Should().BeTrue(
             "the filters are Warning rather than None so genuine faults still surface");
+    }
+
+    /// <summary>
+    /// The one signal these filters genuinely suppress, and the record that replaces it.
+    ///
+    /// <para><c>Microsoft.AspNetCore.Authorization</c> logs its <i>failures</i> at
+    /// <c>Information</c> — <c>"Authorization failed. These requirements were not met:
+    /// DenyAnonymousAuthorizationRequirement"</c> — so unlike the other three, filtering it to
+    /// <c>Warning</c> removes a real failure signal rather than success chatter. An earlier comment
+    /// in <c>Program.cs</c> claimed otherwise and was wrong.</para>
+    ///
+    /// <para>That is acceptable only because the case that matters is recorded better elsewhere: an
+    /// <b>authenticated</b> caller denied a tool produces <c>AuditLogger.LogToolCallDenied</c> at
+    /// <c>Warning</c>, carrying the object id, tool name and required permission. This test pins
+    /// that the replacement survives the filters — without it, the trade is unverified and the
+    /// suppression indefensible. What is genuinely given up is <b>anonymous</b> 401 probes, which
+    /// are the normal MCP handshake.</para>
+    /// </summary>
+    [Fact]
+    public void AuditDenialRecords_SurviveTheFilters_ReplacingTheSuppressedFrameworkSignal()
+    {
+        var framework = ComposeAndGetLogger("Microsoft.AspNetCore.Authorization.DefaultAuthorizationService");
+        var audit = ComposeAndGetLogger(typeof(AuditLogger).FullName!);
+
+        framework.IsEnabled(LogLevel.Information).Should().BeFalse(
+            "this is the suppressed signal — stated explicitly so the trade is visible, not implied");
+
+        audit.IsEnabled(LogLevel.Warning).Should().BeTrue(
+            "LogDenied and LogToolCallDenied are the replacement and must outlive the filters; if " +
+            "this ever fails, suppressing the framework's authorisation failures stops being defensible");
     }
 
     /// <summary>
@@ -131,7 +155,8 @@ public class LoggingFilterTests
     /// <c>WebApplicationFactory</c> can inject configuration — so environment variables are the only
     /// override that works.
     ///
-    /// <para>Only these four are <i>set</i>. Everything else under the three configuration prefixes
+    /// <para>Only these four are <i>set</i>. Everything else under the configuration prefixes in
+    /// <see cref="ConfigurationPrefixes"/>
     /// is <b>cleared wholesale</b> by <see cref="ComposeAndGetLogger"/> rather than enumerated,
     /// which is deliberate: naming individual keys to clear is a losing game. Three review rounds
     /// each found another one that fails host composition before a single assertion runs —
@@ -159,7 +184,12 @@ public class LoggingFilterTests
     /// is cleared before composing, so the host sees exactly <see cref="RequiredSettings"/>.
     /// </summary>
     private static readonly string[] ConfigurationPrefixes =
-        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__"];
+        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__", "Logging__"];
+
+    // Logging__ is in that list for a reason specific to this class: WebApplication.CreateBuilder
+    // reads it, so an ambient Logging__LogLevel__Default=Warning makes
+    // AuditLogger_StillLogsAtInformation fail even when Program.cs's filters are exactly right.
+    // Verified: exporting that variable failed 1 of 17 before it was cleared here.
 
     private static ILogger ComposeAndGetLogger(string category)
     {
