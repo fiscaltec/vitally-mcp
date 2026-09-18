@@ -47,8 +47,18 @@ public class LoggingFilterTests
     /// </summary>
     public static TheoryData<string> AllHttpClientCategories()
     {
+        // Every name derived from its registration, never a literal. `AddHttpClient<TClient>` and
+        // `AddHttpClient<TClient, TImpl>` both take the client name from TClient, so nameof() is the
+        // registration. A literal would survive a rename and quietly fabricate a category that the
+        // prefix filter still reports as disabled — which is exactly how the discovery client's
+        // wrong name passed here before.
         var data = new TheoryData<string>();
-        foreach (var client in new[] { "VitallyService", "IGroupPermissionResolver", UpstreamOidcMetadata.HttpClientName })
+        foreach (var client in new[]
+                 {
+                     nameof(VitallyService),
+                     nameof(IGroupPermissionResolver),
+                     UpstreamOidcMetadata.HttpClientName,
+                 })
         {
             foreach (var stage in new[] { "LogicalHandler", "ClientHandler" })
             {
@@ -121,12 +131,22 @@ public class LoggingFilterTests
     /// <c>WebApplicationFactory</c> can inject configuration — so environment variables are the only
     /// override that works.
     ///
-    /// <para><c>OAuth__SharedClientId</c> is cleared even though nothing in this suite sets it:
-    /// <c>NoAuth</c> does <b>not</b> disable the OAuth proxy — <c>Program</c> derives
-    /// <c>proxyEnabled</c> from that id, and <c>OAuthOptions.Validate()</c> then demands an
-    /// <c>Authority</c> this fixture deliberately clears. An ambient value from a developer's shell
-    /// would fail host startup before any assertion here ran, and the failure would point at OAuth
-    /// rather than at logging.</para>
+    /// <para>The nulls matter as much as the values. Each one names an input that can fail host
+    /// composition <b>before</b> any assertion here runs, and the resulting error points at OAuth or
+    /// Key Vault rather than at logging:</para>
+    /// <list type="bullet">
+    ///   <item><c>Vitally__KeyVaultUri</c> — <c>StartupGuards.EnsureSafeAuthConfig</c> refuses
+    ///     <c>NoAuth=true</c> alongside a Key Vault URI, and this fixture sets <c>NoAuth</c>.</item>
+    ///   <item><c>OAuth__SharedClientId</c> — <c>NoAuth</c> does <b>not</b> disable the proxy;
+    ///     <c>Program</c> derives <c>proxyEnabled</c> from this id and <c>Validate()</c> then demands
+    ///     the <c>Authority</c> cleared below.</item>
+    ///   <item><c>OAuth__PublicBaseUrl</c> — <c>Validate()</c> rejects a non-https value before any
+    ///     proxy-related early return. <b>This one is not hypothetical:</b>
+    ///     <see cref="ResourceMetadataDiscoveryTests"/> sets it (and <c>OAuth__Resource</c>) inside
+    ///     its <c>CreateHost</c> and never restores them, so this fixture really does inherit them.
+    ///     Today's leaked value is valid https and therefore harmless — which is luck, not
+    ///     design.</item>
+    /// </list>
     /// </summary>
     private static readonly (string Key, string? Value)[] HostEnvironment =
     [
@@ -134,8 +154,11 @@ public class LoggingFilterTests
         ("Authorization__ReadOnly", "false"),
         ("Vitally__DevelopmentApiKey", "sk_test_dummy"),
         ("Vitally__Region", "EU"),
+        ("Vitally__KeyVaultUri", null),
         ("OAuth__Authority", null),
         ("OAuth__Audience", null),
+        ("OAuth__Resource", null),
+        ("OAuth__PublicBaseUrl", null),
         ("OAuth__SharedClientId", null),
     ];
 
