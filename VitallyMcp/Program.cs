@@ -11,6 +11,44 @@ using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Log levels are configured HERE rather than in appsettings.json, and that is not a style choice:
+// `.gitignore` (line 111) and `.dockerignore` (line 18) both exclude `appsettings.json` and
+// `appsettings.*.json`, carving out only `appsettings.Example.json`. A file added there would work
+// on a developer machine, never reach the image, and change nothing in production. The exclusion is
+// deliberate — it sits under "Strong-name keys, certificates and other secrets - do NOT commit"
+// beside *.pfx and .env — and is worth keeping, because appsettings.json is exactly where a
+// connection string gets put by reflex.
+//
+// Environment variables are rejected for the same reason the Audit:IncludeReads default lives in
+// code (#139): a Container App recreate does not inherit them, so the constraint would lapse
+// silently on any target someone forgot.
+//
+// ⚠️ The FIRST filter is a PII control, not noise reduction. At Information these categories log
+// every outbound request URI *including its query string*, and `Search_users` / `Search_admins`
+// put caller-supplied search terms — potentially names or email addresses — in that query string
+// (they reach `GetResourcesAsync("users/search", …, additionalParams, …)`, and additionalParams
+// becomes the query). That is precisely the data `AuditLogger.ResourcePath` strips on purpose,
+// leaking through a framework category nobody configured, into whichever table has the shortest
+// retention and the broadest access. See #143.
+//
+// `nameContains` is NOT one of those paths, despite the obvious guess: `GetByNameContainsAsync`
+// pages the list endpoint and applies the predicate locally, because Vitally has no name filter,
+// so that term never leaves the process.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+
+// Noise. Roughly 90% of console volume and none of it an audit or failure signal — measured from a
+// 202-line live sample in which 89 lines carried a logger category, every one of them framework
+// output and none an audit record. Cutting it is what makes retaining the audit trail affordable.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+
+// Warning rather than None throughout: a failing outbound call or a genuine authentication fault
+// must still surface. It is the Information-level *success* chatter that carries both the volume
+// and the URIs — and this server has exactly one LogError call site of its own, so the framework's
+// warnings are most of what would report a fault today.
+
 // PostConfigure + a forced IOptions resolution after WebApplicationBuilder.Build() gives
 // us fail-fast startup validation without the boilerplate of a separate IValidateOptions
 // implementation. If Validate() throws, the app crashes immediately after Build() rather
