@@ -39,14 +39,28 @@ public class LoggingFilterTests
     /// the hyphen. The prefix filter covers any child category, so the bad name still passed while
     /// testing a logger nothing creates.
     /// </summary>
-    private const string DiscoveryClientCategory =
-        "System.Net.Http.HttpClient." + UpstreamOidcMetadata.HttpClientName + ".ClientHandler";
+    /// <summary>
+    /// <b>Every</b> typed-client category, both handler stages, driven from one source so the two
+    /// theories below cannot drift apart. The filter is a single prefix today, so any one entry
+    /// would prove it works — the completeness is insurance against a future per-category override
+    /// re-enabling `Information` (or dropping to `None`) for one client while the suite stays green.
+    /// </summary>
+    public static TheoryData<string> AllHttpClientCategories()
+    {
+        var data = new TheoryData<string>();
+        foreach (var client in new[] { "VitallyService", "IGroupPermissionResolver", UpstreamOidcMetadata.HttpClientName })
+        {
+            foreach (var stage in new[] { "LogicalHandler", "ClientHandler" })
+            {
+                data.Add($"System.Net.Http.HttpClient.{client}.{stage}");
+            }
+        }
+
+        return data;
+    }
 
     [Theory]
-    [InlineData("System.Net.Http.HttpClient.VitallyService.LogicalHandler")]
-    [InlineData("System.Net.Http.HttpClient.VitallyService.ClientHandler")]
-    [InlineData("System.Net.Http.HttpClient.IGroupPermissionResolver.LogicalHandler")]
-    [InlineData(DiscoveryClientCategory)]
+    [MemberData(nameof(AllHttpClientCategories))]
     public void HttpClientCategories_DoNotLogAtInformation_SoQueryStringsStayOutOfLogs(string category)
     {
         var logger = ComposeAndGetLogger(category);
@@ -57,8 +71,7 @@ public class LoggingFilterTests
     }
 
     [Theory]
-    [InlineData("System.Net.Http.HttpClient.VitallyService.ClientHandler")]
-    [InlineData(DiscoveryClientCategory)]
+    [MemberData(nameof(AllHttpClientCategories))]
     public void HttpClientCategories_StillLogWarnings_SoFailuresRemainVisible(string category)
     {
         var logger = ComposeAndGetLogger(category);
@@ -103,22 +116,60 @@ public class LoggingFilterTests
             "the audit trail while looking like noise reduction");
     }
 
+    /// <summary>
+    /// The variables this host needs, each read by <c>Program.cs</c> at composition time — before
+    /// <c>WebApplicationFactory</c> can inject configuration — so environment variables are the only
+    /// override that works.
+    ///
+    /// <para><c>OAuth__SharedClientId</c> is cleared even though nothing in this suite sets it:
+    /// <c>NoAuth</c> does <b>not</b> disable the OAuth proxy — <c>Program</c> derives
+    /// <c>proxyEnabled</c> from that id, and <c>OAuthOptions.Validate()</c> then demands an
+    /// <c>Authority</c> this fixture deliberately clears. An ambient value from a developer's shell
+    /// would fail host startup before any assertion here ran, and the failure would point at OAuth
+    /// rather than at logging.</para>
+    /// </summary>
+    private static readonly (string Key, string? Value)[] HostEnvironment =
+    [
+        ("OAuth__NoAuth", "true"),
+        ("Authorization__ReadOnly", "false"),
+        ("Vitally__DevelopmentApiKey", "sk_test_dummy"),
+        ("Vitally__Region", "EU"),
+        ("OAuth__Authority", null),
+        ("OAuth__Audience", null),
+        ("OAuth__SharedClientId", null),
+    ];
+
     private static ILogger ComposeAndGetLogger(string category)
     {
-        // Process-wide and read at composition time, so set every one this host needs rather than
-        // relying on whatever a sibling class left behind.
-        Environment.SetEnvironmentVariable("OAuth__NoAuth", "true");
-        Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
-        Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
-        Environment.SetEnvironmentVariable("Vitally__Region", "EU");
-        Environment.SetEnvironmentVariable("OAuth__Authority", null);
-        Environment.SetEnvironmentVariable("OAuth__Audience", null);
+        // Captured and restored, matching AuthorizationFilterToolsListTests — these are process-wide,
+        // and the collection serialises only the classes listed in IntegrationTestCollection, so
+        // leaking them makes the suite order-dependent for anything composing a host outside it.
+        var previous = HostEnvironment
+            .Select(e => (e.Key, Value: Environment.GetEnvironmentVariable(e.Key)))
+            .ToArray();
 
-        // Both are disposed: WithWebHostBuilder returns a new factory rather than mutating the
-        // receiver, so disposing only the result leaks the constructor's one.
-        using var baseFactory = new WebApplicationFactory<Program>();
-        using var factory = baseFactory.WithWebHostBuilder(_ => { });
+        foreach (var (key, value) in HostEnvironment)
+        {
+            Environment.SetEnvironmentVariable(key, value);
+        }
 
-        return factory.Services.GetRequiredService<ILoggerFactory>().CreateLogger(category);
+        try
+        {
+            // Both are disposed: WithWebHostBuilder returns a new factory rather than mutating the
+            // receiver, so disposing only the result leaks the constructor's one.
+            using var baseFactory = new WebApplicationFactory<Program>();
+            using var factory = baseFactory.WithWebHostBuilder(_ => { });
+
+            return factory.Services.GetRequiredService<ILoggerFactory>().CreateLogger(category);
+        }
+        finally
+        {
+            // After the factory is disposed, so the host is not reading a half-restored environment
+            // while it shuts down.
+            foreach (var (key, value) in previous)
+            {
+                Environment.SetEnvironmentVariable(key, value);
+            }
+        }
     }
 }
