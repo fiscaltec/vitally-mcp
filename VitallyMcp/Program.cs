@@ -225,19 +225,31 @@ if (!noAuth)
                 // run of forged tokens all look identical to silence, and you would learn about them
                 // from users rather than from logs.
                 //
-                // Warning so it outlives the filter. The exception TYPE and message only: never the
-                // token, and never the raw header. Validation messages are shaped like
-                // "IDX10223: Lifetime validation failed" and carry no credential material, which is
-                // exactly the diagnostic needed to tell an expiry apart from a bad signature.
+                // Warning so it outlives the filter, and the exception TYPE ONLY — never the message.
+                //
+                // ⚠️ An earlier version logged `context.Exception.Message` on the grounds that it
+                // carries no credential material. That was the wrong test. IdentityModel builds
+                // those messages from the *token's own claims* — "IDX10214: Audience validation
+                // failed. Audiences: '<aud>'", "IDX10205: Issuer validation failed. Issuer:
+                // '<iss>'" — so the text embeds attacker-supplied values of unbounded length that
+                // may contain newlines. Writing that into a log is a log-injection path: a crafted
+                // `aud` containing a line break can forge whatever log line it likes, in the one
+                // record an operator would consult during an authentication incident.
+                //
+                // The type alone is the better diagnostic anyway, and it is a closed set:
+                // SecurityTokenExpiredException, SecurityTokenInvalidSignatureException,
+                // SecurityTokenSignatureKeyNotFoundException (a signing-key rotation),
+                // SecurityTokenInvalidAudienceException, SecurityTokenInvalidIssuerException,
+                // SecurityTokenNotYetValidException. That distinguishes every failure mode worth
+                // acting on, with nothing the caller controls.
                 OnAuthenticationFailed = context =>
                 {
                     context.HttpContext.RequestServices
                         .GetRequiredService<ILoggerFactory>()
                         .CreateLogger("VitallyMcp.Authentication")
                         .LogWarning(
-                            "Bearer token validation failed: {FailureType}: {FailureMessage}",
-                            context.Exception.GetType().Name,
-                            context.Exception.Message);
+                            "Bearer token validation failed: {FailureType}",
+                            context.Exception.GetType().Name);
 
                     return Task.CompletedTask;
                 }

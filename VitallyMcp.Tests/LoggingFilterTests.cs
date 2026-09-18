@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -156,14 +157,83 @@ public class LoggingFilterTests
     public void AuthenticationFailureRecord_SurvivesTheFilters()
     {
         var framework = ComposeAndGetLogger("Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerHandler");
-        var ours = ComposeAndGetLogger("VitallyMcp.Authentication");
 
         framework.IsEnabled(LogLevel.Information).Should().BeFalse(
             "this is the suppressed signal — invalid-token diagnostics are Information here");
+    }
 
-        ours.IsEnabled(LogLevel.Warning).Should().BeTrue(
-            "OnAuthenticationFailed is the only record of a rejected token once the framework's " +
-            "Information diagnostic is filtered; nothing else fires for an unauthenticated caller");
+    /// <summary>
+    /// Drives a real rejected token through the actual JwtBearer pipeline and asserts the record is
+    /// emitted — rather than only that its logger category would accept a <c>Warning</c>.
+    ///
+    /// <para>The distinction is the whole point: the level check above composes with
+    /// <c>NoAuth=true</c>, which skips the JwtBearer configuration entirely, so deleting the
+    /// <c>OnAuthenticationFailed</c> callback would leave it green. This test fails if the callback
+    /// is removed, rewired, or has its level lowered back under the filter.</para>
+    ///
+    /// <para>It also pins the <b>shape</b> of the record, which is a security property rather than a
+    /// formatting preference: an earlier version logged <c>Exception.Message</c>, and IdentityModel
+    /// builds those from the token's own claims ("Audience validation failed. Audiences: '…'"), so
+    /// the text embeds caller-controlled values that may contain newlines — a log-injection path in
+    /// the one record an operator reads during an authentication incident.</para>
+    /// </summary>
+    [Fact]
+    public async Task RejectedToken_EmitsTheFailureRecord_WithoutEchoingTheToken()
+    {
+        // A syntactically valid JWT whose payload carries a marker we can search the log for. If any
+        // part of the token reached the record, this string would appear in it.
+        const string marker = "TOKEN-MARKER-MUST-NOT-APPEAR-IN-LOGS";
+        var payload = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes($"{{\"sub\":\"{marker}\",\"aud\":\"{marker}\"}}"))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var junkJwt = $"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.{payload}.aW52YWxpZC1zaWduYXR1cmU";
+
+        var sink = new CapturingLoggerProvider("VitallyMcp.Authentication");
+
+        var previous = SnapshotAndClearConfiguration();
+        try
+        {
+            // Auth ON — the NoAuth path never registers the callback under test.
+            Environment.SetEnvironmentVariable("OAuth__NoAuth", "false");
+            Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
+            Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
+            Environment.SetEnvironmentVariable("Vitally__Region", "EU");
+            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
+            Environment.SetEnvironmentVariable("OAuth__Audience", "https://example.test/");
+
+            using var baseFactory = new WebApplicationFactory<Program>();
+            using var factory = baseFactory.WithWebHostBuilder(
+                b => b.ConfigureLogging(l => l.AddProvider(sink)));
+            using var client = factory.CreateClient();
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+            {
+                Content = new StringContent(
+                    """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", junkJwt);
+
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.Unauthorized);
+        }
+        finally
+        {
+            RestoreConfiguration(previous);
+        }
+
+        var entry = sink.Entries.Should().ContainSingle(
+            "a rejected token must leave exactly one record — nothing else logs an unauthenticated " +
+            "caller, since the request never reaches SendAsync or the [Authorize] checkpoint").Subject;
+
+        entry.Level.Should().Be(LogLevel.Warning,
+            "Information would be removed by the Microsoft.AspNetCore.Authentication filter");
+
+        entry.Message.Should().NotContain(marker,
+            "no part of the token may reach the log — IdentityModel messages embed claims such as " +
+            "aud and iss, which are caller-controlled and may carry newlines");
     }
 
     /// <summary>
@@ -222,22 +292,28 @@ public class LoggingFilterTests
     // AuditLogger_StillLogsAtInformation fail even when Program.cs's filters are exactly right.
     // Verified: exporting that variable failed 1 of 17 before it was cleared here.
 
-    private static ILogger ComposeAndGetLogger(string category)
+    /// <summary>
+    /// Snapshots EVERY variable under the configuration prefixes — not just the ones this class
+    /// sets, otherwise the restore cannot put back what the clear removes — then clears them.
+    ///
+    /// <para>Captured and restored at all because these are process-wide, and the collection
+    /// serialises only the classes listed in <see cref="IntegrationTestCollection"/>: leaking makes
+    /// the suite order-dependent for anything composing a host outside it, as
+    /// <see cref="AuthorizationFilterToolsListTests"/>' own <c>finally</c> block already
+    /// recognises.</para>
+    ///
+    /// <para><c>OrdinalIgnoreCase</c>, not <c>Ordinal</c>: .NET configuration keys are
+    /// case-insensitive, so <c>oauth__publicbaseurl</c> binds exactly as
+    /// <c>OAuth__PublicBaseUrl</c> does while an ordinal prefix match leaves it in place. Verified
+    /// rather than reasoned — exporting that lowercase key with an invalid value failed every test
+    /// in this class before it changed. On Linux the two spellings are genuinely distinct
+    /// variables, so CI is where it bites.</para>
+    /// </summary>
+    private static (string Key, string? Value)[] SnapshotAndClearConfiguration()
     {
-        // Snapshot EVERY variable under the configuration prefixes, not just the ones we set —
-        // otherwise the restore below cannot put back what the clear is about to remove. Captured
-        // and restored at all because these are process-wide, and the collection serialises only
-        // the classes listed in IntegrationTestCollection: leaking makes the suite order-dependent
-        // for anything composing a host outside it, as AuthorizationFilterToolsListTests' own
-        // finally block already recognises.
         var previous = Environment.GetEnvironmentVariables()
             .Cast<System.Collections.DictionaryEntry>()
             .Select(e => (Key: (string)e.Key, Value: e.Value as string))
-            // OrdinalIgnoreCase, not Ordinal: .NET configuration keys are case-insensitive, so
-            // `oauth__publicbaseurl` binds exactly as `OAuth__PublicBaseUrl` does — while an
-            // Ordinal prefix match leaves it in place. Verified rather than reasoned: exporting
-            // that lowercase key with an invalid value failed all 17 tests here before this
-            // changed. On Linux the two are genuinely distinct variables, so CI is where it bites.
             .Where(e => ConfigurationPrefixes.Any(p => e.Key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
 
@@ -245,6 +321,32 @@ public class LoggingFilterTests
         {
             Environment.SetEnvironmentVariable(key, null);
         }
+
+        return previous;
+    }
+
+    /// <summary>
+    /// Restores a snapshot, clearing anything this class set first — those keys are not necessarily
+    /// in the snapshot (if they were unset before), and leaving them behind is the leak the whole
+    /// mechanism exists to prevent. Always called after the factory is disposed, so the host is not
+    /// reading a half-restored environment while it shuts down.
+    /// </summary>
+    private static void RestoreConfiguration((string Key, string? Value)[] previous)
+    {
+        foreach (var (key, _) in RequiredSettings)
+        {
+            Environment.SetEnvironmentVariable(key, null);
+        }
+
+        foreach (var (key, value) in previous)
+        {
+            Environment.SetEnvironmentVariable(key, value);
+        }
+    }
+
+    private static ILogger ComposeAndGetLogger(string category)
+    {
+        var previous = SnapshotAndClearConfiguration();
 
         foreach (var (key, value) in RequiredSettings)
         {
@@ -262,19 +364,7 @@ public class LoggingFilterTests
         }
         finally
         {
-            // After the factory is disposed, so the host is not reading a half-restored environment
-            // while it shuts down. The four we set are cleared first: they are not necessarily in
-            // the snapshot (if they were unset before), and leaving them behind is the leak this
-            // whole block exists to prevent.
-            foreach (var (key, _) in RequiredSettings)
-            {
-                Environment.SetEnvironmentVariable(key, null);
-            }
-
-            foreach (var (key, value) in previous)
-            {
-                Environment.SetEnvironmentVariable(key, value);
-            }
+            RestoreConfiguration(previous);
         }
     }
 }
