@@ -131,47 +131,56 @@ public class LoggingFilterTests
     /// <c>WebApplicationFactory</c> can inject configuration — so environment variables are the only
     /// override that works.
     ///
-    /// <para>The nulls matter as much as the values. Each one names an input that can fail host
-    /// composition <b>before</b> any assertion here runs, and the resulting error points at OAuth or
-    /// Key Vault rather than at logging:</para>
-    /// <list type="bullet">
-    ///   <item><c>Vitally__KeyVaultUri</c> — <c>StartupGuards.EnsureSafeAuthConfig</c> refuses
-    ///     <c>NoAuth=true</c> alongside a Key Vault URI, and this fixture sets <c>NoAuth</c>.</item>
-    ///   <item><c>OAuth__SharedClientId</c> — <c>NoAuth</c> does <b>not</b> disable the proxy;
-    ///     <c>Program</c> derives <c>proxyEnabled</c> from this id and <c>Validate()</c> then demands
-    ///     the <c>Authority</c> cleared below.</item>
-    ///   <item><c>OAuth__PublicBaseUrl</c> — <c>Validate()</c> rejects a non-https value before any
-    ///     proxy-related early return. <b>This one is not hypothetical:</b>
-    ///     <see cref="ResourceMetadataDiscoveryTests"/> sets it (and <c>OAuth__Resource</c>) inside
-    ///     its <c>CreateHost</c> and never restores them, so this fixture really does inherit them.
-    ///     Today's leaked value is valid https and therefore harmless — which is luck, not
-    ///     design.</item>
-    /// </list>
+    /// <para>Only these four are <i>set</i>. Everything else under the three configuration prefixes
+    /// is <b>cleared wholesale</b> by <see cref="ComposeAndGetLogger"/> rather than enumerated,
+    /// which is deliberate: naming individual keys to clear is a losing game. Three review rounds
+    /// each found another one that fails host composition before a single assertion runs —
+    /// <c>Vitally__KeyVaultUri</c> (<c>StartupGuards.EnsureSafeAuthConfig</c> refuses it alongside
+    /// <c>NoAuth</c>), <c>OAuth__SharedClientId</c> and <c>OAuth__PublicBaseUrl</c>, then
+    /// <c>OAuth__SharedClientSecret</c>, <c>OAuth__UpstreamResourceScope</c> and
+    /// <c>Authorization__LiveGroupCheck</c> with its group ids. Each failure surfaces as an OAuth or
+    /// Key Vault error with nothing to do with logging.</para>
+    ///
+    /// <para>The leak is real rather than theoretical: <see cref="ResourceMetadataDiscoveryTests"/>
+    /// sets <c>OAuth__PublicBaseUrl</c> and <c>OAuth__Resource</c> inside its <c>CreateHost</c> and
+    /// never restores them, so this fixture inherits them from a sibling in the same collection.
+    /// Clearing by prefix is immune to the next such addition, which an enumeration is not.</para>
     /// </summary>
-    private static readonly (string Key, string? Value)[] HostEnvironment =
+    private static readonly (string Key, string Value)[] RequiredSettings =
     [
         ("OAuth__NoAuth", "true"),
         ("Authorization__ReadOnly", "false"),
         ("Vitally__DevelopmentApiKey", "sk_test_dummy"),
         ("Vitally__Region", "EU"),
-        ("Vitally__KeyVaultUri", null),
-        ("OAuth__Authority", null),
-        ("OAuth__Audience", null),
-        ("OAuth__Resource", null),
-        ("OAuth__PublicBaseUrl", null),
-        ("OAuth__SharedClientId", null),
     ];
+
+    /// <summary>
+    /// Every configuration prefix <c>Program.cs</c> binds from the environment. Anything under these
+    /// is cleared before composing, so the host sees exactly <see cref="RequiredSettings"/>.
+    /// </summary>
+    private static readonly string[] ConfigurationPrefixes =
+        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__"];
 
     private static ILogger ComposeAndGetLogger(string category)
     {
-        // Captured and restored, matching AuthorizationFilterToolsListTests — these are process-wide,
-        // and the collection serialises only the classes listed in IntegrationTestCollection, so
-        // leaking them makes the suite order-dependent for anything composing a host outside it.
-        var previous = HostEnvironment
-            .Select(e => (e.Key, Value: Environment.GetEnvironmentVariable(e.Key)))
+        // Snapshot EVERY variable under the configuration prefixes, not just the ones we set —
+        // otherwise the restore below cannot put back what the clear is about to remove. Captured
+        // and restored at all because these are process-wide, and the collection serialises only
+        // the classes listed in IntegrationTestCollection: leaking makes the suite order-dependent
+        // for anything composing a host outside it, as AuthorizationFilterToolsListTests' own
+        // finally block already recognises.
+        var previous = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .Select(e => (Key: (string)e.Key, Value: e.Value as string))
+            .Where(e => ConfigurationPrefixes.Any(p => e.Key.StartsWith(p, StringComparison.Ordinal)))
             .ToArray();
 
-        foreach (var (key, value) in HostEnvironment)
+        foreach (var (key, _) in previous)
+        {
+            Environment.SetEnvironmentVariable(key, null);
+        }
+
+        foreach (var (key, value) in RequiredSettings)
         {
             Environment.SetEnvironmentVariable(key, value);
         }
@@ -188,7 +197,14 @@ public class LoggingFilterTests
         finally
         {
             // After the factory is disposed, so the host is not reading a half-restored environment
-            // while it shuts down.
+            // while it shuts down. The four we set are cleared first: they are not necessarily in
+            // the snapshot (if they were unset before), and leaving them behind is the leak this
+            // whole block exists to prevent.
+            foreach (var (key, _) in RequiredSettings)
+            {
+                Environment.SetEnvironmentVariable(key, null);
+            }
+
             foreach (var (key, value) in previous)
             {
                 Environment.SetEnvironmentVariable(key, value);
