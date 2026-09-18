@@ -456,8 +456,26 @@ the AMPLS was never the gate.
 
 Consequences, in order:
 
-1. Add a diagnostic setting on the CAE, exported **resource-specific** (a real table, not `_CL`,
-   which is also what makes per-table retention possible), in **two steps**:
+⚠️ **A diagnostic setting alone does nothing. Two things must change together.**
+
+The environment's `logs_destination` must be **`azure-monitor`**. With the default `log-analytics`
+the CAE writes directly to the workspace using its **shared key**, ignores diagnostic settings
+entirely, and — because `local_authentication_enabled = false` — is refused. That is the root cause
+in #142, and an earlier version of this phase omitted it: the setting was created on 2026-09-17,
+nothing arrived for 18 minutes, and the destination was why.
+
+Microsoft documents the constraint directly, and it is not a workaround but the supported path:
+
+> **Private link**: Sending logs directly to a Log Analytics Workspace through Private Link isn't
+> supported. However, you can use Azure Monitor and send your logs to the same Log Analytics
+> Workspace. **This indirection is required to prevent system log data loss.**
+
+So the original configuration was never going to work here — not drift, not a mistake made later.
+Note the failure is silent in **both** directions: `azure-monitor` with no diagnostic setting also
+discards logs quietly.
+
+1. Set the environment's `logs_destination` to `azure-monitor`, then add a diagnostic setting on the
+   CAE, in **two steps**:
 
    - **2a, immediately: `ContainerAppSystemLogs`.** Platform events — crashes, OOM kills, scaling,
      revision changes. No customer data, no dependency on a code change, and it covers the most
@@ -474,9 +492,28 @@ Consequences, in order:
    az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
      --type console --tail 100
    ```
-2. Verify records arrive.
-3. **Re-lock `publicNetworkAccessForIngestion`** to `Disabled`, restoring the hardening opened on
-   2026-09-17 while this was being diagnosed.
+2. ✅ **Verified 2026-09-17: records arrive.** First rows landed at `18:25:09`, seconds after the
+   destination change, from **both** apps — `ContainerAppReady`, `ContainerAppUpdate`,
+   `RevisionUpdate`, `RevisionDeactivating` on production; `ContainerStarted`, `ContainerTerminated`,
+   `KEDAScaleTargetDeactivated` on staging. This is the first telemetry this server has ever
+   delivered to Log Analytics.
+
+   Two things that cost time here, both worth carrying forward:
+
+   - **Read configuration back from ARM; the write response lies.** Both
+     `--export-to-resource-specific true` and an explicit PUT carrying
+     `"logAnalyticsDestinationType": "Dedicated"` **return it and store `null`** for this resource
+     type. Resource-specific export turns out to be **implicit** — confirmed by the live schema
+     (typed `ContainerAppName`/`Reason`/`RevisionName` columns, no `_s` suffixes), so per-table
+     retention *is* available to phase 7 despite the property reading null.
+   - **Beware `has` in the verification query.** A poll filtering
+     `where Type has 'ContainerApp'` returned nothing for 20 minutes *while records were arriving*,
+     because KQL `has` matches whole terms and `'ContainerAppSystemLogs' has 'ContainerApp'` is
+     false. Use `startswith`/`contains`, or query the table directly. A verification that fails
+     closed on its own bug is worse than none: it nearly produced a report that the fix had failed.
+3. ✅ **Done 2026-09-17: `publicNetworkAccessForIngestion` re-locked to `Disabled`**, restoring the
+   hardening opened earlier that day while this was being diagnosed. It was never needed — the cause
+   was authentication and destination, not network.
 4. Evaluate `ContainerAppHTTPLogs` separately — it carries request URLs and needs the same PII
    scrutiny as the `HttpClient` category above.
 

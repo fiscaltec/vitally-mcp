@@ -45,4 +45,20 @@ resource "azurerm_application_insights" "appi" {
 
   # Opened 2026-09-17 alongside the workspace, for the same reason and permanently.
   internet_query_enabled = true
+
+  # Set 2026-09-17, matching the workspace above, which has had it since creation. It was unset —
+  # i.e. local auth ENABLED — so the connection string would have been a write credential for a
+  # component that phase 4 makes the home of PII-bearing audit records. The risk is fabricated
+  # records rather than exfiltration: an audit trail that cannot distinguish genuine entries from
+  # injected ones fails at the only job it has.
+  #
+  # Done NOW rather than with phase 4 deliberately: nothing emits to this component yet, so it
+  # breaks nothing (verified — zero API keys, no connection string anywhere in the repo, no alert
+  # rules), and turning it off first FORCES the phase 4 emitter down the managed-identity path
+  # rather than relying on someone remembering not to reach for a connection string.
+  #
+  # Consequence for whoever wires that emitter: authenticate with the existing user-assigned managed
+  # identity (Azure Monitor OpenTelemetry takes a `credential`), and give it Monitoring Metrics
+  # Publisher on this component. A connection string will simply be refused.
+  local_authentication_disabled = true
 }
