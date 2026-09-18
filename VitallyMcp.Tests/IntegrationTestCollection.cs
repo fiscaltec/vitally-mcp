@@ -11,8 +11,8 @@ namespace VitallyMcp.Tests;
 /// <para>
 /// Member classes: <see cref="ReadOnlyToolsListTests"/>, <see cref="ToolsListCachingTests"/>,
 /// <see cref="AuthorizationFilterToolsListTests"/>, <see cref="ResourceMetadataDiscoveryTests"/>,
-/// <see cref="ServerInstructionsInitializeTests"/> and
-/// <see cref="StaleEntitlementCompositionTests"/>. Keep this list complete — it is what a future
+/// <see cref="ServerInstructionsInitializeTests"/>, <see cref="StaleEntitlementCompositionTests"/>
+/// and <see cref="LoggingFilterTests"/>. Keep this list complete — it is what a future
 /// author reads when deciding whether a new environment-variable-mutating class needs to join, and
 /// an incomplete list makes the collection look narrower in purpose than it is.
 /// <see cref="ServerInstructionsInitializeTests"/> is the sharpest illustration

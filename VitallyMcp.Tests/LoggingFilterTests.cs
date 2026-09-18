@@ -31,11 +31,22 @@ public class LoggingFilterTests
     /// on those rather than the prefix proves the filter actually applies to the categories that
     /// appear in the live log stream, not merely to a name that happens to match.
     /// </summary>
+    /// <summary>
+    /// The discovery client is named from <see cref="UpstreamOidcMetadata.HttpClientName"/> rather
+    /// than a literal, because a literal got this wrong once already: an earlier version asserted on
+    /// <c>…HttpClient.upstream.ClientHandler</c>, which is not a registered client at all — the name
+    /// is <c>upstream-oidc-discovery</c>, and the truncation came from a grep pattern that stopped at
+    /// the hyphen. The prefix filter covers any child category, so the bad name still passed while
+    /// testing a logger nothing creates.
+    /// </summary>
+    private const string DiscoveryClientCategory =
+        "System.Net.Http.HttpClient." + UpstreamOidcMetadata.HttpClientName + ".ClientHandler";
+
     [Theory]
     [InlineData("System.Net.Http.HttpClient.VitallyService.LogicalHandler")]
     [InlineData("System.Net.Http.HttpClient.VitallyService.ClientHandler")]
     [InlineData("System.Net.Http.HttpClient.IGroupPermissionResolver.LogicalHandler")]
-    [InlineData("System.Net.Http.HttpClient.upstream.ClientHandler")]
+    [InlineData(DiscoveryClientCategory)]
     public void HttpClientCategories_DoNotLogAtInformation_SoQueryStringsStayOutOfLogs(string category)
     {
         var logger = ComposeAndGetLogger(category);
@@ -45,10 +56,12 @@ public class LoggingFilterTests
             "and Search_users/Search_admins put caller-supplied search terms there");
     }
 
-    [Fact]
-    public void HttpClientCategories_StillLogWarnings_SoFailuresRemainVisible()
+    [Theory]
+    [InlineData("System.Net.Http.HttpClient.VitallyService.ClientHandler")]
+    [InlineData(DiscoveryClientCategory)]
+    public void HttpClientCategories_StillLogWarnings_SoFailuresRemainVisible(string category)
     {
-        var logger = ComposeAndGetLogger("System.Net.Http.HttpClient.VitallyService.ClientHandler");
+        var logger = ComposeAndGetLogger(category);
 
         logger.IsEnabled(LogLevel.Warning).Should().BeTrue(
             "the filter is Warning rather than None deliberately — a failing outbound call must " +
@@ -60,12 +73,19 @@ public class LoggingFilterTests
     [InlineData("Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerHandler")]
     [InlineData("Microsoft.AspNetCore.Authorization.DefaultAuthorizationService")]
     [InlineData("Microsoft.AspNetCore.Routing.EndpointMiddleware")]
-    public void FrameworkNoiseCategories_DoNotLogAtInformation(string category)
+    public void FrameworkNoiseCategories_AreQuietAtInformation_ButStillReportFaults(string category)
     {
         var logger = ComposeAndGetLogger(category);
 
         logger.IsEnabled(LogLevel.Information).Should().BeFalse(
             "these were ~90% of console volume in a live sample and carry no audit or failure signal");
+
+        // Asserted in the same test rather than left implied: a regression from Warning to None
+        // would satisfy the line above while silently hiding authentication, authorisation and
+        // routing faults — and those framework warnings are most of what reports a fault here,
+        // since the application has exactly one LogError call site of its own.
+        logger.IsEnabled(LogLevel.Warning).Should().BeTrue(
+            "the filters are Warning rather than None so genuine faults still surface");
     }
 
     /// <summary>

@@ -632,6 +632,31 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 - **Per-caller discovery filtering.** All 93 tools carry `[Authorize(Policy = "vitally:read|write|delete")]` (56 read / 25 write / 12 delete). `mcpBuilder.AddAuthorizationFilters()` makes the SDK evaluate that attribute on each tool, so `tools/list` shows only the tools the caller may actually invoke and an unauthorised call is rejected before the handler runs. **It and `AddAuthorizationBuilder()` are registered unconditionally — never guarded on `OAuth:NoAuth`.** Once any tool carries `[Authorize]`, the SDK *fails closed*: it throws ("Authorization filter was not invoked for tools/call operation, but authorization metadata was found on the tool") so a guarded registration yields a dev server that can neither list nor call any tool. Dev mode stays unfiltered instead via `VitallyPermissionHandler`, which succeeds when `ToolAuthorizer.IsAuthorizationBypassedAsync()` reports RBAC disabled or `NoAuth`. `VitallyPermissionHandler` resolves those policies through `ToolAuthorizer.HasEffectivePermissionAsync`, so discovery and the `VitallyService.SendAsync` backstop cannot drift apart. This is **discovery filtering** — the security boundary remains `SendAsync`. Distinct from the deployment-wide `Authorization:ReadOnly` switch, which hides destructive tools from everyone.
 - A denial refused at this SDK authorisation checkpoint is audited separately: see `LogToolCallDenied` under `AuditOptions` below — `SendAsync`'s own `LogDenied` never fires for a tier mismatch, because the SDK rejects the call before `SendAsync` runs.
 
+> ⚠️ **Log levels are a security control here, and they live in `Program.cs`. Do not move them.**
+>
+> `builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning)` is a **PII control, not
+> noise reduction**. At `Information` those framework categories log every outbound request URI
+> *including its query string*, and `Search_users` / `Search_admins` put caller-supplied search terms —
+> potentially names or email addresses — into that query string. It is exactly the data
+> `AuditLogger.ResourcePath` strips on purpose, escaping through a category nobody configured (#143).
+> Four `Microsoft.AspNetCore.*` noise filters sit beside it; all are `Warning` rather than `None`
+> deliberately, so genuine faults still surface — this application has exactly **one** `LogError` call
+> site of its own, so framework warnings are most of what reports a fault.
+>
+> **Two places it must not move to, both of which look reasonable and silently do nothing:**
+>
+> - **`appsettings.json`** — `.gitignore` and `.dockerignore` both exclude it (under *"Strong-name
+>   keys, certificates and other secrets - do NOT commit"*, beside `*.pfx` and `.env`). A file added
+>   there works on a developer machine and never reaches the image. `appsettings.Example.json` *does*
+>   carry a `Logging` section; it is a template ASP.NET Core never loads, and is marked **NOT IN
+>   FORCE** for this reason.
+> - **Environment variables** — a Container App recreate does not inherit them, so the control would
+>   lapse on any target someone forgot. Same reasoning as the `IncludeReads` default (#139).
+>
+> `LoggingFilterTests` pins all of it against the composed host, including that `AuditLogger` still
+> logs at `Information`: a filter on the wrong prefix would delete the audit trail while looking like
+> tidying.
+
 `AuditOptions` (singleton, bound from `Audit:` section):
 - `Enabled` (default `true`), `IncludeReads` (default **`true`** since 2026-09-17 — see below).
 - **`IncludeReads` defaults to true, and the default is the control.** Reads are 56 of the 93 tools, so a target that does not audit them has no meaningful trail — and `AuditLogger` is the only attribution mechanism, because the shared Vitally key means Vitally's own log cannot name a FISCAL user. It defaulted to `false` until 2026-09-17 and no deployed target ever overrode it, so no read had ever been recorded (#139). It stays configurable as the ingest-cost lever, but **do not re-solve this with a per-deployment environment variable**: a Container App recreate does not inherit them, so coverage would lapse silently — the same trap this file records for `Authorization__ReadOnly` on staging.
