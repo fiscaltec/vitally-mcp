@@ -113,9 +113,20 @@ without adding signal. Counting by category:
 | Routing, MCP server | 9 | 10% |
 | **audit records** | **0** | **0%** |
 
-So **100% of the categorised sample is framework output and none of it is an audit or failure
-signal.** The "~90% noise" figure used elsewhere in this document is the conservative claim: the four
-framework categories above are what the phase 3 filters target, and they are the whole sample.
+So **100% of that categorised sample was framework output and none of it an audit record** — which
+was expected, since reads were unaudited until #139.
+
+**Re-measured properly on 2026-09-18, by bytes rather than lines**, once logging was actually flowing:
+
+| | Share of console bytes |
+|---|---|
+| The four framework noise categories (phase 3 targets) | **67.3%** |
+| `System.Net.Http.HttpClient.*` (the PII control) | 19.5% |
+| Everything retained | 13.2% |
+
+`Hosting.Diagnostics` alone was 83 of ~150 entries. ⚠️ The earlier "~90% noise" figure counted
+**lines in a categorised subset** and conflated the noise filters with the PII one; 67.3% is the
+number for the four filters, and it is the one to quote.
 
 The zero is not an artefact of the window. Reads were unaudited until #139, and the only authenticated
 call made during the sample was a `List_organizations` GET, which `LogAction` skipped for exactly that
@@ -368,8 +379,12 @@ Container App recreate does not inherit them, so the constraint would lapse sile
 
 It does three jobs at once:
 
-- cuts the framework noise that is ~90% of volume, which is what makes retaining the audit tiers
-  affordable
+- cuts the framework noise — **measured at 67.3% of console bytes** on 2026-09-18 (300-record live
+  sample; `Hosting.Diagnostics` alone was 83 of ~150 entries). ⚠️ This is **not** a cost argument, and
+  an earlier draft wrongly made it one: unfiltered the stream runs ~9.1 MB/day, so these filters save
+  ~2.24 GB/year, which is single-figure pounds — and per-table retention lets the noise expire at 30
+  days regardless. The justification is **readability of the live stream**, which is how a running
+  container is debugged and the only way to see startup failures until phase 2b
 - **constrains `System.Net.Http.HttpClient.*`**, closing the query-string exposure above
 - makes levels reviewable in source rather than implicit in framework defaults
 
@@ -380,7 +395,7 @@ Concretely, so an implementation cannot follow this document and still leave the
 // strings — which carry Search_users / Search_admins terms. Warning keeps failures visible.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
-// Noise. ~90% of console volume, and none of it is an audit or failure signal.
+// Noise. 67.3% of console bytes, measured 2026-09-18. Kept for live-stream readability, not cost.
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
@@ -652,7 +667,7 @@ it.
 
 | Risk | Mitigation |
 |---|---|
-| Volume and cost rise once records actually flow, with reads now on | 3 removes ~90% noise first; retention decided per tier on measured volume, not guessed |
+| Volume and cost rise once records actually flow, with reads now on | **Measured 2026-09-18 and the risk is smaller than assumed**: the unfiltered console stream is ~9.1 MB/day (~3.33 GB/year), of which phase 3's filters remove 67.3%. At Log Analytics rates the whole stream is single-figure pounds a year, so retention should be decided on the compliance requirement rather than on cost. Caveat: sampled over 4.2 quiet minutes, so treat it as a floor |
 | PII reaching telemetry through a framework category nobody configured | 3 constrains `HttpClient`; `ContainerAppHTTPLogs` evaluated separately before enabling |
 | Re-locking ingestion breaks delivery again | verify arrival at step 2 *before* re-locking, and re-verify after |
 | Correlation id becomes a per-call-site convention that drifts | carry it through the existing `CallerIdentity`/`AuditLogger` choke points, which already exist for exactly this reason |

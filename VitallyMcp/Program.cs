@@ -36,9 +36,23 @@ var builder = WebApplication.CreateBuilder(args);
 // so that term never leaves the process.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
-// Noise. Roughly 90% of console volume and none of it an audit or failure signal — measured from a
-// 202-line live sample in which 89 lines carried a logger category, every one of them framework
-// output and none an audit record. Cutting it is what makes retaining the audit trail affordable.
+// Noise. Measured against live production on 2026-09-18 over a 300-record sample: these four
+// categories are 67.3% of console bytes, `Hosting.Diagnostics` alone accounting for 83 of ~150 log
+// entries. Unfiltered the stream runs ~9.1 MB/day; these filters remove ~6.1 MB/day.
+//
+// ⚠️ That is NOT a cost argument, and an earlier version of this comment claimed it was — "what
+// makes retaining the audit trail affordable". 2.24 GB/year is single-figure pounds at Log Analytics
+// rates, and per-table retention means the noise can expire at 30 days regardless of what the audit
+// table keeps. The saving is real and financially irrelevant.
+//
+// They are kept for READABILITY of the live stream. `az containerapp logs show --type console` is
+// how a running container is debugged, and it is the only way to see startup failures until phase 2b
+// of #142 exports console logs. Two-thirds chatter makes that materially worse — hunting audit
+// records in an unfiltered stream is what prompted measuring this in the first place.
+//
+// Sampling caveat, so the figures are not over-trusted: 4.2 minutes on a quiet morning with 5 audit
+// records in it. The ratio is probably stable; the absolute volume is a floor, not a ceiling, and
+// Audit:IncludeReads is now on, which adds audit volume specifically.
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);

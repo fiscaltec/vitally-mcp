@@ -95,8 +95,8 @@ public class LoggingFilterTests
         var logger = ComposeAndGetLogger(category);
 
         logger.IsEnabled(LogLevel.Information).Should().BeFalse(
-            "these dominated a live console sample and are the volume the audit trail has to be " +
-            "affordable alongside");
+            "these are 67.3% of console bytes (measured 2026-09-18) and are filtered for live-stream " +
+            "readability — not for cost, which is single-figure pounds a year either way");
 
         // Asserted in the same test rather than left implied: a regression from Warning to None
         // would satisfy the line above while silently hiding faults — and framework warnings are
