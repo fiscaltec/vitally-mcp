@@ -124,11 +124,11 @@ was expected, since reads were unaudited until #139.
 | `System.Net.Http.HttpClient.*` | 19.5% |
 | Everything retained | 13.2% |
 
-**Phase 3 removes both of the first two rows — 86.8% together.** The 67.3% figure is the noise filters alone; quote it only when the `HttpClient` PII filter is excluded, since that one is kept regardless of volume.
+**Phase 3 removes both of the first two rows — 86.8% together.** The 67.3% figure is the noise filters alone; quote it only when the `HttpClient` filter is excluded.
 
 `Hosting.Diagnostics` alone was 83 of ~150 entries. ⚠️ The earlier "~90% noise" figure counted
-**lines in a categorised subset** and conflated the noise filters with the PII one; 67.3% is the
-number for the four filters, and it is the one to quote.
+**lines in a categorised subset** and conflated the four framework filters with the `HttpClient`
+one; 67.3% is the number for the four, and it is the one to quote.
 
 The zero is not an artefact of the window. Reads were unaudited until #139, and the only authenticated
 call made during the sample was a `List_organizations` GET, which `LogAction` skipped for exactly that
@@ -673,7 +673,7 @@ it.
 
 | Risk | Mitigation |
 |---|---|
-| Volume and cost rise once records actually flow, with reads now on | **Measured 2026-09-18 and the risk is smaller than assumed**: the unfiltered console stream is ~9.1 MB/day (~3.33 GB/year), of which **phase 3 removes 86.8%** — 67.3% from the four framework noise filters and a further 19.5% from the `System.Net.Http.HttpClient` PII filter, which is part of the same phase. (67.3% is the noise filters alone and is the figure quoted where only they are meant.) At Log Analytics rates the whole stream is single-figure pounds a year, so retention should be decided on the compliance requirement rather than on cost. Caveat: sampled over 4.2 quiet minutes, so treat it as a floor |
+| Volume and cost rise once records actually flow, with reads now on | **Measured 2026-09-18 and the risk is smaller than assumed**: the unfiltered console stream is ~9.1 MB/day (~3.33 GB/year), of which **phase 3 removes 86.8%** — 67.3% from the four framework noise filters and a further 19.5% from the `System.Net.Http.HttpClient` noise-reduction filter (defence-in-depth only — .NET already redacts query values), which is part of the same phase. (67.3% is the noise filters alone and is the figure quoted where only they are meant.) At Log Analytics rates the whole stream is single-figure pounds a year, so retention should be decided on the compliance requirement rather than on cost. Caveat: sampled over 4.2 quiet minutes, so treat it as a floor |
 | PII reaching telemetry through a framework category nobody configured | 3 constrains `HttpClient`; `ContainerAppHTTPLogs` evaluated separately before enabling |
 | Re-locking ingestion breaks delivery again | verify arrival at step 2 *before* re-locking, and re-verify after |
 | Correlation id becomes a per-call-site convention that drifts | carry it through the existing `CallerIdentity`/`AuditLogger` choke points, which already exist for exactly this reason |
