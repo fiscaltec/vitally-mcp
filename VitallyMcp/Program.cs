@@ -11,6 +11,79 @@ using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Log levels are configured HERE rather than in appsettings.json, and that is not a style choice:
+// `.gitignore` (line 111) and `.dockerignore` (line 18) both exclude `appsettings.json` and
+// `appsettings.*.json`, carving out only `appsettings.Example.json`. A file added there would work
+// on a developer machine, never reach the image, and change nothing in production. The exclusion is
+// deliberate — it sits under "Strong-name keys, certificates and other secrets - do NOT commit"
+// beside *.pfx and .env — and is worth keeping, because appsettings.json is exactly where a
+// connection string gets put by reflex.
+//
+// Environment variables are rejected for the same reason the Audit:IncludeReads default lives in
+// code (#139): a Container App recreate does not inherit them, so the constraint would lapse
+// silently on any target someone forgot.
+//
+// ⚠️ #143 raised this as a PII control, and that premise was WRONG. Recorded rather than quietly
+// dropped, because the mistaken version is the intuitive one and will be re-derived otherwise.
+//
+// The claim was that these categories log the outbound URI including its query string, so a
+// `Search_users` / `Search_admins` term — potentially a name or email — would reach the logs.
+// **.NET redacts query VALUES by default**: the logged form is
+// `GET https://rest.vitally-eu.io/resources/users/search?*`, and the `?*` is the redaction marker,
+// not a truncation. Verified twice — by a probe that drove a request carrying a marker through a
+// typed client and found the marker absent from every record, and by reading live production logs,
+// where every query in the stream is `?*`. Nothing here disables it (no `DisableUriRedaction`
+// switch, no `UriRedaction` configuration).
+//
+// So this filter is NOISE REDUCTION, worth 19.5% of console bytes, with defence-in-depth as a
+// footnote: if redaction were ever disabled the filter would still keep the URIs out. Path segments
+// are not redacted, but those carry record ids, which `AuditLogger` deliberately records anyway.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+
+// Noise. Measured against live production on 2026-09-18 over a 300-record sample: these four
+// categories are 67.3% of console bytes, `Hosting.Diagnostics` alone accounting for 83 of ~150 log
+// entries. Unfiltered the stream runs ~9.1 MB/day; these filters remove ~6.1 MB/day.
+//
+// ⚠️ That is NOT a cost argument, and an earlier version of this comment claimed it was — "what
+// makes retaining the audit trail affordable". 2.24 GB/year is single-figure pounds at Log Analytics
+// rates, and per-table retention means the noise can expire at 30 days regardless of what the audit
+// table keeps. The saving is real and financially irrelevant.
+//
+// They are kept for READABILITY of the live stream. `az containerapp logs show --type console` is
+// how a running container is debugged, and it is the only way to see startup failures until phase 2b
+// of #142 exports console logs. Two-thirds chatter makes that materially worse — hunting audit
+// records in an unfiltered stream is what prompted measuring this in the first place.
+//
+// Sampling caveat, so the figures are not over-trusted: 4.2 minutes on a quiet morning with 5 audit
+// records in it. The ratio is probably stable; the absolute volume is a floor, not a ceiling, and
+// Audit:IncludeReads is now on, which adds audit volume specifically.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+
+// Warning rather than None, so a failing outbound call still surfaces — this server has exactly one
+// LogError call site of its own, so framework warnings are most of what reports a fault today.
+//
+// ⚠️ One exception, stated because an earlier version of this comment claimed otherwise and was
+// wrong: `Microsoft.AspNetCore.Authorization` logs its *failures* at Information, not Warning
+// ("Authorization failed. These requirements were not met: DenyAnonymousAuthorizationRequirement").
+// So this filter does suppress a genuine failure signal rather than only success chatter.
+//
+// Accepted deliberately, because the signal is covered better elsewhere or is not worth recording:
+//
+//   - an AUTHENTICATED caller denied a tool is recorded by AuditLogger.LogToolCallDenied at
+//     Warning, with the caller's object id, the tool name and the required permission — strictly
+//     more useful than the framework line, and it survives these filters (pinned by
+//     LoggingFilterTests).
+//   - an ANONYMOUS request failing DenyAnonymousAuthorizationRequirement is the normal MCP
+//     unauthenticated probe. It was ~10% of a live console sample, it produces a 401 the client
+//     expects, and recording every one as a "failure" is what made the trail unreadable.
+//
+// What this gives up: a flood of anonymous 401s is no longer visible in logs. If that ever needs
+// watching it belongs in a counter or ContainerAppHTTPLogs (design phase 6), not in Information-level
+// framework text — a metric can be alerted on, and these lines never could be.
+
 // PostConfigure + a forced IOptions resolution after WebApplicationBuilder.Build() gives
 // us fail-fast startup validation without the boilerplate of a separate IValidateOptions
 // implementation. If Validate() throws, the app crashes immediately after Build() rather
@@ -141,6 +214,47 @@ if (!noAuth)
                     context.Response.Headers.WWWAuthenticate = challenge;
 
                     context.HandleResponse();
+                    return Task.CompletedTask;
+                },
+
+                // The replacement for a signal the logging filters suppress, and the reason they can
+                // safely suppress it. JwtBearerHandler reports a failed token at INFORMATION
+                // ("Bearer was not authenticated. Failure message: …"), which
+                // `AddFilter("Microsoft.AspNetCore.Authentication", Warning)` removes.
+                //
+                // Unlike the authorisation case, nothing else would record it: an unauthenticated
+                // caller never reaches VitallyService.SendAsync or the SDK's [Authorize] checkpoint,
+                // so neither LogDenied nor LogToolCallDenied fires. Without this the failures that
+                // matter most would be invisible — an Entra signing-key rotation, clock skew, or a
+                // run of forged tokens all look identical to silence, and you would learn about them
+                // from users rather than from logs.
+                //
+                // Warning so it outlives the filter, and the exception TYPE ONLY — never the message.
+                //
+                // ⚠️ An earlier version logged `context.Exception.Message` on the grounds that it
+                // carries no credential material. That was the wrong test. IdentityModel builds
+                // those messages from the *token's own claims* — "IDX10214: Audience validation
+                // failed. Audiences: '<aud>'", "IDX10205: Issuer validation failed. Issuer:
+                // '<iss>'" — so the text embeds attacker-supplied values of unbounded length that
+                // may contain newlines. Writing that into a log is a log-injection path: a crafted
+                // `aud` containing a line break can forge whatever log line it likes, in the one
+                // record an operator would consult during an authentication incident.
+                //
+                // The type alone is the better diagnostic anyway, and it is a closed set:
+                // SecurityTokenExpiredException, SecurityTokenInvalidSignatureException,
+                // SecurityTokenSignatureKeyNotFoundException (a signing-key rotation),
+                // SecurityTokenInvalidAudienceException, SecurityTokenInvalidIssuerException,
+                // SecurityTokenNotYetValidException. That distinguishes every failure mode worth
+                // acting on, with nothing the caller controls.
+                OnAuthenticationFailed = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("VitallyMcp.Authentication")
+                        .LogWarning(
+                            "Bearer token validation failed: {FailureType}",
+                            context.Exception.GetType().Name);
+
                     return Task.CompletedTask;
                 }
             };

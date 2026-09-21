@@ -632,6 +632,54 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 - **Per-caller discovery filtering.** All 93 tools carry `[Authorize(Policy = "vitally:read|write|delete")]` (56 read / 25 write / 12 delete). `mcpBuilder.AddAuthorizationFilters()` makes the SDK evaluate that attribute on each tool, so `tools/list` shows only the tools the caller may actually invoke and an unauthorised call is rejected before the handler runs. **It and `AddAuthorizationBuilder()` are registered unconditionally — never guarded on `OAuth:NoAuth`.** Once any tool carries `[Authorize]`, the SDK *fails closed*: it throws ("Authorization filter was not invoked for tools/call operation, but authorization metadata was found on the tool") so a guarded registration yields a dev server that can neither list nor call any tool. Dev mode stays unfiltered instead via `VitallyPermissionHandler`, which succeeds when `ToolAuthorizer.IsAuthorizationBypassedAsync()` reports RBAC disabled or `NoAuth`. `VitallyPermissionHandler` resolves those policies through `ToolAuthorizer.HasEffectivePermissionAsync`, so discovery and the `VitallyService.SendAsync` backstop cannot drift apart. This is **discovery filtering** — the security boundary remains `SendAsync`. Distinct from the deployment-wide `Authorization:ReadOnly` switch, which hides destructive tools from everyone.
 - A denial refused at this SDK authorisation checkpoint is audited separately: see `LogToolCallDenied` under `AuditOptions` below — `SendAsync`'s own `LogDenied` never fires for a tier mismatch, because the SDK rejects the call before `SendAsync` runs.
 
+> ⚠️ **Log levels are a security control here, and they live in `Program.cs`. Do not move them.**
+>
+> ⚠️ **#143 raised `builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning)` as a
+> PII control. That premise was wrong**, and it is recorded here because the mistaken version is the
+> intuitive one: the concern was that `Search_users` / `Search_admins` terms reach logs via the
+> outbound request URI. **.NET redacts query values by default** — the logged form is
+> `GET .../users/search?*`, where `?*` is the redaction marker, not a truncation. Verified 2026-09-18
+> by probe and against live production logs, in which every query is `?*`; nothing here disables it.
+>
+> So the filter is **noise reduction** (19.5% of console bytes), with defence-in-depth as a footnote
+> should redaction ever be turned off. Path segments are *not* redacted, but they carry record ids,
+> which `AuditLogger` deliberately records anyway.
+> Four `Microsoft.AspNetCore.*` noise filters sit beside it, all `Warning` rather than `None` so
+> framework *warnings* still surface — this application has exactly **one** `LogError` call site of
+> its own, so those are most of what reports a fault.
+>
+> ⚠️ **But two framework signals are logged at `Information`, and these filters do suppress them.**
+> An earlier version of this note claimed all faults stay visible; that was wrong, and the exception
+> matters when reading an incident:
+>
+> | Suppressed | Replacement |
+> |---|---|
+> | `Microsoft.AspNetCore.Authorization` — *"Authorization failed. These requirements were not met…"* | For an **authenticated** caller, `AuditLogger.LogToolCallDenied` at `Warning` with the object id, tool and required permission. For an **anonymous** one, **nothing** — that is the normal MCP probe, and it still returns a 401 |
+> | `JwtBearerHandler` — *"Bearer was not authenticated. Failure message…"* | `Program.cs`'s own `OnAuthenticationFailed`, at `Warning` under `VitallyMcp.Authentication`, logging the exception **type only** |
+>
+> The authentication one is re-emitted because nothing else would record it: an unauthenticated
+> caller never reaches `SendAsync` or the `[Authorize]` checkpoint, so a signing-key rotation, clock
+> skew or a run of forged tokens would otherwise be indistinguishable from silence. It logs the type
+> and **never** `Exception.Message` — IdentityModel builds those from the token's own claims, so the
+> text carries caller-controlled values that may contain newlines.
+>
+> What is genuinely given up: a flood of anonymous 401s is invisible in logs. If that needs watching
+> it belongs in a counter or `ContainerAppHTTPLogs`, not Information-level framework text.
+>
+> **Two places it must not move to, both of which look reasonable and silently do nothing:**
+>
+> - **`appsettings.json`** — `.gitignore` and `.dockerignore` both exclude it (under *"Strong-name
+>   keys, certificates and other secrets - do NOT commit"*, beside `*.pfx` and `.env`). A file added
+>   there works on a developer machine and never reaches the image. `appsettings.Example.json` *does*
+>   carry a `Logging` section; it is a template ASP.NET Core never loads, and is marked **NOT IN
+>   FORCE** for this reason.
+> - **Environment variables** — a Container App recreate does not inherit them, so the control would
+>   lapse on any target someone forgot. Same reasoning as the `IncludeReads` default (#139).
+>
+> `LoggingFilterTests` pins all of it against the composed host, including that `AuditLogger` still
+> logs at `Information`: a filter on the wrong prefix would delete the audit trail while looking like
+> tidying.
+
 `AuditOptions` (singleton, bound from `Audit:` section):
 - `Enabled` (default `true`), `IncludeReads` (default **`true`** since 2026-09-17 — see below).
 - **`IncludeReads` defaults to true, and the default is the control.** Reads are 56 of the 93 tools, so a target that does not audit them has no meaningful trail — and `AuditLogger` is the only attribution mechanism, because the shared Vitally key means Vitally's own log cannot name a FISCAL user. It defaulted to `false` until 2026-09-17 and no deployed target ever overrode it, so no read had ever been recorded (#139). It stays configurable as the ingest-cost lever, but **do not re-solve this with a per-deployment environment variable**: a Container App recreate does not inherit them, so coverage would lapse silently — the same trap this file records for `Authorization__ReadOnly` on staging.
