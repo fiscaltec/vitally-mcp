@@ -587,33 +587,82 @@ where arguments belong.
 The policy reversal above is conditional on this, so it is a design element rather than an operational
 afterthought: *the data is acceptable to store because it is restricted.*
 
-Measured 2026-09-17 on `vitally-prod-law-uksouth`:
+**Reviewed 2026-09-21 (#146, phase 3a).** The figures below replace the 2026-09-17 estimate, which
+was taken from a role-name summary and was wrong in both directions — it counted a group and an
+external principal as users, and it counted role *assignments* rather than distinct principals.
 
-| | Count |
+Method, so it can be repeated rather than re-guessed: enumerate `az role assignment list --scope
+<workspace> --include-inherited --include-groups`, then keep only the roles that actually grant
+`Microsoft.OperationalInsights/workspaces/query/read` — the eight with a blanket `*` or `*/read`
+(`Owner`, `Contributor`, `Reader`, `Log Analytics Contributor`, `Monitoring Contributor`,
+`Resource Policy Contributor`, `Role Based Access Control Administrator`, `User Access
+Administrator`), none of whose `notActions` touch it. Roles that merely *name* OperationalInsights
+are not among them: `Defender Containers Sensor` and `Defender Kubernetes Agent Operator` hold
+`workspaces/read` and `workspaces/sharedkeys/*`, which is workspace metadata and the shared key —
+**not** log data, and the shared key is inert here because `local_authentication_enabled = false`.
+
+| | 2026-09-17 estimate | Measured 2026-09-21 |
+|---|---|---|
+| Role assignments **at the workspace** | 0 | **0** — confirmed |
+| Named **FISCAL humans** who can read | "5 users" | **4** |
+| **Break-glass** emergency accounts | counted among the users | **2**, permanent `Owner`, by design |
+| **External** principals | not identified | **1** — an MSP with `Owner` via delegated administration |
+| **Service principals** with a read-capable role | 28 | **25** at review → **22** after cleanup |
+| **Orphaned principals** (deleted from the directory) | not identified | **4**, holding **14** assignments — **13 removed 2026-09-21**, 1 held |
+
+**The human side meets the condition, and more strongly than the estimate suggested.** The four are
+`dsearle.adm`, `jpobgee.adm`, `lnewton.adm` and `etomblin.adm` — the IT administrators — and their
+elevated access is **PIM-gated, not permanent**: `Owner` and `User Access Administrator` are
+*eligible* via `Azure - Global Administrators` and `Contributor` via `Azure - IT Administrators`,
+so they are activated and time-bound (one such activation was live during the review, expiring the
+same day). The one standing human grant is `etomblin.adm`'s permanent `Reader`; the
+`Azure - Infrastructure Administrators` `Reader` is itself time-bound. The two break-glass accounts
+(`Charles Ponzi`/`Frank Abagnale (Break Glass)`, titled *Emergency Access Account*) hold permanent
+`Owner` deliberately — that is what a break-glass account is for, and they are **not** a finding.
+
+**The machine side is where the condition is unmet**, and it splits into two very different classes:
+
+| Class | Count | Assessment |
+|---|---|---|
+| Microsoft platform automation — Defender/ASC provisioning, `MS-PIM`, SQL/Arc protection, Defender for Storage operator | ~13 | Expected. These provision and scan; none of them runs KQL against a table. Broad scope is how Defender works |
+| **FISCAL-controlled** — `sp-terraform-deploy-itproduction` (Contributor + RBAC Admin), `sp-terraform-policy-tenant`, `fiscaltecvsts-ITTeam-*` and `fiscaltecvsts-Infrastructure-*` (both **Owner**), `MI-UA-ComplianceManager`, `Power Automate`, `Tenable - Azure Cloud Connector`, `Testing Dan Dan Dan` | **8** | The real surface. Two Azure DevOps service connections hold permanent `Owner`; one entry is a **test application** with `Reader` on the production subscription |
+| **Orphaned** — principals no longer in the directory | **4**, holding **14** assignments | Dead: nothing can authenticate as a deleted principal, and all four are *permanently* gone rather than soft-deleted (checked against `directory/deletedItems`, so none is restorable). Two of them carried `Contributor` + `Log Analytics Contributor` + `Monitoring Contributor` + `User Access Administrator`, which reads alarmingly and grants nothing. **Removed** — see below |
+
+⚠️ **Correction to this document's own earlier suggestion: table-level RBAC cannot restrict any of
+the above.** Azure RBAC is **allow-only** — there is no deny. A table-level role grants
+`workspaces/query/<table>/read` to someone who had nothing; it does not subtract from a principal
+already holding `*/read`. So table-level RBAC is a tool for *adding a narrow reader later*, never
+for fencing the audit table off from the inherited grants. The previous wording ("only bites once
+the broad roles are narrowed") was directionally right and read as though the order was the only
+obstacle. It is not: at the point the broad roles are narrowed, table-level RBAC has nothing left
+to do.
+
+⚠️ **The rejection of a separate workspace rested on a premise the measurement disproves.** It was
+rejected as "disproportionate to moving five users and reviewing a service-principal list" — but
+the humans turn out to be fine, and the part that is not fine is precisely the part that cannot be
+moved from this repo: an **external MSP holding `Owner`** through delegated administration
+(membership invisible in our tenant) and two Azure DevOps service connections holding `Owner` at
+subscription scope. Narrowing those is an IT-wide decision about the production subscription, not
+an audit-trail change. A workspace in a *different subscription* is the only measure that creates
+an actual boundary. That is a genuine re-opening, not a re-litigation — recorded so the decision is
+made on the corrected facts.
+
+#### Disposition
+
+These are **subscription** RBAC, not repository changes. What was actually done, and what was
+deliberately not:
+
+| | Status |
 |---|---|
-| Role assignments **at the workspace** | **0** |
-| Distinct **users** with read-capable roles | 5 (4 Owner, 1 Reader) |
-| **Service principals** with read-capable roles | 28 (11 Contributor, 9 Log Analytics Contributor, 3 Reader, 3 Monitoring Contributor, 2 Owner) |
+| **Remove the orphaned assignments** | ✅ **Done 2026-09-21.** 13 of the 14 deleted (authorised: dsearle). Effective assignments at the workspace **80 → 67**; read-capable service principals **25 → 22**. The records were captured to JSON before deletion — though note that a role assignment for a permanently-deleted principal cannot be meaningfully restored, so the backup is an audit artefact, not a rollback |
+| ⏸ **One orphan held** | The 4th principal's only remaining assignment is `Contributor` at **management-group** scope (`internal-fiscal`), which governs more than IT-Production. Removing it changes no effective access — the principal is gone — but the blast radius is wider than the workspace review that authorised the rest, so it was left for a separate decision |
+| ⏸ **`Testing Dan Dan Dan`'s `Reader`** | **Left in place, deliberately** (decision: dsearle, 2026-09-21). Despite the name it is not to be removed. Recorded here so a later reviewer does not "tidy" it, and so the read surface is counted honestly with it included |
+| ⏳ **The two `fiscaltecvsts-*` `Owner` grants**, and `Power Automate` / `Tenable` | Not actioned. An Azure DevOps service connection rarely needs `Owner`, but narrowing it is an IT-wide decision about the production subscription rather than an audit-trail change |
+| ⏳ **The external MSP `Owner` grant** | Not actioned. If it is contractual it should be recorded as accepted risk rather than left implicit — it is the single widest read path to this data and nothing in this repo constrains it |
 
-Five people is a defensible set. Two things are not:
-
-1. **Nothing is assigned at the workspace**, so access is entirely inherited from the subscription and
-   management group. It is not controlled here and will drift whenever subscription RBAC changes —
-   nobody editing subscription roles is thinking about this table.
-2. **28 automation principals**, several holding broad `Contributor`, is a wide surface for a store
-   that now holds customer personal data.
-
-Proportionate response, deliberately not a re-platform:
-
-- **Review the 28 service principals** and confirm each needs workspace read. Several are Defender and
-  platform automation and probably do.
-- **Consider table-level RBAC** on the audit table. Log Analytics supports per-table access, so the
-  audit table can be restricted while diagnostics stay broadly readable. Note the limit honestly: an
-  inherited subscription `Contributor` still reads everything, so this only bites once the broad roles
-  are narrowed — it is worth doing in that order, not instead of it.
-- **Do not build a separate workspace for audit.** It would give the cleanest boundary and costs a
-  second ingestion path, DNS, private endpoint and query surface — disproportionate to moving five
-  users and reviewing a service-principal list.
+The cleanup that was done removes noise rather than exposure: nothing could authenticate as those
+principals. Its value is that the next reviewer reads a set that someone chose, which is the
+difference between *"only readable by certain people"* and an inherited accident.
 
 ### Retention
 
@@ -633,7 +682,7 @@ personal data — see the policy section.
 | 3 | logging configuration: noise + `HttpClient` PII | — |
 | **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | — |
 | **2b** | add **`ContainerAppConsoleLogs`** to that setting | 3, **4** |
-| **3a** | **access review — a gate, not a task**: confirm the 5 users are appropriate, review the 28 service principals, decide on table-level RBAC | — |
+| **3a** | ✅ **Done 2026-09-21 (#146) — access review, a gate rather than a task.** Humans pass: 4 named IT administrators, elevated access PIM-gated, plus 2 by-design break-glass accounts. Gap is machine-side: 8 FISCAL-controlled service principals (2 with `Owner`, 1 a test app), 4 orphaned assignments, and an external MSP with `Owner`. Table-level RBAC found **unable** to help — RBAC is allow-only. See *Who can read this* | — |
 | 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id | 3, **3a** |
 | 5 | failure logging | 3 |
 | 6 | performance: durations, counters, tracing | 3 |
@@ -677,7 +726,7 @@ it.
 | PII reaching telemetry through a framework category nobody configured | 3 constrains `HttpClient`; `ContainerAppHTTPLogs` evaluated separately before enabling |
 | Re-locking ingestion breaks delivery again | verify arrival at step 2 *before* re-locking, and re-verify after |
 | Correlation id becomes a per-call-site convention that drifts | carry it through the existing `CallerIdentity`/`AuditLogger` choke points, which already exist for exactly this reason |
-| **Personal data sits in a table whose access is inherited, not controlled** | review the 28 service principals; table-level RBAC once the broad roles are narrowed. This is the condition the policy reversal rests on — treat it as in scope, not follow-up |
+| **Personal data sits in a table whose access is inherited, not controlled** | Reviewed 2026-09-21 (#146). Humans are a reviewed set of 4, PIM-gated; the residual is 8 FISCAL-controlled service principals and an external MSP with `Owner`. **Table-level RBAC does not mitigate this** — RBAC is allow-only and cannot subtract from an inherited `*/read`. The remaining levers are narrowing subscription RBAC (an IT-wide decision) or a workspace in a different subscription. This is the condition the policy reversal rests on, so it stays in scope |
 | **An erasure request arrives and nobody has done one** | purge is asynchronous and per-table; rehearse once before it is needed, as #138 does for rotation |
 | Returned-id capture inflates records on paged reads | cap the ids (100) and record `recordsFetched` / `idsRecorded` / `truncated`, so a capped record reports its real magnitude — and, when the pager stopped early, says the total is unknown rather than implying `recordsFetched` was all of them |
 | The withdrawn PII rule is reinstated by a later reader who sees "no PII" as obviously correct | the reversal and its reasoning are recorded in `CLAUDE.md` and here; it was a deliberate trade, not an oversight |
