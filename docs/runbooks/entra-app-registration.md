@@ -456,39 +456,333 @@ governs the **Vitally API key** cache in `VitallyApiKeyProvider`, nothing here. 
 alone changes nothing the app sends, so the wait achieves nothing and the delete removes the
 credential still in live use — every token exchange then fails `invalid_client`.
 
-**What a rotation actually has to touch**, in order. The full procedure has never been exercised and
-the wording below is deliberately a list of required effects rather than a script to paste — #138
-tracks writing and dry-running it before the **2027-03-01** expiry:
+#### ⚠️ There is no such thing as a staging-only rehearsal of this — and staging will tell you there is
 
-1. Create the new Entra credential, overlapping the old one (never delete first).
-2. Update the Key Vault secret — **and set the expiry explicitly, as a second call**.
-   `az keyvault secret set` writes a new *version*; follow it with `az keyvault secret
-   set-attributes --expires` carrying the new credential's `endDateTime`, exactly as creation
-   steps 2 and 3 above do. Do this whether or not a new version would inherit the old `exp` —
-   setting it is harmless either way, and the scanner's view of `attributes.exp` is the only
-   thing watching this deadline.
-3. **Update the Container App secret on every target** — this is the step that changes what the app
-   sends, and the one the old procedure omitted entirely.
-4. **Roll a revision.** `az containerapp secret set` does **not** roll one, so the running revision
-   keeps serving the old value until something else rolls it.
-5. Verify a real token exchange succeeds on the new revision.
-6. **Only then** delete the superseded credential by `keyId`:
+**One app registration serves both targets.** So the final step — deleting the superseded credential
+— *cannot* be rehearsed against staging while production still presents that credential: the delete
+is global to the app, and production starts failing `invalid_client` immediately. #138 asked for a
+dry-run "end to end, including the delete"; that is not achievable in isolation, and the procedure
+below is shaped around the fact rather than pretending otherwise. **Staging is not a rehearsal of
+the rotation — it is the first half of it.**
+
+**Worse, a staging rehearsal would silently pass the one step most likely to be got wrong.**
+Measured 2026-09-21:
+
+| | `minReplicas` | replicas when idle | What a changed secret does |
+|---|---|---|---|
+| `vitally-staging-ca-uksouth` | **0** | **0** | The next request cold-starts a replica, which reads the **current** secret. Looks like it rotated with no roll |
+| `vitally-prod-ca-uksouth` | **1** | **1** | The warm replica keeps the **old** value in its environment indefinitely. Nothing rotates until it is rolled |
+
+So step 4 below is invisible on staging and mandatory on production — the exact shape of defect that
+put the previous version of this section in the repo. Do not conclude from a green staging run that
+the roll is optional.
+
+#### The verified mechanics
+
+Checked against the live apps on 2026-09-21 with a throwaway secret (`rotation-probe-138`, added,
+updated and removed on staging; no live secret touched), so these are observations rather than
+readings of the documentation:
+
+- **`az containerapp secret set` does not create a revision.** Verified for both *adding* a new
+  secret and *updating* an existing one: `vitally-staging-ca-uksouth--0000014` was the
+  traffic-bearing revision before and after both calls, with an unchanged `createdTime`.
+- **`az containerapp revision restart` is the cheapest roll** and is available in the installed CLI.
+  Restarting the traffic-bearing revision is enough; a full `az containerapp update` is not needed.
+- **Both identifiers for this app are valid and are not interchangeable typos.** `az ad app` accepts
+  either, and they resolve to the same registration — objectId `568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4`
+  (used below) and appId `c3812e7d-a413-4169-b57e-803326611ba3` (the `OAuth:SharedClientId` in
+  `CLAUDE.md`). Don't "align" them; each is correct where it appears.
+- **One credential exists today** — `keyId e17e0e9e-d4c7-46b4-87c1-afe98a5bc111`, expiring
+  `2027-03-01T13:18:59Z` — and the app has **no federated identity credentials**.
+
+#### The procedure
+
+Ordered so that the irreversible step is last and every target has been proven before it. The
+**secret names differ per target** (production `entra-oauth-client-secret`, staging
+`oauth-shared-client-secret`) — see *Client secret* above for why; using the wrong one adds a second
+unused secret and rotates nothing.
 
 ```bash
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
-az ad app credential list --id $APP --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
-az ad app credential delete --id $APP --key-id <old-keyId>
+RG=vitally-prod-rg-uksouth
 ```
 
-Overlap the two rather than deleting first — Entra allows multiple secrets, and a delete-then-create
-sequence is a self-inflicted outage.
+#### ⚠️ A successful sign-in does NOT prove the rotation worked
 
-### Consider retiring the secret entirely
+The most dangerous property of this procedure is that **both credentials are valid throughout it**.
+That overlap is what makes it safe to abort — and it is also what makes the obvious verification
+worthless: if `secret set` silently failed, or a warm revision did not roll, the app happily
+authenticates **with the old credential** and the sign-in succeeds. You then reach the delete step
+and remove the only credential actually in use, which is precisely the outage the overlap exists to
+prevent.
 
-The Container App already has a user-assigned managed identity. A **federated identity credential**
-naming that identity would remove the secret, and with it the rotation commitment. It needs
-`/oauth/token` to send `client_assertion` instead of `client_secret`, so it is a code change, not
-configuration — worth raising after #108 rather than during it.
+So a `tools/list` proves *some* credential works, never *which*. Two non-destructive checks do
+discriminate, and both are needed. Record `NEWHASH` and `STAMP` from script A and compare against
+them on each target; only when **A and B both pass on both targets** is the delete safe.
+
+#### The helpers are a checked-in file, not a snippet to retype
+
+**[`docs/runbooks/rotate-helpers.sh`](rotate-helpers.sh)** — `source` it, do not execute it:
+
+```bash
+. docs/runbooks/rotate-helpers.sh     # sets APP and RG; defines roll, stored_hash, replicas_are_fresh
+```
+
+It is a file rather than a block in this page because the roll and the two checks run *after* a
+browser sign-in and often in a fresh shell. Anything defined only inside a runbook code block is
+not there when it is needed, and that failure is silent in the worst direction: `secret set`
+succeeds, `roll` is undefined, and the target quietly stays on the superseded credential until the
+delete takes it down. Sourcing it also re-establishes `APP` and `RG`, which script A set in a shell
+that has since exited.
+
+| | What it does |
+|---|---|
+| `roll <app>` | Restarts **every** traffic-bearing revision; fails closed on a failed *or empty* listing |
+| ✅ `verify_target <app> <secret-name> <hash> <stamp> <min-replicas>` | **Use this.** Runs both checks, *compares* the hash, and returns one exit code |
+| `stored_hash <app> <secret-name>` | Check A alone — prints the SHA-256 (first 16 chars) of the stored secret. Printing is not comparing |
+| `replicas_are_fresh <app> <stamp> <min-replicas>` | Check B alone — every running replica started after `<stamp>`, and at least `<min-replicas>` are running |
+
+⚠️ **Call `verify_target`, not the two checks by hand**, and note the arguments the last two rows
+make it easy to get wrong:
+
+- **`<min-replicas>` is safety-critical and defaults to `0`.** Staging takes `0` — scale-to-zero is
+  its steady state. **Production takes `1`**: zero running replicas there is never steady state,
+  only a check made before `revision restart` finished, and omitting the argument would let that
+  pass while proving nothing.
+- **`<stamp>` is per-target.** Script A prints `STAMP_STAGING` and `STAMP_PROD` separately, each
+  taken *after* its own target's `secret set`. Passing one stamp to both reintroduces a window in
+  which a replica that loaded the **old** credential still looks fresh.
+- `stored_hash` *prints* a hash; it does not check it. `verify_target` is what compares.
+
+All three **fail closed**: every Azure call's exit status is checked explicitly, because in each
+case a failed listing otherwise yields no rows and reads exactly like a clean pass. Invoke by path;
+the repo is authored on Windows with `core.filemode=false`, so the executable bit is not relied on
+(same convention as `.github/scripts/verify-oauth-metadata.sh`).
+
+#### Script A — create, record, stage (steps 1–3)
+
+Run as a script, not pasted line by line. `set -euo pipefail` and the `trap` are load-bearing:
+`az rest … > secret.txt` **creates or truncates the file before `az` runs**, so a failed call leaves
+an empty `secret.txt`, and an unguarded `$(cat secret.txt)` would then write an *empty* secret to a
+Container App — an outage manufactured by the rotation itself.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+export MSYS_NO_PATHCONV=1
+
+APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
+RG=vitally-prod-rg-uksouth
+VAULT=vitally-prod-kv-uksouth
+END=$(date -u -d '+180 days' '+%Y-%m-%dT%H:%M:%SZ')   # 180-day standard, NOT --years 1
+
+umask 077
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"; unset SECRET' EXIT INT TERM HUP
+
+# 1. create the new credential — appended, never printed to stdout.
+#    addPassword APPENDS, which is the overlap this whole procedure depends on.
+#    (`az ad app credential reset` without --append REPLACES every credential, and prints the
+#     new one to stdout. Do not substitute it.)
+cat > "$WORK/pw.json" <<EOF
+{"passwordCredential":{"displayName":"vitally-mcp container app ($(date -u +%Y-%m)) — expires $END","endDateTime":"$END"}}
+EOF
+az rest --method post --url "https://graph.microsoft.com/v1.0/applications/$APP/addPassword" \
+  --headers "Content-Type=application/json" --body @"$WORK/pw.json" \
+  --query secretText -o tsv > "$WORK/secret.txt"
+
+# GUARD: a truncated/empty file here is the empty-secret outage. Stop before anything consumes it.
+[ -s "$WORK/secret.txt" ] || { echo "empty secret — addPassword failed; aborting"; exit 1; }
+SECRET=$(tr -d '\r\n' < "$WORK/secret.txt")
+NEWHASH=$(printf '%s' "$SECRET" | sha256sum | cut -c1-16)
+echo "NEWHASH=$NEWHASH   # record this — it is how you verify each target"
+
+# 2. Key Vault is a RECORD, not a source. Nothing the app sends changes here — but the scanner
+#    keys off attributes.exp here and nowhere else, so skipping it means the next deadline
+#    passes in silence. Needs the two-switch window above, opened with its own trap (see #154).
+az keyvault secret set --vault-name "$VAULT" \
+  --name entra-mcp-client-secret --file "$WORK/secret.txt" --output none
+# separate call: `secret set` writes a new VERSION and the expiry does not carry over reliably
+az keyvault secret set-attributes --vault-name "$VAULT" \
+  --name entra-mcp-client-secret --expires "$END" --output none
+
+# 3. set the Container App secret on BOTH targets, but roll ONLY staging.
+#    Setting production's secret now is safe and deliberate: its warm replica keeps serving the
+#    old value until step 4 rolls it, so nothing changes for users — and it means this script is
+#    the only place the secret value is ever needed, so it need not survive into a second shell.
+#    ⚠️ The secret NAMES differ per target; using the wrong one adds an unused secret and
+#    rotates nothing. See *Client secret* above for why they differ.
+#    ⚠️ ONE STAMP PER TARGET, taken AFTER that target's own `secret set` returns. A single
+#       stamp taken before both would admit a replica created in the gap between the stamp and
+#       its target's update: it loaded the OLD credential, but started "after STAMP", so it
+#       would pass Check B — and the delete would then remove the credential it is running on.
+#       The window is small and entirely real: staging is scale-to-zero and cold-starts on any
+#       request, and production can replace a replica at any time.
+az containerapp secret set -n vitally-staging-ca-uksouth -g "$RG" \
+  --secrets "oauth-shared-client-secret=$SECRET"
+STAMP_STAGING=$(date -u +%s)
+
+az containerapp secret set -n vitally-prod-ca-uksouth -g "$RG" \
+  --secrets "entra-oauth-client-secret=$SECRET"
+STAMP_PROD=$(date -u +%s)
+
+echo "STAMP_STAGING=$STAMP_STAGING   # record both — each target is checked against its own"
+echo "STAMP_PROD=$STAMP_PROD"
+```
+
+⚠️ **One residue this does not remove.** `az containerapp secret set` has no `--file` equivalent, so
+the value passes as a command-line argument and is briefly readable from the process table on that
+host. Acceptable on an operator workstation, not on a shared one. The temp file removes the stdout
+and scrollback exposure, which is the larger and longer-lived one — this is smaller, not nothing.
+
+#### Roll and verify staging
+
+**Save this to a file and run it — do not paste it.** The helpers all return non-zero on a failed
+listing, a hash mismatch or a stale replica, but a bare sequence of commands *prints* those and
+carries on, walking a failed roll straight through the sign-in and into the irreversible delete.
+`set -euo pipefail` is what turns those return codes into a stop.
+
+⚠️ **And the wrapper only fires when it is run as a script.** Verified 2026-09-21: from a file,
+a failing `verify_target` exits the subshell `rc=1` and the following step never runs; the same
+text fed inline to `bash -c` printed the mismatch and **carried on to the next step with `rc=0`**,
+because bash's final-command optimisation changes `set -e` semantics there. The protection is real
+but it is not in the characters — it is in how you invoke them. Same reasoning as the staging
+rollback subshell in `CLAUDE.md`.
+
+```bash
+(
+  set -euo pipefail
+  . docs/runbooks/rotate-helpers.sh
+  STAMP_STAGING=<the value script A printed>   # if this is a fresh shell
+  NEWHASH=<the value script A printed>
+
+  roll vitally-staging-ca-uksouth
+  # 0 = staging is minReplicas 0, so no running replica is its steady state
+  verify_target vitally-staging-ca-uksouth oauth-shared-client-secret "$NEWHASH" "$STAMP_STAGING" 0
+  echo "STAGING VERIFIED"
+)
+```
+
+`verify_target` does both checks and the hash *comparison* under one exit code, so nothing depends
+on an operator noticing that two printed strings differ.
+
+Then sign in for real against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client.
+`/health` and the 401 challenge both pass on the *old* credential, so only `/oauth/token` — reached
+by a real authorisation code, hence a browser — exercises this at all. **Read the result together
+with the two checks above**: a successful `tools/list` alone would also be produced by the old
+credential still being in use.
+
+Anything failing here is recoverable, because the old credential is still live — **stop and fix it
+at this point**. That is the entire reason staging goes first.
+
+#### Roll and verify production
+
+```bash
+(
+  set -euo pipefail
+  . docs/runbooks/rotate-helpers.sh           # again if this is a fresh shell
+  STAMP_PROD=<the value script A printed>
+  NEWHASH=<the value script A printed>
+
+  roll vitally-prod-ca-uksouth
+  # 1, NOT 0 — production is minReplicas 1, so zero running replicas is never a valid steady
+  # state, only a check made too early. `revision restart` can return before the replacements are
+  # running, so this waits (up to ~2 min) rather than passing on an empty listing.
+  verify_target vitally-prod-ca-uksouth entra-oauth-client-secret "$NEWHASH" "$STAMP_PROD" 1
+  echo "PRODUCTION VERIFIED"
+)
+```
+
+Then a real sign-in against `https://vitally.fiscaltec.com/mcp`. **This is the step the staging run
+could not prove** — see the replica table above.
+
+#### Delete the superseded credential — the point of no return
+
+Only once **both** targets pass both checks *and* a real sign-in. Leave a soak between this and the
+production roll rather than running them together:
+
+**List first, in its own fail-fast script.** `$APP` has to be re-established: script A ran in a
+shell that has since exited, and the browser sign-ins make a fresh terminal near-certain.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+. docs/runbooks/rotate-helpers.sh
+[ -n "${APP:-}" ] || { echo "APP unset — the helpers did not load; stop"; exit 1; }
+
+az ad app credential list --id "$APP" \
+  --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
+```
+
+**Now read that table** and confirm both facts before going on: the keyId you are about to delete
+is the **old** one, and the **new** credential is present and unexpired. Deleting the wrong row is
+the same outage by a different route, and no script can make that judgement for you — which is why
+the delete is deliberately a separate step rather than piped from the listing.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+. docs/runbooks/rotate-helpers.sh
+[ -n "${APP:-}" ] || { echo "APP unset — the helpers did not load; stop"; exit 1; }
+
+OLD_KEY_ID=<the old keyId you just read>          # paste it; do not re-derive it
+[ -n "$OLD_KEY_ID" ] || { echo "OLD_KEY_ID unset; stop"; exit 1; }
+
+az ad app credential delete --id "$APP" --key-id "$OLD_KEY_ID"
+```
+
+⚠️ **`exit 1`, not `return 1`, and `set -euo pipefail` around both.** `return` outside a function
+is an error at the top level of a script, so a guard written that way does not reliably stop
+anything — it would fall through to the delete, which is the one step that cannot be undone. An
+empty `--id` also does not fail usefully. Both blocks are scripts for the same reason as the
+verification blocks above: pasted inline, the wrapper does not fire.
+
+**Recovery paths, and note that they are not symmetric:**
+
+| When | Recovery |
+|---|---|
+| Before the delete | Both credentials are live. Fix and re-roll, or revert a target by re-setting its secret and rolling again. Cheap |
+| After the delete | The old credential is **gone** — it cannot be restored. Recovery is to run this procedure again from step 1, creating a *third* credential. Users are signed out until it completes |
+
+That asymmetry is why the two discriminating checks exist: the delete is the one step whose mistake
+cannot be undone, and a sign-in test alone cannot tell you it is safe to take.
+
+⚠️ **One residue the file pattern does not remove.** `az containerapp secret set` has no `--file`
+equivalent, so the value passes as a command-line argument and is briefly visible to anything that
+can read the process table on that host. That is acceptable on an operator workstation and is not on
+a shared or multi-tenant one — the stdout and scrollback exposure is what the temp file removes, and
+this is a smaller, shorter-lived residue rather than none.
+
+**Rolling back mid-rotation** (before step 6): put the previous value back with the same
+`secret set` + `roll` pair on the affected target. The old credential is still live, so this is a
+two-command recovery — exactly what deleting early would destroy.
+
+### Should the Container App copy exist at all? — recorded so it is not re-litigated
+
+#138 asked this once the corrected procedure existed. Three options were considered; the recommended
+one is third, and **none of them is implemented** — today's layout is the inline copy the procedure
+above rotates.
+
+| Option | Effect | Assessment |
+|---|---|---|
+| **Keep the inline copies** (today) | Vault is a record; each target holds its own copy | Works, and the procedure above is safe. The cost is permanent: two copies to keep in step, a vault value that *looks* live and is not, and a rotation that must touch every target. This is the shape that produced the original defect |
+| **Container App → Key Vault reference** (`keyVaultUrl` + `identityref`) | Vault becomes the live source, so the old wording would finally be true | Viable — the CAE is VNet-injected so it reaches the private endpoint. But it **does not remove the roll**: the env var is still injected at replica start, so step 4 stays. It removes the drift, not the deadline. A middling win |
+| ✅ **Federated identity credential** (recommended) | The secret, its expiry and the rotation commitment all disappear | The Container App already has a user-assigned managed identity. Registering it as a federated credential on this app lets `/oauth/token` present a `client_assertion` obtained from that identity (`api://AzureADTokenExchange`) instead of `client_secret`. **No secret, no 180-day clock, no 2027-03-01 outage date, no per-target copy** |
+
+**Why the third and not the second.** The second option improves the *mechanics* of a rotation that
+should not need to exist; the third deletes the obligation. The distinction matters here because the
+failure mode this runbook documents is not "rotation is awkward" but "rotation was documented wrongly
+and nobody noticed for months" — and a procedure nobody has to run cannot rot.
+
+**The cost, stated honestly:** it is a code change to the OAuth proxy's token forwarding in
+`Program.cs`, not configuration, so it cannot be reverted by an environment variable the way the
+Auth0 rollback can. It should therefore land while the Auth0 rollback is still retained *or* after
+that path is abandoned, not in the window where both are half-true. It also needs the app to have
+**no** usable password credential left, or the old path stays silently available.
+
+**Not scheduled by #138**, which covers the procedure. Raised separately so the deadline and the
+redesign do not block each other — the rotation above is safe to run on its own, and remains the
+fallback if the federated route is not taken in time.
 
 ## What this app does *not* have, deliberately
 
