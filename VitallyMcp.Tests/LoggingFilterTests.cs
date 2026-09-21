@@ -42,18 +42,22 @@ public class LoggingFilterTests
     private const string DefaultHttpClientName = "Default";
 
     /// <summary>
-    /// Proves the name used above for the unnamed client, rather than trusting it.
+    /// Proves that every name the theory data above claims is a name the host actually creates a
+    /// logger for, rather than trusting any of them.
     ///
     /// <para>The risk this guards against is specific: every category under
     /// <c>System.Net.Http.HttpClient.</c> is disabled at <c>Information</c> by the prefix filter, so
     /// a <b>wrong</b> name in the theory data would pass while testing a logger nothing creates —
     /// exactly how this file's discovery-client name was wrong and green earlier in this PR.</para>
     ///
-    /// <para>So it records which categories the framework actually asks for when an unnamed client
-    /// is built, and asserts the expected pair is among them.</para>
+    /// <para>So this composes the host, brings each of the four clients into existence by the route
+    /// <c>Program.cs</c> itself uses, and asserts the claimed categories are among those the
+    /// framework asked for. Crucially the two typed clients are reached by <b>resolving the typed
+    /// service</b>, never by asking the factory for a name derived here — asking for a derived name
+    /// would create the logger it was meant to prove, and pass whatever the derivation said.</para>
     /// </summary>
     [Fact]
-    public void UnnamedHttpClient_LogsUnderTheDefaultCategory()
+    public void EveryClaimedHttpClientCategory_IsOneTheHostActuallyCreates()
     {
         var seen = new CategoryRecordingProvider();
 
@@ -70,18 +74,40 @@ public class LoggingFilterTests
                 b => b.ConfigureLogging(l => l.AddProvider(seen)));
 
             // Building the handler chain is what creates the logging handlers, and therefore the
-            // categories. This is the same call Program.cs makes for /oauth/token.
-            using var _ = factory.Services.GetRequiredService<IHttpClientFactory>().CreateClient();
+            // categories. Each client is brought up the way Program.cs brings it up.
+            using var scope = factory.Services.CreateScope();
+            var sp = scope.ServiceProvider;
+
+            // Typed clients: resolved as services, so the category recorded below is whatever the
+            // framework derives from the registration — not a name this test supplied.
+            _ = sp.GetRequiredService<VitallyService>();
+            _ = sp.GetRequiredService<IGroupPermissionResolver>();
+
+            var clientFactory = sp.GetRequiredService<IHttpClientFactory>();
+
+            // The discovery client is registered BY this constant, so passing it is the
+            // registration itself rather than a guess about one.
+            using var discovery = clientFactory.CreateClient(UpstreamOidcMetadata.HttpClientName);
+
+            // The unnamed client the OAuth proxy uses for /oauth/token.
+            using var unnamed = clientFactory.CreateClient();
         }
         finally
         {
             RestoreConfiguration(previous);
         }
 
+        // Only the LogicalHandler half: both stages are created together by the same builder, so
+        // asserting one per client proves the NAME, which is the thing in doubt. Driven from the
+        // same array the theories are, so a client added to one is covered by the other.
+        var claimed = AllHttpClientNames
+            .Select(name => $"System.Net.Http.HttpClient.{name}.LogicalHandler");
+
         seen.Categories.Should().Contain(
-            $"System.Net.Http.HttpClient.{DefaultHttpClientName}.LogicalHandler",
-            "the unnamed client's category is what the theory data above claims it is; if the " +
-            "framework ever changes this substitution, that data silently stops covering it");
+            claimed,
+            "each of these is a category the theory data asserts the filter covers; a name that " +
+            "nothing creates would pass those theories — the prefix filter reports every " +
+            "System.Net.Http.HttpClient.* category as disabled, invented ones included");
     }
 
     /// <summary>Records every logger category the host asks for, so a name can be proven.</summary>
@@ -100,28 +126,34 @@ public class LoggingFilterTests
         public void Dispose() { }
     }
 
+    /// <summary>
+    /// Every name derived from its registration, never a literal. <c>AddHttpClient&lt;TClient&gt;</c>
+    /// and <c>AddHttpClient&lt;TClient, TImpl&gt;</c> both take the client name from
+    /// <c>TClient</c>, so <c>nameof()</c> is the registration. A literal would survive a rename and
+    /// quietly fabricate a category that the prefix filter still reports as disabled — which is
+    /// exactly how the discovery client's wrong name passed here before.
+    ///
+    /// <para>Every entry is nonetheless proven against the composed host by
+    /// <see cref="EveryClaimedHttpClientCategory_IsOneTheHostActuallyCreates"/>, because the
+    /// derivations above are reasoning about framework behaviour rather than observations of
+    /// it.</para>
+    /// </summary>
+    private static readonly string[] AllHttpClientNames =
+    [
+        nameof(VitallyService),
+        nameof(IGroupPermissionResolver),
+        UpstreamOidcMetadata.HttpClientName,
+        // The UNNAMED client, used by the OAuth proxy for /oauth/token
+        // (Program.cs: `factory.CreateClient()`). "Default" is the substitution
+        // LoggingHttpMessageHandlerBuilderFilter makes for an empty name — the one entry here
+        // that no registration states, and so the one most in need of the proof above.
+        DefaultHttpClientName,
+    ];
+
     public static TheoryData<string> AllHttpClientCategories()
     {
-        // Every name derived from its registration, never a literal. `AddHttpClient<TClient>` and
-        // `AddHttpClient<TClient, TImpl>` both take the client name from TClient, so nameof() is the
-        // registration. A literal would survive a rename and quietly fabricate a category that the
-        // prefix filter still reports as disabled — which is exactly how the discovery client's
-        // wrong name passed here before.
         var data = new TheoryData<string>();
-        foreach (var client in new[]
-                 {
-                     nameof(VitallyService),
-                     nameof(IGroupPermissionResolver),
-                     UpstreamOidcMetadata.HttpClientName,
-                     // The UNNAMED client, used by the OAuth proxy for /oauth/token
-                     // (Program.cs: `factory.CreateClient()`). Its outbound requests carry the
-                     // upstream token exchange, so it is as much a PII surface as the others.
-                     // "Default" is the substitution LoggingHttpMessageHandlerBuilderFilter makes
-                     // for an empty name — asserted rather than assumed by
-                     // UnnamedHttpClient_LogsUnderTheDefaultCategory below, because a wrong name
-                     // here would still pass under the prefix filter while testing nothing.
-                     DefaultHttpClientName,
-                 })
+        foreach (var client in AllHttpClientNames)
         {
             foreach (var stage in new[] { "LogicalHandler", "ClientHandler" })
             {
