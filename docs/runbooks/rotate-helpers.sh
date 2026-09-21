@@ -63,8 +63,16 @@ stored_hash() {  # $1 = container app, $2 = secret name
 # CHECK B — every RUNNING replica started AFTER the secret changed, so it must have read the new
 # value. This is the assurance the replica table in the runbook says staging cannot otherwise give.
 #
-# No running replicas is a PASS, and deliberately so: staging is minReplicas 0, and the next cold
-# start reads the current value.
+# $3 = the MINIMUM number of running replicas this target must have for the check to mean anything.
+#
+#   staging    -> 0   scale-to-zero is its steady state; the next cold start reads the current value
+#   production -> 1   minReplicas is 1, so zero running replicas is NEVER a valid steady state
+#
+# ⚠️ Why the minimum exists. `az containerapp revision restart` can RETURN BEFORE the replacement
+#    replicas are running, so a check made immediately after it can see zero replicas on
+#    production — which would otherwise pass Check B while proving nothing at all is serving the
+#    new secret, and the procedure would walk on to the irreversible delete. Requiring at least
+#    one running replica on production converts that race from a false pass into a wait.
 #
 # ⚠️ The replica listing is captured with an explicit failure check rather than piped straight
 #    into the loop. Process substitution discards the command's exit status, so a failed
@@ -72,8 +80,25 @@ stored_hash() {  # $1 = container app, $2 = secret name
 #    an API or RBAC outage masquerade as a fresh roll while an old replica still holds the
 #    superseded secret. That is the same trap as the `for REV in $(az …)` one above, one function
 #    later, and it has to be closed the same way.
-replicas_are_fresh() {  # $1 = container app, $2 = epoch seconds recorded before `secret set`
-  local CA="$1" STAMP="$2" REVS REPS rc=0 n=0 created
+replicas_are_fresh() {  # $1 = app, $2 = epoch secs before `secret set`, $3 = min running replicas
+  local CA="$1" STAMP="$2" MIN="${3:-0}" attempt
+  for attempt in $(seq 1 12); do          # up to ~2 minutes, only ever waiting for MIN
+    if _replicas_fresh_once "$CA" "$STAMP" "$MIN"; then
+      return 0
+    elif [ "$?" -eq 2 ]; then             # 2 = "too few replicas yet" — the only retryable case
+      echo "  waiting for at least $MIN running replica(s) on $CA (attempt $attempt/12)"
+      sleep 10
+    else
+      return 1                            # a stale replica, or a failed call: do not retry
+    fi
+  done
+  echo "NOT ASSESSED — $CA never reached $MIN running replica(s); the roll may not have completed"
+  return 1
+}
+
+# Returns 0 = fresh, 1 = stale or could not assess, 2 = fewer than MIN replicas running (retryable).
+_replicas_fresh_once() {
+  local CA="$1" STAMP="$2" MIN="$3" REVS REPS rc=0 n=0 created
   if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
        --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
     echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA"
@@ -94,6 +119,24 @@ replicas_are_fresh() {  # $1 = container app, $2 = epoch seconds recorded before
       fi
     done <<< "$REPS"
   done
-  [ "$rc" -eq 0 ] && echo "  $n running replica(s), none older than the secret change"
-  return $rc
+  [ "$rc" -eq 0 ] || return 1
+  [ "$n" -ge "$MIN" ] || return 2
+  echo "  $n running replica(s) (minimum $MIN), none older than the secret change"
+  return 0
+}
+
+# The whole per-target verification as ONE exit code, so a caller cannot forget to check one part.
+#
+# ⚠️ This compares the hash rather than printing it for the operator to eyeball. An earlier draft
+#    printed `stored_hash` next to a "# must equal NEWHASH" comment, which is not a check — it is
+#    a hope, at the step before an irreversible delete.
+verify_target() {  # $1 = app, $2 = secret name, $3 = expected hash, $4 = stamp, $5 = min replicas
+  local got
+  got=$(stored_hash "$1" "$2") || return 1
+  if [ "$got" != "$3" ]; then
+    echo "  HASH MISMATCH on $1/$2: stored=$got expected=$3 — the secret did not land; stop here"
+    return 1
+  fi
+  echo "  stored secret on $1 matches NEWHASH ($got)"
+  replicas_are_fresh "$1" "$4" "$5" || return 1
 }

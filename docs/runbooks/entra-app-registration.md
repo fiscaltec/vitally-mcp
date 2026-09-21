@@ -614,15 +614,34 @@ and scrollback exposure, which is the larger and longer-lived one — this is sm
 
 #### Roll and verify staging
 
-```bash
-. docs/runbooks/rotate-helpers.sh
-STAMP=<the value script A printed>          # if this is a fresh shell
-NEWHASH=<the value script A printed>
+**Save this to a file and run it — do not paste it.** The helpers all return non-zero on a failed
+listing, a hash mismatch or a stale replica, but a bare sequence of commands *prints* those and
+carries on, walking a failed roll straight through the sign-in and into the irreversible delete.
+`set -euo pipefail` is what turns those return codes into a stop.
 
-roll vitally-staging-ca-uksouth
-stored_hash vitally-staging-ca-uksouth oauth-shared-client-secret   # must equal NEWHASH
-replicas_are_fresh vitally-staging-ca-uksouth "$STAMP"
+⚠️ **And the wrapper only fires when it is run as a script.** Verified 2026-09-21: from a file,
+a failing `verify_target` exits the subshell `rc=1` and the following step never runs; the same
+text fed inline to `bash -c` printed the mismatch and **carried on to the next step with `rc=0`**,
+because bash's final-command optimisation changes `set -e` semantics there. The protection is real
+but it is not in the characters — it is in how you invoke them. Same reasoning as the staging
+rollback subshell in `CLAUDE.md`.
+
+```bash
+(
+  set -euo pipefail
+  . docs/runbooks/rotate-helpers.sh
+  STAMP=<the value script A printed>          # if this is a fresh shell
+  NEWHASH=<the value script A printed>
+
+  roll vitally-staging-ca-uksouth
+  # 0 = staging is minReplicas 0, so no running replica is its steady state
+  verify_target vitally-staging-ca-uksouth oauth-shared-client-secret "$NEWHASH" "$STAMP" 0
+  echo "STAGING VERIFIED"
+)
 ```
+
+`verify_target` does both checks and the hash *comparison* under one exit code, so nothing depends
+on an operator noticing that two printed strings differ.
 
 Then sign in for real against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client.
 `/health` and the 401 challenge both pass on the *old* credential, so only `/oauth/token` — reached
@@ -636,10 +655,19 @@ at this point**. That is the entire reason staging goes first.
 #### Roll and verify production
 
 ```bash
-. docs/runbooks/rotate-helpers.sh   # again if this is a fresh shell
-roll vitally-prod-ca-uksouth
-stored_hash vitally-prod-ca-uksouth entra-oauth-client-secret        # must equal NEWHASH
-replicas_are_fresh vitally-prod-ca-uksouth "$STAMP"
+(
+  set -euo pipefail
+  . docs/runbooks/rotate-helpers.sh           # again if this is a fresh shell
+  STAMP=<the value script A printed>
+  NEWHASH=<the value script A printed>
+
+  roll vitally-prod-ca-uksouth
+  # 1, NOT 0 — production is minReplicas 1, so zero running replicas is never a valid steady
+  # state, only a check made too early. `revision restart` can return before the replacements are
+  # running, so this waits (up to ~2 min) rather than passing on an empty listing.
+  verify_target vitally-prod-ca-uksouth entra-oauth-client-secret "$NEWHASH" "$STAMP" 1
+  echo "PRODUCTION VERIFIED"
+)
 ```
 
 Then a real sign-in against `https://vitally.fiscaltec.com/mcp`. **This is the step the staging run
