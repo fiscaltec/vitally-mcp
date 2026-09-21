@@ -507,121 +507,199 @@ APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
 RG=vitally-prod-rg-uksouth
 ```
 
-1. **Create the new Entra credential, overlapping the old one, without printing it.** Never delete
-   first — Entra allows multiple secrets, and delete-then-create is a self-inflicted outage.
+#### ⚠️ A successful sign-in does NOT prove the rotation worked
 
-   This deliberately reuses the `addPassword` + restricted-temp-file pattern from *Creating the
-   secret* above rather than `az ad app credential reset`. Two reasons, both learned the hard way:
-   `reset` **prints the new secret to stdout**, putting a live credential into terminal scrollback
-   and any session transcript — which the creation section explicitly exists to avoid — and its
-   `--years`/`--end-date` handling makes it easy to produce a credential whose lifetime contradicts
-   the 180-day standard the display name claims.
+The most dangerous property of this procedure is that **both credentials are valid throughout it**.
+That overlap is what makes it safe to abort — and it is also what makes the obvious verification
+worthless: if `secret set` silently failed, or a warm revision did not roll, the app happily
+authenticates **with the old credential** and the sign-in succeeds. You then reach the delete step
+and remove the only credential actually in use, which is precisely the outage the overlap exists to
+prevent.
 
-   ```bash
-   export MSYS_NO_PATHCONV=1
-   APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4
-   RG=vitally-prod-rg-uksouth
-   END=$(date -u -d '+180 days' '+%Y-%m-%dT%H:%M:%SZ')   # 180-day standard, not --years 1
+So a `tools/list` proves *some* credential works, never *which*. Two non-destructive checks do
+discriminate, and both are needed. Record `NEWHASH` and `STAMP` from script A and compare against
+them on each target; only when **A and B both pass on both targets** is the delete safe.
 
-   umask 077
-   cat > pw.json <<EOF
-   {"passwordCredential":{"displayName":"vitally-mcp container app ($(date -u +%Y-%m)) — expires $END","endDateTime":"$END"}}
-   EOF
-   az rest --method post --url "https://graph.microsoft.com/v1.0/applications/$APP/addPassword" \
-     --headers "Content-Type=application/json" --body @pw.json \
-     --query secretText -o tsv > secret.txt
-   ```
+#### `rotate-helpers.sh` — source this into whichever shell runs the roll and verify steps
 
-   `addPassword` **appends** — it does not disturb the existing credential, which is the whole point
-   of the overlap. (`az ad app credential reset` without `--append` *replaces* every credential; that
-   is a second reason not to use it here.)
+Kept as one file on purpose. The roll and the two checks are used *after* a browser sign-in and
+possibly in a fresh shell, so anything defined only inside an earlier step's block is not there when
+it is needed — and the failure is silent in the worst direction: `secret set` succeeds, `roll` is
+undefined, and the target quietly stays on the old credential.
 
-2. **Update the Key Vault record and its expiry.** The vault is a **record, not a source** — nothing
-   the app sends changes at this step — but the scanner keys off `attributes.exp` here and nowhere
-   else, so skipping it means the next deadline passes in silence.
+```bash
+# source rotate-helpers.sh
+RG=vitally-prod-rg-uksouth
 
-   Needs the two-switch Key Vault window described above; open it with the abort guard, and drive it
-   from a script with a cleanup `trap` so the window closes even if a step fails.
+# Restart EVERY traffic-bearing revision, failing closed on a failed or empty listing.
+# Container Apps can serve several revisions during a split, and one un-restarted warm revision
+# keeps the old secret — invisible until the delete, then surfacing as INTERMITTENT
+# invalid_client. Same pattern, and same reasoning, as the staging read-only guard in CLAUDE.md.
+# ⚠️ `for REV in $(az …)` on its own is NOT this check: a failed or empty listing runs the body
+#    zero times and exits 0, so an outage or a missing role reads exactly like success.
+roll() {  # $1 = container app name
+  local CA="$1" REVS rc=0
+  if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
+       --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+    echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA; stop here"; return 1
+  fi
+  for REV in $REVS; do
+    az containerapp revision restart -n "$CA" -g "$RG" --revision "$REV" \
+      && echo "  restarted $REV" || { echo "  FAILED $REV"; rc=1; }
+  done
+  return $rc
+}
 
-   ```bash
-   az keyvault secret set --vault-name vitally-prod-kv-uksouth \
-     --name entra-mcp-client-secret --file secret.txt --output none
+# A. the STORED value is the new one — compare hashes, never the secret itself.
+#    A SHA-256 of a credential is safe in scrollback; the credential is not.
+stored_hash() {  # $1 = container app, $2 = secret name
+  az containerapp secret show -n "$1" -g "$RG" --secret-name "$2" --query value -o tsv \
+    | tr -d '\r\n' | sha256sum | cut -c1-16
+}
 
-   # separate call: `secret set` writes a new VERSION and the expiry does not carry over reliably
-   az keyvault secret set-attributes --vault-name vitally-prod-kv-uksouth \
-     --name entra-mcp-client-secret --expires "$END" --output none
-   ```
+# B. every RUNNING replica started AFTER the secret changed, so it must have read the new value.
+#    No running replicas is also a pass: staging is minReplicas 0 and the next cold start reads
+#    the current value. This is the check the replica table above says staging cannot give you.
+replicas_are_fresh() {  # $1 = container app, $2 = epoch seconds recorded before `secret set`
+  local CA="$1" STAMP="$2" REVS rc=0 n=0 created
+  if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
+       --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+    echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA"; return 1
+  fi
+  for REV in $REVS; do
+    while read -r created; do
+      [ -z "$created" ] && continue
+      n=$((n+1))
+      if [ "$(date -u -d "$created" +%s)" -lt "$STAMP" ]; then
+        echo "  STALE replica on $REV (started $created, before the secret change)"; rc=1
+      fi
+    done < <(az containerapp replica list -n "$CA" -g "$RG" --revision "$REV" \
+               --query '[].properties.createdTime' -o tsv)
+  done
+  [ "$rc" -eq 0 ] && echo "  $n running replica(s), none older than the secret change"
+  return $rc
+}
+```
 
-3. **Staging first — update its Container App secret and roll every revision taking traffic.**
+#### Script A — create, record, stage (steps 1–3)
 
-   ```bash
-   SECRET=$(cat secret.txt)
-   az containerapp secret set -n vitally-staging-ca-uksouth -g $RG \
-     --secrets "oauth-shared-client-secret=$SECRET"
-   ```
+Run as a script, not pasted line by line. `set -euo pipefail` and the `trap` are load-bearing:
+`az rest … > secret.txt` **creates or truncates the file before `az` runs**, so a failed call leaves
+an empty `secret.txt`, and an unguarded `$(cat secret.txt)` would then write an *empty* secret to a
+Container App — an outage manufactured by the rotation itself.
 
-   Then restart — **every** traffic-bearing revision, not just the newest, and fail closed if the
-   listing fails or comes back empty. Container Apps can serve several revisions at once during a
-   split, and a single un-restarted warm revision keeps the old secret; that is invisible until
-   step 5 deletes it, and then surfaces as *intermittent* `invalid_client`, which is far harder to
-   diagnose than a clean failure. Same pattern, and the same reasoning, as the staging read-only
-   guard in `CLAUDE.md`:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+export MSYS_NO_PATHCONV=1
 
-   ```bash
-   roll() {  # $1 = container app name
-     local CA="$1" REVS rc=0
-     if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
-          --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-       echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA; stop here"; return 1
-     fi
-     for REV in $REVS; do
-       az containerapp revision restart -n "$CA" -g "$RG" --revision "$REV" \
-         && echo "  restarted $REV" || { echo "  FAILED $REV"; rc=1; }
-     done
-     return $rc
-   }
-   roll vitally-staging-ca-uksouth
-   ```
+APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
+RG=vitally-prod-rg-uksouth
+VAULT=vitally-prod-kv-uksouth
+END=$(date -u -d '+180 days' '+%Y-%m-%dT%H:%M:%SZ')   # 180-day standard, NOT --years 1
 
-   ⚠️ `for REV in $(az …)` on its own is **not** this check — a failed or empty listing runs the body
-   zero times and exits 0, so an outage or a missing role reads exactly like success.
+umask 077
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"; unset SECRET' EXIT INT TERM HUP
 
-   **Then verify, and note what actually verifies it.** `/health` and the 401 challenge both pass on
-   the *old* credential, so neither tells you anything. The credential is only exercised at
-   **`/oauth/token`**, which needs a real authorisation code and therefore a browser: complete one
-   sign-in against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client, and a successful
-   `tools/list` is the proof. An `invalid_client` here means the new secret is wrong or a revision
-   did not roll — the old credential still exists, so **stop and fix it at this point**, which is the
-   entire reason staging goes first.
+# 1. create the new credential — appended, never printed to stdout.
+#    addPassword APPENDS, which is the overlap this whole procedure depends on.
+#    (`az ad app credential reset` without --append REPLACES every credential, and prints the
+#     new one to stdout. Do not substitute it.)
+cat > "$WORK/pw.json" <<EOF
+{"passwordCredential":{"displayName":"vitally-mcp container app ($(date -u +%Y-%m)) — expires $END","endDateTime":"$END"}}
+EOF
+az rest --method post --url "https://graph.microsoft.com/v1.0/applications/$APP/addPassword" \
+  --headers "Content-Type=application/json" --body @"$WORK/pw.json" \
+  --query secretText -o tsv > "$WORK/secret.txt"
 
-4. **Production — same two steps, its own secret name.**
+# GUARD: a truncated/empty file here is the empty-secret outage. Stop before anything consumes it.
+[ -s "$WORK/secret.txt" ] || { echo "empty secret — addPassword failed; aborting"; exit 1; }
+SECRET=$(tr -d '\r\n' < "$WORK/secret.txt")
+NEWHASH=$(printf '%s' "$SECRET" | sha256sum | cut -c1-16)
+echo "NEWHASH=$NEWHASH   # record this — it is how you verify each target"
 
-   ```bash
-   az containerapp secret set -n vitally-prod-ca-uksouth -g $RG \
-     --secrets "entra-oauth-client-secret=$SECRET"
-   roll vitally-prod-ca-uksouth
-   ```
+# 2. Key Vault is a RECORD, not a source. Nothing the app sends changes here — but the scanner
+#    keys off attributes.exp here and nowhere else, so skipping it means the next deadline
+#    passes in silence. Needs the two-switch window above, opened with its own trap (see #154).
+az keyvault secret set --vault-name "$VAULT" \
+  --name entra-mcp-client-secret --file "$WORK/secret.txt" --output none
+# separate call: `secret set` writes a new VERSION and the expiry does not carry over reliably
+az keyvault secret set-attributes --vault-name "$VAULT" \
+  --name entra-mcp-client-secret --expires "$END" --output none
 
-   Verify with a real sign-in again. **This is the step the staging run could not prove** — see the
-   replica table above.
+# 3. set the Container App secret on BOTH targets, but roll ONLY staging.
+#    Setting production's secret now is safe and deliberate: its warm replica keeps serving the
+#    old value until step 4 rolls it, so nothing changes for users — and it means this script is
+#    the only place the secret value is ever needed, so it need not survive into a second shell.
+#    ⚠️ The secret NAMES differ per target; using the wrong one adds an unused secret and
+#    rotates nothing. See *Client secret* above for why they differ.
+STAMP=$(date -u +%s)
+az containerapp secret set -n vitally-staging-ca-uksouth -g "$RG" \
+  --secrets "oauth-shared-client-secret=$SECRET"
+az containerapp secret set -n vitally-prod-ca-uksouth -g "$RG" \
+  --secrets "entra-oauth-client-secret=$SECRET"
+echo "STAMP=$STAMP   # record this too — replicas must have started after it"
+```
 
-5. **Destroy the local copies** once both targets are updated:
+⚠️ **One residue this does not remove.** `az containerapp secret set` has no `--file` equivalent, so
+the value passes as a command-line argument and is briefly readable from the process table on that
+host. Acceptable on an operator workstation, not on a shared one. The temp file removes the stdout
+and scrollback exposure, which is the larger and longer-lived one — this is smaller, not nothing.
 
-   ```bash
-   rm -f secret.txt pw.json; unset SECRET
-   ```
+#### Roll and verify staging
 
-6. **Only once both targets are verified**, delete the superseded credential by `keyId`:
+```bash
+. ./rotate-helpers.sh
+STAMP=<the value script A printed>          # if this is a fresh shell
+NEWHASH=<the value script A printed>
 
-   ```bash
-   az ad app credential list --id $APP \
-     --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
-   az ad app credential delete --id $APP --key-id <old-keyId>
-   ```
+roll vitally-staging-ca-uksouth
+stored_hash vitally-staging-ca-uksouth oauth-shared-client-secret   # must equal NEWHASH
+replicas_are_fresh vitally-staging-ca-uksouth "$STAMP"
+```
 
-   Until this runs, both credentials are valid and a revert is just putting the old value back into
-   the two Container App secrets — so treat step 6 as the point of no return, and leave a soak
-   between it and step 4 rather than running them together.
+Then sign in for real against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client.
+`/health` and the 401 challenge both pass on the *old* credential, so only `/oauth/token` — reached
+by a real authorisation code, hence a browser — exercises this at all. **Read the result together
+with the two checks above**: a successful `tools/list` alone would also be produced by the old
+credential still being in use.
+
+Anything failing here is recoverable, because the old credential is still live — **stop and fix it
+at this point**. That is the entire reason staging goes first.
+
+#### Roll and verify production
+
+```bash
+. ./rotate-helpers.sh                       # again if this is a fresh shell
+roll vitally-prod-ca-uksouth
+stored_hash vitally-prod-ca-uksouth entra-oauth-client-secret        # must equal NEWHASH
+replicas_are_fresh vitally-prod-ca-uksouth "$STAMP"
+```
+
+Then a real sign-in against `https://vitally.fiscaltec.com/mcp`. **This is the step the staging run
+could not prove** — see the replica table above.
+
+#### Delete the superseded credential — the point of no return
+
+Only once **both** targets pass both checks *and* a real sign-in. Leave a soak between this and the
+production roll rather than running them together:
+
+```bash
+az ad app credential list --id $APP \
+  --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
+az ad app credential delete --id $APP --key-id <old-keyId>
+```
+
+**Recovery paths, and note that they are not symmetric:**
+
+| When | Recovery |
+|---|---|
+| Before the delete | Both credentials are live. Fix and re-roll, or revert a target by re-setting its secret and rolling again. Cheap |
+| After the delete | The old credential is **gone** — it cannot be restored. Recovery is to run this procedure again from step 1, creating a *third* credential. Users are signed out until it completes |
+
+That asymmetry is why the two discriminating checks exist: the delete is the one step whose mistake
+cannot be undone, and a sign-in test alone cannot tell you it is safe to take.
 
 ⚠️ **One residue the file pattern does not remove.** `az containerapp secret set` has no `--file`
 equivalent, so the value passes as a command-line argument and is briefly visible to anything that
