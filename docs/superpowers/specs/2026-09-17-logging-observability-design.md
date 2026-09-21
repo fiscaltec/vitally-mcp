@@ -607,7 +607,8 @@ are not among them: `Defender Containers Sensor` and `Defender Kubernetes Agent 
 | Named **FISCAL humans** who can read | "5 users" | **4** |
 | **Break-glass** emergency accounts | counted among the users | **2**, permanent `Owner`, by design |
 | **External** principals | not identified | **1** — an MSP with `Owner` via delegated administration |
-| **Service principals** | 28 | **25**, of which **4 are orphaned** (deleted) → **21 live** |
+| **Service principals** with a read-capable role | 28 | **25** at review → **22** after cleanup |
+| **Orphaned principals** (deleted from the directory) | not identified | **4**, holding **14** assignments — **13 removed 2026-09-21**, 1 held |
 
 **The human side meets the condition, and more strongly than the estimate suggested.** The four are
 `dsearle.adm`, `jpobgee.adm`, `lnewton.adm` and `etomblin.adm` — the IT administrators — and their
@@ -625,7 +626,7 @@ same day). The one standing human grant is `etomblin.adm`'s permanent `Reader`; 
 |---|---|---|
 | Microsoft platform automation — Defender/ASC provisioning, `MS-PIM`, SQL/Arc protection, Defender for Storage operator | ~13 | Expected. These provision and scan; none of them runs KQL against a table. Broad scope is how Defender works |
 | **FISCAL-controlled** — `sp-terraform-deploy-itproduction` (Contributor + RBAC Admin), `sp-terraform-policy-tenant`, `fiscaltecvsts-ITTeam-*` and `fiscaltecvsts-Infrastructure-*` (both **Owner**), `MI-UA-ComplianceManager`, `Power Automate`, `Tenable - Azure Cloud Connector`, `Testing Dan Dan Dan` | **8** | The real surface. Two Azure DevOps service connections hold permanent `Owner`; one entry is a **test application** with `Reader` on the production subscription |
-| **Orphaned** — assignments whose principal no longer exists in the directory | **4** | Dead: nothing can authenticate as a deleted principal. Two of them carry `Contributor` + `Log Analytics Contributor` + `Monitoring Contributor` + `User Access Administrator`, so they read alarmingly and grant nothing |
+| **Orphaned** — principals no longer in the directory | **4**, holding **14** assignments | Dead: nothing can authenticate as a deleted principal, and all four are *permanently* gone rather than soft-deleted (checked against `directory/deletedItems`, so none is restorable). Two of them carried `Contributor` + `Log Analytics Contributor` + `Monitoring Contributor` + `User Access Administrator`, which reads alarmingly and grants nothing. **Removed** — see below |
 
 ⚠️ **Correction to this document's own earlier suggestion: table-level RBAC cannot restrict any of
 the above.** Azure RBAC is **allow-only** — there is no deny. A table-level role grants
@@ -646,22 +647,22 @@ an audit-trail change. A workspace in a *different subscription* is the only mea
 an actual boundary. That is a genuine re-opening, not a re-litigation — recorded so the decision is
 made on the corrected facts.
 
-**Recommended disposition** — proportionate, and explicitly a recommendation rather than a settled
-decision, because the policy reversal was conditional and the condition is the user's to judge:
+#### Disposition
 
-1. **Remove the 4 orphaned assignments.** Zero risk, zero behaviour change, and they make every
-   future review harder to read.
-2. **Remove `Testing Dan Dan Dan`'s `Reader`.** A test application should not hold standing read on
-   the production subscription.
-3. **Confirm or revoke the two `fiscaltecvsts-*` `Owner` grants**, and `Power Automate` / `Tenable`.
-   An Azure DevOps service connection rarely needs `Owner`.
-4. **Record the MSP `Owner` grant as accepted risk** if it is contractual — but record it, because
-   it is the single widest read path to this data and nothing in this repo constrains it.
-5. Steps 1–3 are **subscription** RBAC, not repository changes, and none of them was actioned by
-   this review.
+These are **subscription** RBAC, not repository changes. What was actually done, and what was
+deliberately not:
 
-None of 1–4 is a blocker on its own terms; together they are what makes *"only readable by certain
-people"* a statement about a reviewed set rather than an inherited accident.
+| | Status |
+|---|---|
+| **Remove the orphaned assignments** | ✅ **Done 2026-09-21.** 13 of the 14 deleted (authorised: dsearle). Effective assignments at the workspace **80 → 67**; read-capable service principals **25 → 22**. The records were captured to JSON before deletion — though note that a role assignment for a permanently-deleted principal cannot be meaningfully restored, so the backup is an audit artefact, not a rollback |
+| ⏸ **One orphan held** | The 4th principal's only remaining assignment is `Contributor` at **management-group** scope (`internal-fiscal`), which governs more than IT-Production. Removing it changes no effective access — the principal is gone — but the blast radius is wider than the workspace review that authorised the rest, so it was left for a separate decision |
+| ⏸ **`Testing Dan Dan Dan`'s `Reader`** | **Left in place, deliberately** (decision: dsearle, 2026-09-21). Despite the name it is not to be removed. Recorded here so a later reviewer does not "tidy" it, and so the read surface is counted honestly with it included |
+| ⏳ **The two `fiscaltecvsts-*` `Owner` grants**, and `Power Automate` / `Tenable` | Not actioned. An Azure DevOps service connection rarely needs `Owner`, but narrowing it is an IT-wide decision about the production subscription rather than an audit-trail change |
+| ⏳ **The external MSP `Owner` grant** | Not actioned. If it is contractual it should be recorded as accepted risk rather than left implicit — it is the single widest read path to this data and nothing in this repo constrains it |
+
+The cleanup that was done removes noise rather than exposure: nothing could authenticate as those
+principals. Its value is that the next reviewer reads a set that someone chose, which is the
+difference between *"only readable by certain people"* and an inherited accident.
 
 ### Retention
 
