@@ -49,11 +49,19 @@ data "azuread_service_principal" "msgraph" {
 # informative one: the first was fixed by correcting this list and the runbook, and it happened
 # again twelve days later anyway — because ACCESS.md, the procedure admins actually follow, told
 # them to assign a department to `FISCAL IT Auth0` and named no other app. Both departments were
-# onboarded exactly as documented. ACCESS.md is corrected alongside this; #134 tracks a check, since
-# the lesson of the first attempt is that a correct document is not by itself a control.
+# onboarded exactly as documented. ACCESS.md is corrected alongside this, and now tells admins to
+# assign a department to BOTH apps.
 #
-# Until then: diff the two apps immediately before any cutover or rollback, and never trust either
-# document. Once Auth0 is retired the cross-check is gone and this becomes the only record.
+# ⚠️ NO AUTOMATED CHECK EXISTS, AND NONE IS COMING. #134 proposed one and was closed `not planned`
+# on 2026-09-21 with the move to Entra-only: it is only useful while the Auth0 rollback is retained,
+# and needed an admin-consented Application.Read.All grant to build. So the control here is once
+# again a document — which is precisely what failed twice above. What makes that acceptable is that
+# the direction has inverted: onboarding now touches Entra, so `FISCAL IT Auth0` is the app that
+# goes stale, and the consequence is no longer "a department cannot sign in" but "a department
+# cannot sign in IF we ever roll back".
+#
+# So: diff the two apps immediately before any cutover or rollback, and never trust either document.
+# Once Auth0 is retired the cross-check is gone and this becomes the only record.
 variable "entra_gate1_group_object_ids" {
   type        = map(string)
   description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate. Must match FISCAL IT Auth0's assignments while that app exists."
