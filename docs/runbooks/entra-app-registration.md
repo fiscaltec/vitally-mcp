@@ -66,8 +66,16 @@ Executive Leadership Team · Customer Account Management · Service Delivery
 > The first occurrence was fixed by correcting this list *and* this warning — **and it happened again
 > twelve days later anyway.** The reason is not forgetfulness: `ACCESS.md` told admins to assign a
 > department to `FISCAL IT Auth0`, and named no other app, so both departments were onboarded exactly
-> as documented. That procedure is corrected in the same change as this note; #134 tracks a check so
-> the next divergence is caught by something other than a document.
+> as documented. That procedure is corrected in the same change as this note.
+>
+> ⚠️ **No automated check exists, and none is coming.** #134 proposed extending the secret scanner
+> to diff the two apps; it was closed `not planned` on 2026-09-21 with the move to Entra-only,
+> because the check is only useful while the Auth0 rollback is retained and it needed a new
+> admin-consented Graph grant to build. **So the remedy for this failure is once again a document —
+> the very thing that demonstrably did not work twice.** That is an accepted risk, taken knowingly:
+> the direction has inverted (onboarding now touches Entra, and `FISCAL IT Auth0` is the app going
+> stale), so the consequence is no longer "a department cannot sign in" but "a department cannot
+> sign in **if we ever roll back**". Run the command below before a rollback. Nothing else will.
 >
 > **Derive this list from the live assignments, never from a document**, and compare the two apps
 > immediately before any cutover *or rollback* — parity matters in both directions while both exist:
