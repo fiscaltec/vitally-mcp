@@ -538,8 +538,21 @@ that has since exited.
 | | What it does |
 |---|---|
 | `roll <app>` | Restarts **every** traffic-bearing revision; fails closed on a failed *or empty* listing |
-| `stored_hash <app> <secret-name>` | **Check A** — SHA-256 (first 16 chars) of the stored secret, to compare against `NEWHASH` |
-| `replicas_are_fresh <app> <stamp>` | **Check B** — every running replica started after `STAMP`. Zero replicas passes |
+| ✅ `verify_target <app> <secret-name> <hash> <stamp> <min-replicas>` | **Use this.** Runs both checks, *compares* the hash, and returns one exit code |
+| `stored_hash <app> <secret-name>` | Check A alone — prints the SHA-256 (first 16 chars) of the stored secret. Printing is not comparing |
+| `replicas_are_fresh <app> <stamp> <min-replicas>` | Check B alone — every running replica started after `<stamp>`, and at least `<min-replicas>` are running |
+
+⚠️ **Call `verify_target`, not the two checks by hand**, and note the arguments the last two rows
+make it easy to get wrong:
+
+- **`<min-replicas>` is safety-critical and defaults to `0`.** Staging takes `0` — scale-to-zero is
+  its steady state. **Production takes `1`**: zero running replicas there is never steady state,
+  only a check made before `revision restart` finished, and omitting the argument would let that
+  pass while proving nothing.
+- **`<stamp>` is per-target.** Script A prints `STAMP_STAGING` and `STAMP_PROD` separately, each
+  taken *after* its own target's `secret set`. Passing one stamp to both reintroduces a window in
+  which a replica that loaded the **old** credential still looks fresh.
+- `stored_hash` *prints* a hash; it does not check it. `verify_target` is what compares.
 
 All three **fail closed**: every Azure call's exit status is checked explicitly, because in each
 case a failed listing otherwise yields no rows and reads exactly like a clean pass. Invoke by path;
@@ -599,12 +612,22 @@ az keyvault secret set-attributes --vault-name "$VAULT" \
 #    the only place the secret value is ever needed, so it need not survive into a second shell.
 #    ⚠️ The secret NAMES differ per target; using the wrong one adds an unused secret and
 #    rotates nothing. See *Client secret* above for why they differ.
-STAMP=$(date -u +%s)
+#    ⚠️ ONE STAMP PER TARGET, taken AFTER that target's own `secret set` returns. A single
+#       stamp taken before both would admit a replica created in the gap between the stamp and
+#       its target's update: it loaded the OLD credential, but started "after STAMP", so it
+#       would pass Check B — and the delete would then remove the credential it is running on.
+#       The window is small and entirely real: staging is scale-to-zero and cold-starts on any
+#       request, and production can replace a replica at any time.
 az containerapp secret set -n vitally-staging-ca-uksouth -g "$RG" \
   --secrets "oauth-shared-client-secret=$SECRET"
+STAMP_STAGING=$(date -u +%s)
+
 az containerapp secret set -n vitally-prod-ca-uksouth -g "$RG" \
   --secrets "entra-oauth-client-secret=$SECRET"
-echo "STAMP=$STAMP   # record this too — replicas must have started after it"
+STAMP_PROD=$(date -u +%s)
+
+echo "STAMP_STAGING=$STAMP_STAGING   # record both — each target is checked against its own"
+echo "STAMP_PROD=$STAMP_PROD"
 ```
 
 ⚠️ **One residue this does not remove.** `az containerapp secret set` has no `--file` equivalent, so
@@ -630,12 +653,12 @@ rollback subshell in `CLAUDE.md`.
 (
   set -euo pipefail
   . docs/runbooks/rotate-helpers.sh
-  STAMP=<the value script A printed>          # if this is a fresh shell
+  STAMP_STAGING=<the value script A printed>   # if this is a fresh shell
   NEWHASH=<the value script A printed>
 
   roll vitally-staging-ca-uksouth
   # 0 = staging is minReplicas 0, so no running replica is its steady state
-  verify_target vitally-staging-ca-uksouth oauth-shared-client-secret "$NEWHASH" "$STAMP" 0
+  verify_target vitally-staging-ca-uksouth oauth-shared-client-secret "$NEWHASH" "$STAMP_STAGING" 0
   echo "STAGING VERIFIED"
 )
 ```
@@ -658,14 +681,14 @@ at this point**. That is the entire reason staging goes first.
 (
   set -euo pipefail
   . docs/runbooks/rotate-helpers.sh           # again if this is a fresh shell
-  STAMP=<the value script A printed>
+  STAMP_PROD=<the value script A printed>
   NEWHASH=<the value script A printed>
 
   roll vitally-prod-ca-uksouth
   # 1, NOT 0 — production is minReplicas 1, so zero running replicas is never a valid steady
   # state, only a check made too early. `revision restart` can return before the replacements are
   # running, so this waits (up to ~2 min) rather than passing on an empty listing.
-  verify_target vitally-prod-ca-uksouth entra-oauth-client-secret "$NEWHASH" "$STAMP" 1
+  verify_target vitally-prod-ca-uksouth entra-oauth-client-secret "$NEWHASH" "$STAMP_PROD" 1
   echo "PRODUCTION VERIFIED"
 )
 ```
@@ -678,21 +701,41 @@ could not prove** — see the replica table above.
 Only once **both** targets pass both checks *and* a real sign-in. Leave a soak between this and the
 production roll rather than running them together:
 
-```bash
-. docs/runbooks/rotate-helpers.sh     # this is almost certainly a fresh shell by now; sets APP
-[ -n "${APP:-}" ] || { echo "APP unset — source the helpers before deleting anything"; return 1; }
+**List first, in its own fail-fast script.** `$APP` has to be re-established: script A ran in a
+shell that has since exited, and the browser sign-ins make a fresh terminal near-certain.
 
-# List first and READ IT. Confirm the keyId you are about to delete is the OLD one, and that the
-# NEW one is present and unexpired — deleting the wrong row here is the outage.
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+. docs/runbooks/rotate-helpers.sh
+[ -n "${APP:-}" ] || { echo "APP unset — the helpers did not load; stop"; exit 1; }
+
 az ad app credential list --id "$APP" \
   --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
-
-az ad app credential delete --id "$APP" --key-id <old-keyId>
 ```
 
-⚠️ **`$APP` must be re-established here.** Script A ran in a shell that has since exited, and the
-browser sign-ins between then and now make a fresh terminal near-certain. An empty `--id` does not
-fail usefully, so the guard above is worth the line — this is the one irreversible step.
+**Now read that table** and confirm both facts before going on: the keyId you are about to delete
+is the **old** one, and the **new** credential is present and unexpired. Deleting the wrong row is
+the same outage by a different route, and no script can make that judgement for you — which is why
+the delete is deliberately a separate step rather than piped from the listing.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+. docs/runbooks/rotate-helpers.sh
+[ -n "${APP:-}" ] || { echo "APP unset — the helpers did not load; stop"; exit 1; }
+
+OLD_KEY_ID=<the old keyId you just read>          # paste it; do not re-derive it
+[ -n "$OLD_KEY_ID" ] || { echo "OLD_KEY_ID unset; stop"; exit 1; }
+
+az ad app credential delete --id "$APP" --key-id "$OLD_KEY_ID"
+```
+
+⚠️ **`exit 1`, not `return 1`, and `set -euo pipefail` around both.** `return` outside a function
+is an error at the top level of a script, so a guard written that way does not reliably stop
+anything — it would fall through to the delete, which is the one step that cannot be undone. An
+empty `--id` also does not fail usefully. Both blocks are scripts for the same reason as the
+verification blocks above: pasted inline, the wrapper does not fire.
 
 **Recovery paths, and note that they are not symmetric:**
 
