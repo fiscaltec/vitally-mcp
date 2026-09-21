@@ -520,66 +520,31 @@ So a `tools/list` proves *some* credential works, never *which*. Two non-destruc
 discriminate, and both are needed. Record `NEWHASH` and `STAMP` from script A and compare against
 them on each target; only when **A and B both pass on both targets** is the delete safe.
 
-#### `rotate-helpers.sh` — source this into whichever shell runs the roll and verify steps
+#### The helpers are a checked-in file, not a snippet to retype
 
-Kept as one file on purpose. The roll and the two checks are used *after* a browser sign-in and
-possibly in a fresh shell, so anything defined only inside an earlier step's block is not there when
-it is needed — and the failure is silent in the worst direction: `secret set` succeeds, `roll` is
-undefined, and the target quietly stays on the old credential.
+**[`docs/runbooks/rotate-helpers.sh`](rotate-helpers.sh)** — `source` it, do not execute it:
 
 ```bash
-# source rotate-helpers.sh
-RG=vitally-prod-rg-uksouth
-
-# Restart EVERY traffic-bearing revision, failing closed on a failed or empty listing.
-# Container Apps can serve several revisions during a split, and one un-restarted warm revision
-# keeps the old secret — invisible until the delete, then surfacing as INTERMITTENT
-# invalid_client. Same pattern, and same reasoning, as the staging read-only guard in CLAUDE.md.
-# ⚠️ `for REV in $(az …)` on its own is NOT this check: a failed or empty listing runs the body
-#    zero times and exits 0, so an outage or a missing role reads exactly like success.
-roll() {  # $1 = container app name
-  local CA="$1" REVS rc=0
-  if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
-       --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-    echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA; stop here"; return 1
-  fi
-  for REV in $REVS; do
-    az containerapp revision restart -n "$CA" -g "$RG" --revision "$REV" \
-      && echo "  restarted $REV" || { echo "  FAILED $REV"; rc=1; }
-  done
-  return $rc
-}
-
-# A. the STORED value is the new one — compare hashes, never the secret itself.
-#    A SHA-256 of a credential is safe in scrollback; the credential is not.
-stored_hash() {  # $1 = container app, $2 = secret name
-  az containerapp secret show -n "$1" -g "$RG" --secret-name "$2" --query value -o tsv \
-    | tr -d '\r\n' | sha256sum | cut -c1-16
-}
-
-# B. every RUNNING replica started AFTER the secret changed, so it must have read the new value.
-#    No running replicas is also a pass: staging is minReplicas 0 and the next cold start reads
-#    the current value. This is the check the replica table above says staging cannot give you.
-replicas_are_fresh() {  # $1 = container app, $2 = epoch seconds recorded before `secret set`
-  local CA="$1" STAMP="$2" REVS rc=0 n=0 created
-  if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
-       --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-    echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA"; return 1
-  fi
-  for REV in $REVS; do
-    while read -r created; do
-      [ -z "$created" ] && continue
-      n=$((n+1))
-      if [ "$(date -u -d "$created" +%s)" -lt "$STAMP" ]; then
-        echo "  STALE replica on $REV (started $created, before the secret change)"; rc=1
-      fi
-    done < <(az containerapp replica list -n "$CA" -g "$RG" --revision "$REV" \
-               --query '[].properties.createdTime' -o tsv)
-  done
-  [ "$rc" -eq 0 ] && echo "  $n running replica(s), none older than the secret change"
-  return $rc
-}
+. docs/runbooks/rotate-helpers.sh     # sets APP and RG; defines roll, stored_hash, replicas_are_fresh
 ```
+
+It is a file rather than a block in this page because the roll and the two checks run *after* a
+browser sign-in and often in a fresh shell. Anything defined only inside a runbook code block is
+not there when it is needed, and that failure is silent in the worst direction: `secret set`
+succeeds, `roll` is undefined, and the target quietly stays on the superseded credential until the
+delete takes it down. Sourcing it also re-establishes `APP` and `RG`, which script A set in a shell
+that has since exited.
+
+| | What it does |
+|---|---|
+| `roll <app>` | Restarts **every** traffic-bearing revision; fails closed on a failed *or empty* listing |
+| `stored_hash <app> <secret-name>` | **Check A** — SHA-256 (first 16 chars) of the stored secret, to compare against `NEWHASH` |
+| `replicas_are_fresh <app> <stamp>` | **Check B** — every running replica started after `STAMP`. Zero replicas passes |
+
+All three **fail closed**: every Azure call's exit status is checked explicitly, because in each
+case a failed listing otherwise yields no rows and reads exactly like a clean pass. Invoke by path;
+the repo is authored on Windows with `core.filemode=false`, so the executable bit is not relied on
+(same convention as `.github/scripts/verify-oauth-metadata.sh`).
 
 #### Script A — create, record, stage (steps 1–3)
 
@@ -650,7 +615,7 @@ and scrollback exposure, which is the larger and longer-lived one — this is sm
 #### Roll and verify staging
 
 ```bash
-. ./rotate-helpers.sh
+. docs/runbooks/rotate-helpers.sh
 STAMP=<the value script A printed>          # if this is a fresh shell
 NEWHASH=<the value script A printed>
 
@@ -671,7 +636,7 @@ at this point**. That is the entire reason staging goes first.
 #### Roll and verify production
 
 ```bash
-. ./rotate-helpers.sh                       # again if this is a fresh shell
+. docs/runbooks/rotate-helpers.sh   # again if this is a fresh shell
 roll vitally-prod-ca-uksouth
 stored_hash vitally-prod-ca-uksouth entra-oauth-client-secret        # must equal NEWHASH
 replicas_are_fresh vitally-prod-ca-uksouth "$STAMP"
@@ -686,10 +651,20 @@ Only once **both** targets pass both checks *and* a real sign-in. Leave a soak b
 production roll rather than running them together:
 
 ```bash
-az ad app credential list --id $APP \
+. docs/runbooks/rotate-helpers.sh     # this is almost certainly a fresh shell by now; sets APP
+[ -n "${APP:-}" ] || { echo "APP unset — source the helpers before deleting anything"; return 1; }
+
+# List first and READ IT. Confirm the keyId you are about to delete is the OLD one, and that the
+# NEW one is present and unexpired — deleting the wrong row here is the outage.
+az ad app credential list --id "$APP" \
   --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
-az ad app credential delete --id $APP --key-id <old-keyId>
+
+az ad app credential delete --id "$APP" --key-id <old-keyId>
 ```
+
+⚠️ **`$APP` must be re-established here.** Script A ran in a shell that has since exited, and the
+browser sign-ins between then and now make a fresh terminal near-certain. An empty `--id` does not
+fail usefully, so the guard above is worth the line — this is the one irreversible step.
 
 **Recovery paths, and note that they are not symmetric:**
 
