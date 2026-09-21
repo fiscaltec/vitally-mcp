@@ -507,57 +507,111 @@ APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
 RG=vitally-prod-rg-uksouth
 ```
 
-1. **Create the new Entra credential, overlapping the old one.** Never delete first — Entra allows
-   multiple secrets, and delete-then-create is a self-inflicted outage.
+1. **Create the new Entra credential, overlapping the old one, without printing it.** Never delete
+   first — Entra allows multiple secrets, and delete-then-create is a self-inflicted outage.
+
+   This deliberately reuses the `addPassword` + restricted-temp-file pattern from *Creating the
+   secret* above rather than `az ad app credential reset`. Two reasons, both learned the hard way:
+   `reset` **prints the new secret to stdout**, putting a live credential into terminal scrollback
+   and any session transcript — which the creation section explicitly exists to avoid — and its
+   `--years`/`--end-date` handling makes it easy to produce a credential whose lifetime contradicts
+   the 180-day standard the display name claims.
 
    ```bash
-   az ad app credential reset --id $APP --append \
-     --display-name "vitally-mcp container app - created $(date -u +%Y-%m-%d), 180d" \
-     --years 1 --query '{keyId:keyId,password:password,end:endDateTime}' -o json
+   export MSYS_NO_PATHCONV=1
+   APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4
+   RG=vitally-prod-rg-uksouth
+   END=$(date -u -d '+180 days' '+%Y-%m-%dT%H:%M:%SZ')   # 180-day standard, not --years 1
+
+   umask 077
+   cat > pw.json <<EOF
+   {"passwordCredential":{"displayName":"vitally-mcp container app ($(date -u +%Y-%m)) — expires $END","endDateTime":"$END"}}
+   EOF
+   az rest --method post --url "https://graph.microsoft.com/v1.0/applications/$APP/addPassword" \
+     --headers "Content-Type=application/json" --body @pw.json \
+     --query secretText -o tsv > secret.txt
    ```
 
-   ⚠️ **`--append` is load-bearing.** Without it `credential reset` *replaces* every existing
-   credential, which is the outage this step exists to avoid. The `password` is shown **once**.
+   `addPassword` **appends** — it does not disturb the existing credential, which is the whole point
+   of the overlap. (`az ad app credential reset` without `--append` *replaces* every credential; that
+   is a second reason not to use it here.)
 
-2. **Update the Key Vault record, then set its expiry as a second call.** `az keyvault secret set`
-   writes a new *version*; follow it with `az keyvault secret set-attributes --expires` carrying the
-   new credential's `endDateTime`, exactly as creation steps 2 and 3 above do. Do it whether or not
-   a new version would inherit the old `exp`: it is harmless either way, and the scanner's view of
-   `attributes.exp` is the only thing watching this deadline. This needs the two-switch Key Vault
-   window described above. **The vault is a record, not a source** — nothing the app sends changes here.
+2. **Update the Key Vault record and its expiry.** The vault is a **record, not a source** — nothing
+   the app sends changes at this step — but the scanner keys off `attributes.exp` here and nowhere
+   else, so skipping it means the next deadline passes in silence.
 
-3. **Staging first — update its Container App secret, roll it, and verify.**
+   Needs the two-switch Key Vault window described above; open it with the abort guard, and drive it
+   from a script with a cleanup `trap` so the window closes even if a step fails.
 
    ```bash
+   az keyvault secret set --vault-name vitally-prod-kv-uksouth \
+     --name entra-mcp-client-secret --file secret.txt --output none
+
+   # separate call: `secret set` writes a new VERSION and the expiry does not carry over reliably
+   az keyvault secret set-attributes --vault-name vitally-prod-kv-uksouth \
+     --name entra-mcp-client-secret --expires "$END" --output none
+   ```
+
+3. **Staging first — update its Container App secret and roll every revision taking traffic.**
+
+   ```bash
+   SECRET=$(cat secret.txt)
    az containerapp secret set -n vitally-staging-ca-uksouth -g $RG \
-     --secrets "oauth-shared-client-secret=<new password>"
-   az containerapp revision restart -n vitally-staging-ca-uksouth -g $RG \
-     --revision "$(az containerapp revision list -n vitally-staging-ca-uksouth -g $RG \
-                    --query '[?properties.trafficWeight>`0`].name|[0]' -o tsv)"
+     --secrets "oauth-shared-client-secret=$SECRET"
    ```
 
-   Then verify — and note *what* verifies it. `/health` and the 401 challenge both pass on the old
-   credential, so neither tells you anything here. The credential is only exercised at
-   **`/oauth/token`**, which needs a real authorisation code and therefore a browser. Complete one
-   sign-in against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client; a successful
-   `tools/list` is the proof. An `invalid_client` at this point means the new secret is wrong or the
-   roll did not happen — and the old credential still exists, so **stop and fix it here**, which is
-   the whole reason staging goes first.
+   Then restart — **every** traffic-bearing revision, not just the newest, and fail closed if the
+   listing fails or comes back empty. Container Apps can serve several revisions at once during a
+   split, and a single un-restarted warm revision keeps the old secret; that is invisible until
+   step 5 deletes it, and then surfaces as *intermittent* `invalid_client`, which is far harder to
+   diagnose than a clean failure. Same pattern, and the same reasoning, as the staging read-only
+   guard in `CLAUDE.md`:
 
-4. **Production — same two commands, its own secret name.**
+   ```bash
+   roll() {  # $1 = container app name
+     local CA="$1" REVS rc=0
+     if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
+          --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+       echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA; stop here"; return 1
+     fi
+     for REV in $REVS; do
+       az containerapp revision restart -n "$CA" -g "$RG" --revision "$REV" \
+         && echo "  restarted $REV" || { echo "  FAILED $REV"; rc=1; }
+     done
+     return $rc
+   }
+   roll vitally-staging-ca-uksouth
+   ```
+
+   ⚠️ `for REV in $(az …)` on its own is **not** this check — a failed or empty listing runs the body
+   zero times and exits 0, so an outage or a missing role reads exactly like success.
+
+   **Then verify, and note what actually verifies it.** `/health` and the 401 challenge both pass on
+   the *old* credential, so neither tells you anything. The credential is only exercised at
+   **`/oauth/token`**, which needs a real authorisation code and therefore a browser: complete one
+   sign-in against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client, and a successful
+   `tools/list` is the proof. An `invalid_client` here means the new secret is wrong or a revision
+   did not roll — the old credential still exists, so **stop and fix it at this point**, which is the
+   entire reason staging goes first.
+
+4. **Production — same two steps, its own secret name.**
 
    ```bash
    az containerapp secret set -n vitally-prod-ca-uksouth -g $RG \
-     --secrets "entra-oauth-client-secret=<new password>"
-   az containerapp revision restart -n vitally-prod-ca-uksouth -g $RG \
-     --revision "$(az containerapp revision list -n vitally-prod-ca-uksouth -g $RG \
-                    --query '[?properties.trafficWeight>`0`].name|[0]' -o tsv)"
+     --secrets "entra-oauth-client-secret=$SECRET"
+   roll vitally-prod-ca-uksouth
    ```
 
    Verify with a real sign-in again. **This is the step the staging run could not prove** — see the
    replica table above.
 
-5. **Only once both targets are verified**, delete the superseded credential by `keyId`:
+5. **Destroy the local copies** once both targets are updated:
+
+   ```bash
+   rm -f secret.txt pw.json; unset SECRET
+   ```
+
+6. **Only once both targets are verified**, delete the superseded credential by `keyId`:
 
    ```bash
    az ad app credential list --id $APP \
@@ -566,12 +620,18 @@ RG=vitally-prod-rg-uksouth
    ```
 
    Until this runs, both credentials are valid and a revert is just putting the old value back into
-   the two Container App secrets — so treat step 5 as the point of no return and leave a soak between
-   it and step 4 rather than running them together.
+   the two Container App secrets — so treat step 6 as the point of no return, and leave a soak
+   between it and step 4 rather than running them together.
 
-**Rolling back mid-rotation** (before step 5): put the previous value back with the same
-`secret set` + `revision restart` pair on the affected target. The old credential is still live, so
-this is a two-command recovery — which is exactly what deleting early would destroy.
+⚠️ **One residue the file pattern does not remove.** `az containerapp secret set` has no `--file`
+equivalent, so the value passes as a command-line argument and is briefly visible to anything that
+can read the process table on that host. That is acceptable on an operator workstation and is not on
+a shared or multi-tenant one — the stdout and scrollback exposure is what the temp file removes, and
+this is a smaller, shorter-lived residue rather than none.
+
+**Rolling back mid-rotation** (before step 6): put the previous value back with the same
+`secret set` + `roll` pair on the affected target. The old credential is still live, so this is a
+two-command recovery — exactly what deleting early would destroy.
 
 ### Should the Container App copy exist at all? — recorded so it is not re-litigated
 
