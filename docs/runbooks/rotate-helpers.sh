@@ -98,23 +98,43 @@ replicas_are_fresh() {  # $1 = app, $2 = epoch secs before `secret set`, $3 = mi
 
 # Returns 0 = fresh, 1 = stale or could not assess, 2 = fewer than MIN replicas running (retryable).
 _replicas_fresh_once() {
-  local CA="$1" STAMP="$2" MIN="$3" REVS REPS rc=0 n=0 created
+  local CA="$1" STAMP="$2" MIN="$3" REVS REPS rc=0 n=0 created epoch
   if ! REVS=$(az containerapp revision list -n "$CA" -g "$RG" \
        --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
     echo "NOT ASSESSED — could not list traffic-bearing revisions for $CA"
     return 1
   fi
   for REV in $REVS; do
+    # ⚠️ Filter to runningState == 'Running'. The unfiltered list includes replicas that are
+    #    still provisioning or have stopped, and a provisioning replica would satisfy
+    #    production's MIN=1 while serving nothing — which would end the retry-on-zero wait
+    #    early, exactly when it is the only thing standing between a half-finished roll and the
+    #    irreversible delete. Field verified against the live API (values: Running / NotRunning
+    #    / Unknown), and a bogus value returns zero rows, so the filter is genuinely applied.
     if ! REPS=$(az containerapp replica list -n "$CA" -g "$RG" --revision "$REV" \
-         --query '[].properties.createdTime' -o tsv); then
+         --query "[?properties.runningState=='Running'].properties.createdTime" -o tsv); then
       echo "NOT ASSESSED — could not list replicas for $REV on $CA"
       return 1
     fi
     while read -r created; do
       [ -z "$created" ] && continue
       n=$((n + 1))
-      if [ "$(date -u -d "$created" +%s)" -lt "$STAMP" ]; then
-        echo "  STALE replica on $REV (started $created, before the secret change)"
+
+      # ⚠️ Fail closed if the timestamp cannot be converted. An unparseable value (or a `date`
+      #    without -d, e.g. BSD/macOS) yields an empty string, and `[ "" -le N ]` is simply
+      #    false — so the replica would be reported FRESH, immediately before the deletion gate.
+      if ! epoch=$(date -u -d "$created" +%s 2>/dev/null) || ! [ "$epoch" -eq "$epoch" ] 2>/dev/null; then
+        echo "NOT ASSESSED — could not parse replica createdTime '$created' on $REV"
+        return 1
+      fi
+
+      # ⚠️ -le, not -lt, and deliberately conservative. Both sides are whole seconds, so a
+      #    replica created BEFORE its target's `secret set` but within the same second as the
+      #    post-set stamp would compare EQUAL — and `-lt` would pass it as fresh while it is
+      #    still running the old credential. Treating the equal second as suspect costs at most
+      #    a spurious re-roll; the other direction costs an outage after the delete.
+      if [ "$epoch" -le "$STAMP" ]; then
+        echo "  STALE replica on $REV (started $created, not strictly after the secret change)"
         rc=1
       fi
     done <<< "$REPS"
