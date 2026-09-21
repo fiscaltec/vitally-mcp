@@ -456,39 +456,149 @@ governs the **Vitally API key** cache in `VitallyApiKeyProvider`, nothing here. 
 alone changes nothing the app sends, so the wait achieves nothing and the delete removes the
 credential still in live use — every token exchange then fails `invalid_client`.
 
-**What a rotation actually has to touch**, in order. The full procedure has never been exercised and
-the wording below is deliberately a list of required effects rather than a script to paste — #138
-tracks writing and dry-running it before the **2027-03-01** expiry:
+#### ⚠️ There is no such thing as a staging-only rehearsal of this — and staging will tell you there is
 
-1. Create the new Entra credential, overlapping the old one (never delete first).
-2. Update the Key Vault secret — **and set the expiry explicitly, as a second call**.
-   `az keyvault secret set` writes a new *version*; follow it with `az keyvault secret
-   set-attributes --expires` carrying the new credential's `endDateTime`, exactly as creation
-   steps 2 and 3 above do. Do this whether or not a new version would inherit the old `exp` —
-   setting it is harmless either way, and the scanner's view of `attributes.exp` is the only
-   thing watching this deadline.
-3. **Update the Container App secret on every target** — this is the step that changes what the app
-   sends, and the one the old procedure omitted entirely.
-4. **Roll a revision.** `az containerapp secret set` does **not** roll one, so the running revision
-   keeps serving the old value until something else rolls it.
-5. Verify a real token exchange succeeds on the new revision.
-6. **Only then** delete the superseded credential by `keyId`:
+**One app registration serves both targets.** So the final step — deleting the superseded credential
+— *cannot* be rehearsed against staging while production still presents that credential: the delete
+is global to the app, and production starts failing `invalid_client` immediately. #138 asked for a
+dry-run "end to end, including the delete"; that is not achievable in isolation, and the procedure
+below is shaped around the fact rather than pretending otherwise. **Staging is not a rehearsal of
+the rotation — it is the first half of it.**
+
+**Worse, a staging rehearsal would silently pass the one step most likely to be got wrong.**
+Measured 2026-09-21:
+
+| | `minReplicas` | replicas when idle | What a changed secret does |
+|---|---|---|---|
+| `vitally-staging-ca-uksouth` | **0** | **0** | The next request cold-starts a replica, which reads the **current** secret. Looks like it rotated with no roll |
+| `vitally-prod-ca-uksouth` | **1** | **1** | The warm replica keeps the **old** value in its environment indefinitely. Nothing rotates until it is rolled |
+
+So step 4 below is invisible on staging and mandatory on production — the exact shape of defect that
+put the previous version of this section in the repo. Do not conclude from a green staging run that
+the roll is optional.
+
+#### The verified mechanics
+
+Checked against the live apps on 2026-09-21 with a throwaway secret (`rotation-probe-138`, added,
+updated and removed on staging; no live secret touched), so these are observations rather than
+readings of the documentation:
+
+- **`az containerapp secret set` does not create a revision.** Verified for both *adding* a new
+  secret and *updating* an existing one: `vitally-staging-ca-uksouth--0000014` was the
+  traffic-bearing revision before and after both calls, with an unchanged `createdTime`.
+- **`az containerapp revision restart` is the cheapest roll** and is available in the installed CLI.
+  Restarting the traffic-bearing revision is enough; a full `az containerapp update` is not needed.
+- **Both identifiers for this app are valid and are not interchangeable typos.** `az ad app` accepts
+  either, and they resolve to the same registration — objectId `568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4`
+  (used below) and appId `c3812e7d-a413-4169-b57e-803326611ba3` (the `OAuth:SharedClientId` in
+  `CLAUDE.md`). Don't "align" them; each is correct where it appears.
+- **One credential exists today** — `keyId e17e0e9e-d4c7-46b4-87c1-afe98a5bc111`, expiring
+  `2027-03-01T13:18:59Z` — and the app has **no federated identity credentials**.
+
+#### The procedure
+
+Ordered so that the irreversible step is last and every target has been proven before it. The
+**secret names differ per target** (production `entra-oauth-client-secret`, staging
+`oauth-shared-client-secret`) — see *Client secret* above for why; using the wrong one adds a second
+unused secret and rotates nothing.
 
 ```bash
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
-az ad app credential list --id $APP --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
-az ad app credential delete --id $APP --key-id <old-keyId>
+RG=vitally-prod-rg-uksouth
 ```
 
-Overlap the two rather than deleting first — Entra allows multiple secrets, and a delete-then-create
-sequence is a self-inflicted outage.
+1. **Create the new Entra credential, overlapping the old one.** Never delete first — Entra allows
+   multiple secrets, and delete-then-create is a self-inflicted outage.
 
-### Consider retiring the secret entirely
+   ```bash
+   az ad app credential reset --id $APP --append \
+     --display-name "vitally-mcp container app - created $(date -u +%Y-%m-%d), 180d" \
+     --years 1 --query '{keyId:keyId,password:password,end:endDateTime}' -o json
+   ```
 
-The Container App already has a user-assigned managed identity. A **federated identity credential**
-naming that identity would remove the secret, and with it the rotation commitment. It needs
-`/oauth/token` to send `client_assertion` instead of `client_secret`, so it is a code change, not
-configuration — worth raising after #108 rather than during it.
+   ⚠️ **`--append` is load-bearing.** Without it `credential reset` *replaces* every existing
+   credential, which is the outage this step exists to avoid. The `password` is shown **once**.
+
+2. **Update the Key Vault record, then set its expiry as a second call.** `az keyvault secret set`
+   writes a new *version*; follow it with `az keyvault secret set-attributes --expires` carrying the
+   new credential's `endDateTime`, exactly as creation steps 2 and 3 above do. Do it whether or not
+   a new version would inherit the old `exp`: it is harmless either way, and the scanner's view of
+   `attributes.exp` is the only thing watching this deadline. This needs the two-switch Key Vault
+   window described above. **The vault is a record, not a source** — nothing the app sends changes here.
+
+3. **Staging first — update its Container App secret, roll it, and verify.**
+
+   ```bash
+   az containerapp secret set -n vitally-staging-ca-uksouth -g $RG \
+     --secrets "oauth-shared-client-secret=<new password>"
+   az containerapp revision restart -n vitally-staging-ca-uksouth -g $RG \
+     --revision "$(az containerapp revision list -n vitally-staging-ca-uksouth -g $RG \
+                    --query '[?properties.trafficWeight>`0`].name|[0]' -o tsv)"
+   ```
+
+   Then verify — and note *what* verifies it. `/health` and the 401 challenge both pass on the old
+   credential, so neither tells you anything here. The credential is only exercised at
+   **`/oauth/token`**, which needs a real authorisation code and therefore a browser. Complete one
+   sign-in against `https://vitally-staging.fiscaltec.com/mcp` from an MCP client; a successful
+   `tools/list` is the proof. An `invalid_client` at this point means the new secret is wrong or the
+   roll did not happen — and the old credential still exists, so **stop and fix it here**, which is
+   the whole reason staging goes first.
+
+4. **Production — same two commands, its own secret name.**
+
+   ```bash
+   az containerapp secret set -n vitally-prod-ca-uksouth -g $RG \
+     --secrets "entra-oauth-client-secret=<new password>"
+   az containerapp revision restart -n vitally-prod-ca-uksouth -g $RG \
+     --revision "$(az containerapp revision list -n vitally-prod-ca-uksouth -g $RG \
+                    --query '[?properties.trafficWeight>`0`].name|[0]' -o tsv)"
+   ```
+
+   Verify with a real sign-in again. **This is the step the staging run could not prove** — see the
+   replica table above.
+
+5. **Only once both targets are verified**, delete the superseded credential by `keyId`:
+
+   ```bash
+   az ad app credential list --id $APP \
+     --query "[].{keyId:keyId,name:displayName,expires:endDateTime}" -o table
+   az ad app credential delete --id $APP --key-id <old-keyId>
+   ```
+
+   Until this runs, both credentials are valid and a revert is just putting the old value back into
+   the two Container App secrets — so treat step 5 as the point of no return and leave a soak between
+   it and step 4 rather than running them together.
+
+**Rolling back mid-rotation** (before step 5): put the previous value back with the same
+`secret set` + `revision restart` pair on the affected target. The old credential is still live, so
+this is a two-command recovery — which is exactly what deleting early would destroy.
+
+### Should the Container App copy exist at all? — recorded so it is not re-litigated
+
+#138 asked this once the corrected procedure existed. Three options were considered; the recommended
+one is third, and **none of them is implemented** — today's layout is the inline copy the procedure
+above rotates.
+
+| Option | Effect | Assessment |
+|---|---|---|
+| **Keep the inline copies** (today) | Vault is a record; each target holds its own copy | Works, and the procedure above is safe. The cost is permanent: two copies to keep in step, a vault value that *looks* live and is not, and a rotation that must touch every target. This is the shape that produced the original defect |
+| **Container App → Key Vault reference** (`keyVaultUrl` + `identityref`) | Vault becomes the live source, so the old wording would finally be true | Viable — the CAE is VNet-injected so it reaches the private endpoint. But it **does not remove the roll**: the env var is still injected at replica start, so step 4 stays. It removes the drift, not the deadline. A middling win |
+| ✅ **Federated identity credential** (recommended) | The secret, its expiry and the rotation commitment all disappear | The Container App already has a user-assigned managed identity. Registering it as a federated credential on this app lets `/oauth/token` present a `client_assertion` obtained from that identity (`api://AzureADTokenExchange`) instead of `client_secret`. **No secret, no 180-day clock, no 2027-03-01 outage date, no per-target copy** |
+
+**Why the third and not the second.** The second option improves the *mechanics* of a rotation that
+should not need to exist; the third deletes the obligation. The distinction matters here because the
+failure mode this runbook documents is not "rotation is awkward" but "rotation was documented wrongly
+and nobody noticed for months" — and a procedure nobody has to run cannot rot.
+
+**The cost, stated honestly:** it is a code change to the OAuth proxy's token forwarding in
+`Program.cs`, not configuration, so it cannot be reverted by an environment variable the way the
+Auth0 rollback can. It should therefore land while the Auth0 rollback is still retained *or* after
+that path is abandoned, not in the window where both are half-true. It also needs the app to have
+**no** usable password credential left, or the old path stays silently available.
+
+**Not scheduled by #138**, which covers the procedure. Raised separately so the deadline and the
+redesign do not block each other — the rotation above is safe to run on its own, and remains the
+fallback if the federated route is not taken in time.
 
 ## What this app does *not* have, deliberately
 
