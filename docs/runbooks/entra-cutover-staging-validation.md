@@ -298,7 +298,8 @@ mistaken for something this change caused.
 
 ## If something fails
 
-**There is no provider rollback.** The previous identity provider was decommissioned by #156, so a
+**There is no provider rollback.** #156 abandoned it — no configuration here or on either Container
+App references the previous provider, and its tenant objects are deleted in that issue's final step. So a
 failure here is fixed forwards — by correcting the Entra app registration, the group assignments or
 the Container App configuration — not by reverting to another provider. The five `OAuth__*` values
 each target runs are in `CLAUDE.md`.
@@ -320,9 +321,9 @@ What this runbook is now: the **Entra acceptance suite**. Its checks assert Entr
 **Re-run everything above while Entra is the active provider** — after any change to this app
 registration, to the tenant, or to the `mcp.access` scope, and after a re-flip *to* Entra.
 
-**There is no rollback, and this suite is now unconditional.** The previous provider's objects were
-deleted by #156, so every check above applies on every run — there is no "inapplicable under a
-rollback" column any more, and nothing to re-read as provider-dependent.
+**There is no rollback, and this suite is now unconditional.** #156 abandoned the provider rollback,
+so every check above applies on every run — there is no "inapplicable under a rollback" column any
+more, and nothing to re-read as provider-dependent.
 
 If a *future* target ever needs the `OAuth__*` variables applied, they are in `CLAUDE.md`, and its
 Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the

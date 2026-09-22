@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** whose OAuth façade is built for Microsoft Entra directly; users connect to it by URL rather than installing a binary. **Both targets authenticate against Entra directly, and Entra is the only identity provider.** #108 merged the cutover code on 2026-09-03 and the production configuration flip was applied on 2026-09-16; staging had run Entra since 2026-09-03. The previous provider's objects were retained as a rollback through the soak and **deleted by #156** — there is no rollback path, and nothing in this repository references that provider. Read the provider off the live metadata (`curl https://vitally.fiscaltec.com/.well-known/oauth-authorization-server | jq .jwks_uri`) rather than trusting this file: it asserted the wrong state for twelve days once already, in the other direction.
+This is a Model Context Protocol (MCP) server implementation in C# that provides full CRUD access to the Vitally customer success platform. The server is a **remote HTTP MCP server** whose OAuth façade is built for Microsoft Entra directly; users connect to it by URL rather than installing a binary. **Both targets authenticate against Entra directly, and Entra is the only identity provider.** #108 merged the cutover code on 2026-09-03 and the production configuration flip was applied on 2026-09-16; staging had run Entra since 2026-09-03. The previous provider's objects were retained as a rollback through the soak; #156 abandoned that rollback and removed every reference to it from this repository and from both Container Apps. ⚠️ **The tenant objects themselves are deleted as the last step of #156 and may still exist** — check the issue before assuming either way. Nothing here depends on them. Read the provider off the live metadata (`curl https://vitally.fiscaltec.com/.well-known/oauth-authorization-server | jq .jwks_uri`) rather than trusting this file: it asserted the wrong state for twelve days once already, in the other direction.
 
 **Key characteristics:**
 - Full CRUD API access to Vitally resources (accounts, organisations, users, conversations, notes, projects, tasks, admins, NPS responses, project templates, project categories, messages, custom objects, meetings — including participants and transcripts — custom traits, custom surveys)
@@ -1182,9 +1182,11 @@ Verified when written by running it both ways round: it **passes** against a loc
 ### Identity: Entra, on both targets
 
 **Entra is the only identity provider, and there is no rollback path.** Staging flipped 2026-09-03,
-production 2026-09-16 (#108); the previous provider's client, both API registrations and its
-post-login hook were retained through the soak and then deleted by **#156**, along with the retained
-credential on production's Container App.
+production 2026-09-16 (#108). The previous provider's client, both API registrations and its
+post-login hook were retained through the soak; #156 abandoned that rollback, removed the retained
+credential from production's Container App and stripped every reference from this repository.
+⚠️ **Deleting the tenant objects is the last step of #156 and is sequenced after that merge**, so
+they may still exist — but nothing reads them, and no rollback is supported regardless.
 
 Two consequences worth stating, because both were load-bearing constraints until #156 and are not any
 more:

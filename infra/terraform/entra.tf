@@ -1,7 +1,7 @@
 # Entra app registration for the Vitally MCP server (#107) — the OAuth client *and* the API
 # resource in one registration. It has been the sole identity provider for both targets since the
 # #108 cutover (staging 2026-09-03, production 2026-09-16); the previous provider's objects were
-# decommissioned by #156.
+# decommissioned by #156 (its tenant objects are deleted in that issue's final step).
 #
 # AS-BUILT CAPTURE, like the rest of this directory: the objects below were created with `az` /
 # Microsoft Graph on 2026-09-02 and are recorded here so they are reviewable and reproducible.

@@ -56,8 +56,9 @@ zones linked to the VNet. No effect on the running service.
 ### Phase 3 — New environment + app + scanner (zero impact)
 
 - Create VNet-integrated workload-profiles env (`…cae2…`), external ingress.
-- Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the
-  `oauth-shared-client-secret`, scale 0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
+- Create new app (`…ca2…`) with identical config (user-assigned MI, image, env vars, the OAuth
+  client-secret Container App secret — `entra-oauth-client-secret` today, renamed by #156 — scale
+  0→3). It comes up on a temporary `…azurecontainerapps.io` FQDN.
 - Deploy the timer Function (`…func-secretscan…`) with VNet integration; port the scan logic
   *(as-built: a Container Apps Job on `python:3-slim`, not a Function — see the table above)*
   (list secrets via MI → filter ≤30 days → POST Adaptive Card to the Teams webhook). Grant its MI

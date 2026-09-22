@@ -1,8 +1,8 @@
 # Entra app registration — Vitally MCP (#107)
 
 The **sole** identity provider for this server. Live on **both** targets — staging since
-2026-09-03, production since 2026-09-16; the previous provider's objects were decommissioned by
-#156. It is **both** the shared OAuth client and the API resource, because that is what the
+2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156 (its
+tenant objects are deleted in that issue's final step). It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
@@ -283,9 +283,8 @@ Stored as **`entra-mcp-client-secret`** in `vitally-prod-kv-uksouth` — as the 
 ⚠️ **It is NOT the `vitally-shared` pattern, and the difference decides how rotation works.**
 `vitally-shared` really is fetched from Key Vault at runtime by the managed identity, through
 `VitallyApiKeyProvider`. This secret is not fetched by the app at all. It was **copied** into a
-Container App secret at the flip — `entra-oauth-client-secret` on production,
-`oauth-shared-client-secret` on staging — and `OAuth__SharedClientSecret` is a `secretRef` to that
-copy. Verified 2026-09-17: `properties.configuration.secrets[].keyVaultUrl` is empty on both apps,
+Container App secret at the flip and is named `entra-oauth-client-secret` on **both** targets since
+#156 — `OAuth__SharedClientSecret` is a `secretRef` to that copy. Verified 2026-09-17: `properties.configuration.secrets[].keyVaultUrl` is empty on both apps,
 so neither is a Key Vault reference.
 
 ```bash
@@ -461,10 +460,9 @@ readings of the documentation:
 
 #### The procedure
 
-Ordered so that the irreversible step is last and every target has been proven before it. The
-**secret names differ per target** (production `entra-oauth-client-secret`, staging
-`oauth-shared-client-secret`) — see *Client secret* above for why; using the wrong one adds a second
-unused secret and rotates nothing.
+Ordered so that the irreversible step is last and every target has been proven before it. Both
+targets use the **same** secret name, `entra-oauth-client-secret` (#156 normalised staging onto
+production's); using any other name adds a second unused secret and rotates nothing.
 
 ```bash
 APP=568d8fc4-ebfd-4c5d-8302-ffb0377ac7a4   # Vitally MCP application objectId
@@ -575,7 +573,7 @@ az keyvault secret set-attributes --vault-name "$VAULT" \
 #    old value until step 4 rolls it, so nothing changes for users — and it means this script is
 #    the only place the secret value is ever needed, so it need not survive into a second shell.
 #    ⚠️ The secret NAMES differ per target; using the wrong one adds an unused secret and
-#    rotates nothing. See *Client secret* above for why they differ.
+#    rotates nothing. Both targets use the same name since #156.
 #    ⚠️ ONE STAMP PER TARGET, taken AFTER that target's own `secret set` returns. A single
 #       stamp taken before both would admit a replica created in the gap between the stamp and
 #       its target's update: it loaded the OLD credential, but started "after STAMP", so it
@@ -583,7 +581,7 @@ az keyvault secret set-attributes --vault-name "$VAULT" \
 #       The window is small and entirely real: staging is scale-to-zero and cold-starts on any
 #       request, and production can replace a replica at any time.
 az containerapp secret set -n vitally-staging-ca-uksouth -g "$RG" \
-  --secrets "oauth-shared-client-secret=$SECRET"
+  --secrets "entra-oauth-client-secret=$SECRET"
 STAMP_STAGING=$(date -u +%s)
 
 az containerapp secret set -n vitally-prod-ca-uksouth -g "$RG" \
@@ -622,7 +620,7 @@ rollback subshell in `CLAUDE.md`.
 
   roll vitally-staging-ca-uksouth
   # 0 = staging is minReplicas 0, so no running replica is its steady state
-  verify_target vitally-staging-ca-uksouth oauth-shared-client-secret "$NEWHASH" "$STAMP_STAGING" 0
+  verify_target vitally-staging-ca-uksouth entra-oauth-client-secret "$NEWHASH" "$STAMP_STAGING" 0
   echo "STAGING VERIFIED"
 )
 ```
@@ -830,6 +828,7 @@ deliberately provider-neutral class. Tracked separately rather than bundled into
 ### The previous provider is gone
 
 Its client, both API registrations and its post-login hook were retained through the soak as a
-rollback path, and deleted by **#156** once that rollback was abandoned. There is no longer a second
-identity path for this server, which is what removes the two-app parity class of failure recorded
-under *Gate 1*.
+rollback path. **#156 abandoned that rollback**: nothing in this repository or on either Container
+App references them, and deleting the tenant objects is that issue's final step. Either way there is
+no supported second identity path for this server, which is what removes the two-app parity class of
+failure recorded under *Gate 1*.

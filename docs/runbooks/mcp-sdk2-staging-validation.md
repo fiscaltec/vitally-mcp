@@ -425,9 +425,9 @@ managed identity removes its service principal, and the assignment with it. Dele
 if you tore down in a different order.
 
 **Then, at the identity provider:** delete the staging-specific OAuth client and API registration
-that step 2.5 created. Both are gone from the current estate — #156 decommissioned that provider
-entirely — so this applies only to a historical run, and is kept because an orphaned OAuth client is
-exactly the standing security debt this section exists to prevent.
+that step 2.5 created. Neither is part of the current estate — #156 decommissioned that provider — so
+this applies only to a historical run, and is kept because an orphaned OAuth client is exactly the
+standing security debt this section exists to prevent.
 
 
 Confirm the production client `VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D` and the API

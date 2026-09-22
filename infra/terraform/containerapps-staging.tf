@@ -55,7 +55,7 @@ resource "azurerm_container_app" "staging" {
   # not by a health probe.
   secret {
     name  = "entra-oauth-client-secret"
-    value = var.staging_oauth_shared_client_secret
+    value = var.oauth_shared_client_secret
   }
 
   ingress {
