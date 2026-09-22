@@ -1,10 +1,10 @@
 # Entra app registration — Vitally MCP (#107)
 
 The **sole** identity provider for this server. Live on **both** targets — staging since
-2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156 (its
-previous provider's tenant objects were deleted 2026-09-22). It is **both** the shared OAuth client and the API resource, because that is what the
-proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
-valid `aud` as well as the `client_id`.
+2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156, and its
+tenant objects were deleted on 2026-09-22. It is **both** the shared OAuth client and the API
+resource, because that is what the proxy's `SharedClientId` / `SharedClientSecret` model expects —
+which is also why its appId is a valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
 Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first, and ran from the moment it shipped — OIDC discovery, the proxy and the `resource` validation were all live on production before the flip. What stayed inert was the Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relayed `resource` exactly as it always had. Setting that and the other four `OAuth__*` variables is what the flip did.
