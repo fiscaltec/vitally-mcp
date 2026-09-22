@@ -699,10 +699,12 @@ titles no longer carry phase numbers; the phase is stated in the issue body inst
 | 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
 
 **3a in one line:** humans pass — 4 named IT administrators with elevated access PIM-gated, plus 2
-by-design break-glass accounts. The gap is machine-side: 8 FISCAL-controlled service principals (2
-with `Owner`, 1 a test app), 4 orphaned assignments, and an external MSP with `Owner`. Table-level
-RBAC was found **unable** to help — Azure RBAC is allow-only and cannot subtract from an inherited
-`*/read`.
+by-design break-glass accounts. The residual is machine-side: 8 FISCAL-controlled service principals
+(2 with `Owner`, 1 a test app) and an external MSP with `Owner`, none of them actioned. **4 orphaned
+principals** were also found, holding **14** assignments between them — **13 removed on 2026-09-21**,
+the 14th held because it sits at management-group scope; that one is a pending decision, not an open
+exposure, since nothing can authenticate as a deleted principal. Table-level RBAC was found
+**unable** to help — Azure RBAC is allow-only and cannot subtract from an inherited `*/read`.
 
 **Phase 8 is not designed in this document**, and that is the one gap in it. The Workbook layout and
 the seven alert rules live only in #159, which was split out of #94 on 2026-09-22 for that reason. If
