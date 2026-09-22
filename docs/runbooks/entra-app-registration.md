@@ -1,8 +1,8 @@
 # Entra app registration — Vitally MCP (#107)
 
-The app registration that **replaced** the Auth0 client + Resource Server pair at the #108 cutover.
-Live on **both** targets — staging since 2026-09-03, production since 2026-09-16. Auth0 is retained as
-the rollback only. It is **both** the shared OAuth client and the API resource, because that is what the
+The **sole** identity provider for this server. Live on **both** targets — staging since
+2026-09-03, production since 2026-09-16; the previous provider's objects were decommissioned by
+#156. It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
@@ -44,128 +44,103 @@ half-applied.
 
 ## Gate 1 — sign-in assignment
 
-`appRoleAssignmentRequired = true` restricts sign-in to assigned principals, exactly as
-`FISCAL IT Auth0` does. The same **nine** department groups are assigned:
+`appRoleAssignmentRequired = true` restricts sign-in to assigned principals. **Nine** department
+groups are assigned:
 
 Product · IT & Security · Development · Data Science · Project Management · Customer Operations ·
 Executive Leadership Team · Customer Account Management · Service Delivery
 
-> ⚠️ **This list has drifted from `FISCAL IT Auth0`'s twice, and the second time is the one that
-> matters.**
+> ⚠️ **This list is the ONLY record of who can sign in, and nothing detects an omission.**
+>
+> Until #156 there was a second app whose assignments had to match this one by hand, and they
+> drifted twice:
 >
 > | Found | Missing from the Entra app | Consequence at cutover |
 > |---|---|---|
 > | 2026-09-03 | `Development Department` (15 members) | `AADSTS50105` — total loss of access |
 > | 2026-09-15 | `Data Science Department` (2 members) | the same |
 >
-> Both groups had working access at the time, via **both** mechanisms — assigned directly to
-> `FISCAL IT Auth0` for Gate 1, *and* nested in `sg-vitally-readers` for Gate 2. Those are separate
-> and the distinction matters here: the nesting is what gave them a tier, the direct assignment is
-> what let them sign in at all, and it is only the second that the Entra app was missing.
+> Both groups had working access at the time via **both** mechanisms — assigned directly to the
+> other app for Gate 1, *and* nested in `sg-vitally-readers` for Gate 2. Those are separate and the
+> distinction matters: the nesting gave them a tier, the direct assignment let them sign in at all,
+> and it was only the second the Entra app was missing.
 >
-> The first occurrence was fixed by correcting this list *and* this warning — **and it happened again
-> twelve days later anyway.** The reason is not forgetfulness: `ACCESS.md` told admins to assign a
-> department to `FISCAL IT Auth0`, and named no other app, so both departments were onboarded exactly
-> as documented. That procedure is corrected in the same change as this note.
+> The first occurrence was fixed by correcting this list *and* the warning — **and it happened again
+> twelve days later anyway**, because `ACCESS.md` named the wrong app and both departments were
+> onboarded exactly as documented.
 >
-> ⚠️ **No automated check exists, and none is coming.** #134 proposed extending the secret scanner
-> to diff the two apps; it was closed `not planned` on 2026-09-21 with the move to Entra-only,
-> because the check is only useful while the Auth0 rollback is retained and it needed a new
-> admin-consented Graph grant to build. **So the remedy for this failure is once again a document —
-> the very thing that demonstrably did not work twice.** That is an accepted risk, taken knowingly:
-> the direction has inverted (onboarding now touches Entra, and `FISCAL IT Auth0` is the app going
-> stale), so the consequence is no longer "a department cannot sign in" but "a department cannot
-> sign in **if we ever roll back**". Run the command below before a rollback. Nothing else will.
+> **That failure class is now gone**: there is one app, `ACCESS.md` names it, and an omission fails
+> immediately and visibly at that department's next sign-in rather than lying dormant until a
+> cutover. #134, which proposed automating the two-app parity diff, was closed `not planned` on
+> 2026-09-21 — correctly, since it only ever made sense while both apps existed.
 >
-> **Derive this list from the live assignments, never from a document**, and compare the two apps
-> immediately before any cutover *or rollback* — parity matters in both directions while both exist:
+> What still needs checking is **correctness**, not parity: that the live gate holds exactly the
+> nine groups recorded in Terraform, and nothing but groups.
+>
+> **Derive the live set from Graph, never from a document:**
 >
 > ```bash
 > export MSYS_NO_PATHCONV=1
 > set -o pipefail   # without this a failed `az rest` is masked by `sort` and the check reports OK
-> AUTH0=3dff0dcd-ebe1-496e-b47f-e5e4e736a548; ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
+> ENTRA=7904188d-4b34-4651-bf0f-6941fbcf6a8b
 > page() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
 > fetch() { local j; j=$(page "$1") || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED — this check does not follow @odata.nextLink" >&2; return 1; }; echo "$j" | jq -r '.value[]|[.principalType,.principalId,.principalDisplayName,.id]|@tsv' | sort > "$2"; }
 > rc=0
-> if ! fetch "$AUTH0" gate-auth0.txt || ! fetch "$ENTRA" gate-entra.txt || [ ! -s gate-auth0.txt ] || [ ! -s gate-entra.txt ]; then
->   echo "NOT ASSESSED — a lookup failed or returned nothing"; rc=1
+> if ! fetch "$ENTRA" gate-entra.txt || [ ! -s gate-entra.txt ]; then
+>   echo "NOT ASSESSED — the lookup failed or returned nothing"; rc=1
 > else
->   if diff <(cut -f1,2 gate-auth0.txt | sort) <(cut -f1,2 gate-entra.txt | sort); then echo "PARITY OK"; else echo "DRIFT — the ids above differ; grep them in gate-*.txt for names"; rc=1; fi
->   # Parity is agreement, NOT correctness: the same unintended group added to both apps diffs
->   # clean. Assert the live set against the expected one recorded in Terraform. Run from the
->   # repo root. The sed anchors on `^variable` deliberately: an unanchored pattern also matches
->   # the `for_each = var.entra_gate1_group_object_ids` line further down and reopens the range
->   # over the `gate1` resource, pulling in its all-zero `app_role_id` as a tenth id — which
->   # would report a healthy nine-group gate as UNEXPECTED MEMBERSHIP.
->   sed -n '/^variable "entra_gate1_group_object_ids"/,/^}/p' infra/terraform/entra.tf | grep -ioE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | sort > gate-expected.txt
+>   # Assert the live set against the expected one recorded in Terraform. Run from the repo root.
+>   # The sed anchors on `^variable` deliberately: an unanchored pattern also matches the
+>   # `for_each = var.entra_gate1_group_object_ids` line further down and reopens the range over
+>   # the `gate1` resource, pulling in its all-zero `app_role_id` as a tenth id — which would
+>   # report a healthy nine-group gate as UNEXPECTED MEMBERSHIP.
+>   sed -n '/^variable "entra_gate1_group_object_ids"/,/^}/p' infra/terraform/entra.tf \
+>     | grep -oE '"[0-9a-f-]{36}"' | tr -d '"' | sort > gate-expected.txt
 >   if [ ! -s gate-expected.txt ]; then echo "EXPECTED SET NOT READ — run from the repo root; not asserting membership"; rc=1
 >   elif diff gate-expected.txt <(cut -f2 gate-entra.txt | sort); then echo "MEMBERSHIP OK — matches infra/terraform/entra.tf"
 >   else echo "UNEXPECTED MEMBERSHIP — the live gate differs from entra.tf (< expected, > live). Either a group was added outside the process, or entra.tf was not updated when one was onboarded."; rc=1; fi
->   if [ "$(awk -F'	' '$1!="Group"{n++} END{print n+0}' gate-auth0.txt gate-entra.txt)" != "0" ]; then
+>   if [ "$(awk -F'\t' '$1!="Group"{n++} END{print n+0}' gate-entra.txt)" != "0" ]; then
 >     echo "NON-GROUP ASSIGNMENT PRESENT — Gate 1 must stay group-driven. Delete each with the command printed for it:"
->     for pair in "gate-auth0.txt:$AUTH0" "gate-entra.txt:$ENTRA"; do awk -F'	' -v sp="${pair##*:}" '$1!="Group"{print "  "$1" "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' "${pair%%:*}"; done
+>     awk -F'\t' -v sp="$ENTRA" '$1!="Group"{print "  "$1" "$3":"; print "    az rest --method delete --url \"https://graph.microsoft.com/v1.0/servicePrincipals/"sp"/appRoleAssignedTo/"$4"\""}' gate-entra.txt
 >     rc=1
 >   else
 >     echo "every assignment is a Group — Gate 1 is group-driven"
 >   fi
 > fi
-> [ "$rc" -eq 0 ]   # final status: 0 only if parity held AND every row was a Group
+> [ "$rc" -eq 0 ]   # final status: 0 only if membership matched AND every row was a Group
 > ```
 >
-> Three things in there are deliberate, and each replaces a version of this snippet that looked like
-> a check and was not:
+> Several things in there are deliberate, and each replaces a version of this snippet that looked
+> like a check and was not:
 >
 > - **`set -o pipefail`, plus the `-s` emptiness guards.** Without them a failed `az rest` is masked
->   by `sort`'s exit status, both files come out empty, and `diff` of two empty files succeeds — so
->   the check reports `PARITY OK` during exactly the outage or credential failure in which it cannot
->   assess anything. It now says **NOT ASSESSED**, which is the only honest answer.
+>   by `sort`'s exit status, the file comes out empty, and the comparison succeeds — so the check
+>   reports health during exactly the outage or credential failure in which it cannot assess
+>   anything. It now says **NOT ASSESSED**, which is the only honest answer.
 > - **It refuses to answer off a truncated page.** `appRoleAssignedTo` is a paginated collection and
 >   `az rest` does not follow `@odata.nextLink`, so a future estate with more assignments than fit in
->   one page would compare partial lists and could report parity while missing a group — or a `User`
->   row. `$top=999` makes that unreachable in practice; the explicit `nextLink` check makes it
->   impossible rather than unlikely, which is the standard the rest of this snippet has had to be
->   held to four times now.
-> - **Parity and correctness are two questions, and it now asks both.** Comparing the apps to each
->   other catches the drift that has happened twice, but it passes happily when the *same* wrong
->   group sits on both — which is what onboarding a department to the wrong tier looks like, and
->   the diff would call it healthy. So the live set is also asserted against
->   `entra_gate1_group_object_ids` in `infra/terraform/entra.tf`, which is the recorded expected
->   nine. That makes the Terraform capture load-bearing for this check rather than decorative:
->   onboarding a department means updating it, which the runbook already tells you to do.
+>   one page would compare a partial list and could miss a group — or a `User` row. `$top=999` makes
+>   that unreachable in practice; the explicit `nextLink` check makes it impossible rather than
+>   unlikely.
+> - **It asserts against the recorded expected set.** That makes the Terraform capture load-bearing
+>   for this check rather than decorative: onboarding a department means updating
+>   `entra_gate1_group_object_ids`, which the runbook already tells you to do. Since the second app
+>   went, this is the *only* thing standing between an unnoticed edit and a wrong gate.
 > - **It tests the invariant, not the one violation that has occurred.** Gate 1 is meant to hold
 >   *nine Group rows and nothing else*, so the check rejects every row whose `principalType` is
 >   not `Group` — not just `User`. The `User` row this runbook records really happened (admin
->   consent created one), but a `ServicePrincipal` assignment would grant an application
->   sign-in and would have been reported as "no user assignments", passing. Checking for the
->   failure you have seen rather than the property you require is how the next one gets through.
-> - **It exits non-zero on every bad outcome**, including a non-`Group` row, and **accumulates**
->   that across both checks. Three separate ways this went wrong while being written, all of which
+>   consent created one), but a `ServicePrincipal` assignment would grant an application sign-in and
+>   would have been reported as "no user assignments", passing. Checking for the failure you have
+>   seen rather than the property you require is how the next one gets through.
+> - **It exits non-zero on every bad outcome**, including a non-`Group` row, and **accumulates** that
+>   across both checks. Three separate ways this went wrong while being written, all of which
 >   reported health while finding a problem: `… || echo "DRIFT"` succeeds whatever it found;
 >   `grep -c '^User' # must be 0` is inverted, because `grep` exits **0 when it finds** a match, so
 >   the unsafe result was the successful one; and a second `if` after the first silently overwrites
->   `$?`, so a real DRIFT followed by a clean user check exits 0. **And it prints a whole delete
->   command per row rather than a bare assignment id**, because the two files come from two
->   different service principals: `grep -h` discards which file a row came from, so a reader
->   pasting the id into the delete command further down this runbook — which hardcodes the
->   `Vitally MCP` SP — would target the wrong app for anything found in `gate-auth0.txt`, and
->   leave the `User` row in place having been told it was removed. Hence the `rc` accumulator and the
->   closing `[ "$rc" -eq 0 ]`, which sets the status without exiting an interactive shell.
-> - **It re-sorts after projecting.** Strictly redundant — a whole-line sort is already dominated by
->   type and id, which precede the name — but it makes rename-safety a local property of the
->   comparison rather than something a reader has to derive from field order, and it survives someone
->   later reordering the `jq` projection.
-> - **It compares object ids only** (`cut -f1,2` — type and id), keeping the display name *and the
->   assignment id* in the files for reading but out of the comparison. The assignment id is what the
->   deletion command below needs, so a `User` finding is actionable without a second Graph query. Two reasons: Entra display names are not unique, so
->   a name-based comparison reads as parity while Gate 1 points at a different group entirely; and
->   Graph snapshots `principalDisplayName` onto the assignment when it is created, so renaming a
->   department makes the two apps disagree on the name while the same principal is assigned to both —
->   a false DRIFT that could block a legitimate cutover.
+>   `$?`. Hence the `rc` accumulator and the closing `[ "$rc" -eq 0 ]`, which sets the status without
+>   exiting an interactive shell.
 > - **It runs an actual `diff`.** The first version printed two sorted lists consecutively for a
 >   human to eyeball, in the document whose entire subject is that this difference gets missed.
->
-> Once Auth0 is retired that cross-check disappears, so the list here becomes the only record —
-> another reason not to retire it early.
 
 **Assign groups directly — never the `sg-vitally-*` tier groups.** The Entra app-assignment gate
 honours only *direct* members of an assigned group; nesting does not grant sign-in. Assigning
@@ -177,75 +152,55 @@ The two gates are separate mechanisms and should stay that way:
 | | Question it answers | Mechanism |
 |---|---|---|
 | Gate 1 | may this person sign in at all? | direct department assignment on this app |
-| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's object id — `oid` when present, else the trailing GUID of an Auth0-shaped `sub`, retained for the rollback window |
+| Gate 2 | which tier of tools do they get? | `sg-vitally-*` membership, resolved **transitively** by `GraphGroupPermissionResolver` via Graph using the caller's `oid` claim |
 
-Gate 2 is IdP-independent — it survives the cutover untouched.
+Gate 2 reads only Graph and the `oid` claim, so it is independent of how sign-in is configured.
 
 ### Onboarding a new department
 
 ```bash
 export MSYS_NO_PATHCONV=1   # Git Bash mangles the URL path otherwise
 ENTRA_SP=7904188d-4b34-4651-bf0f-6941fbcf6a8b   # Vitally MCP
-AUTH0_SP=3dff0dcd-ebe1-496e-b47f-e5e4e736a548   # FISCAL IT Auth0
 GROUP=<new-group-object-id>
 
-# PHASE 1 — survey BOTH apps before touching either.
-# Surveying and mutating in one pass is how a half-applied onboarding happens: if the first lookup
-# fails and the loop carries on, the group gets assigned to the second app only, which is precisely
-# the one-sided drift this procedure exists to prevent.
-# `assignments` holds the same no-truncation standard as the parity check above: `az rest` does not
-# follow `@odata.nextLink`, and a truncated page would read as "not assigned" — so this would POST a
-# duplicate, or leave the apps inconsistent, in the one state it cannot actually assess.
-assignments() { local j; j=$(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json) || return 1; [ "$(echo "$j" | jq -r '."@odata.nextLink" // ""')" = "" ] || { echo "PAGINATED on $1 — this snippet does not follow @odata.nextLink" >&2; return 1; }; echo "$j"; }
-# Returns the existing assignment id, or the string `none`. Empty means the LOOKUP failed, which is a
-# different answer and must not be read as absence. The id comes from this same survey rather than a
-# second call, so what phase 2 prints is what phase 1 actually saw.
-id_for() { local j; j=$(assignments "$1") || return 1; echo "$j" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "none"'; }
-entra_id=$(id_for "$ENTRA_SP") || entra_id=""
-auth0_id=$(id_for "$AUTH0_SP") || auth0_id=""
-if [ -z "$entra_id" ] || [ -z "$auth0_id" ]; then
-  echo "LOOKUP FAILED — NEITHER app has been changed. Fix access and re-run."
+# Survey before mutating, so a failed lookup is not mistaken for "not assigned yet" — which would
+# turn a read failure into a duplicate POST and an unhelpful Graph error.
+assignments() { az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignedTo?\$top=999" -o json; }
+existing=$(assignments "$ENTRA_SP" | jq -r --arg g "$GROUP" '[.value[]|select(.principalId==$g)|.id]|.[0] // "none"')
+
+if [ -z "$existing" ]; then
+  echo "LOOKUP FAILED — nothing has been changed. Fix access and re-run."
   false
+elif [ "$existing" != "none" ]; then
+  # Surface the existing id: the Terraform import step below needs it, and the common reason to
+  # re-run this is repairing drift, where the group may already be assigned.
+  echo "already assigned — id: $existing"
 else
-  # PHASE 2 — both states known, so a failure here is a real failure rather than an unknown.
-  rc=0
-  for pair in "$ENTRA_SP:$entra_id" "$AUTH0_SP:$auth0_id"; do
-    SP=${pair%:*}; existing=${pair##*:}
-    if [ "$existing" != "none" ]; then
-      # Surface the existing id: the Terraform import step below needs it, and the common reason to
-      # re-run this is repairing drift, where at least one app is already assigned.
-      echo "already assigned on $SP — id: $existing"
-    else
-      echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
-      if az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" --headers "Content-Type=application/json" --body @body.json --query id -o tsv; then
-        echo "  ^ assignment id on $SP — needed for the import block below"
-      else
-        echo "FAILED on $SP — the apps are now OUT OF PARITY; fix before stopping"; rc=1
-      fi
-    fi
-  done
+  echo "{\"principalId\":\"$GROUP\",\"resourceId\":\"$ENTRA_SP\",\"appRoleId\":\"00000000-0000-0000-0000-000000000000\"}" > body.json
+  az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ENTRA_SP/appRoleAssignedTo" \
+    --headers "Content-Type=application/json" --body @body.json --query id -o tsv
+  echo "  ^ assignment id — needed for the import block below"
   rm -f body.json
-  [ "$rc" -eq 0 ]
 fi
 ```
 
-**It is idempotent on purpose**, so it doubles as the drift repair: a group already assigned to one
-app is skipped rather than re-POSTed, because Graph refuses a duplicate assignment and a naive loop
-would report the apps out of parity in the very state it had just fixed.
+**It is idempotent on purpose**, so it doubles as the drift repair: a group already assigned is
+skipped rather than re-POSTed, because Graph refuses a duplicate assignment.
 
-**And it covers both apps on purpose — do not reduce it to one.** `Vitally MCP` gates **both** targets since
-the 2026-09-16 flip. `FISCAL IT Auth0` gates nothing for this server any more — it is retained purely as
-the rollback, and its assignments matter only because a rollback would start using them again. Omitting either locks the
-new department out of that one, silently, until it is the app being used — which is exactly how
-Development and Data Science were missed, both times by following a procedure that named one app.
+**One app, and that is the whole point.** This used to loop over two apps that had to stay
+identical, and omitting either locked the new department out of that one silently until it was the
+app being used — which is exactly how Development and Data Science were missed, both times by
+following a procedure that named one app. #156 removed the second app, so there is one place to
+assign and the failure is immediate rather than latent.
+
+Then, **in the same change**:
 
 Then, **in the same change**:
 
 1. Add the group to `entra_gate1_group_object_ids` in `infra/terraform/entra.tf`.
-2. Add a matching `import` block to `infra/terraform/imports.tf`, using **the id printed for
-   `$ENTRA_SP`** — the loop prints one per app, and the Auth0 one does not belong to
-   `azuread_app_role_assignment.gate1`, which models only the Entra registration — the `gate1` resource is `for_each` over that map, so a map entry without an
-   import reads as unmanaged and a plan would propose creating an assignment that already exists:
+2. Add a matching `import` block to `infra/terraform/imports.tf`, using the assignment id printed
+   above. The `gate1` resource is `for_each` over that map, so a map entry without an import reads
+   as unmanaged and a plan would propose creating an assignment that already exists:
 
    ```hcl
    import {
@@ -303,8 +258,9 @@ az ad app permission admin-consent --id c3812e7d-a413-4169-b57e-803326611ba3
 
 Grants tenant-wide (`AllPrincipals`) consent for Graph `openid profile email offline_access` plus the
 app's own `mcp.access`, so users see no consent screen. Together with
-`api.preAuthorizedApplications` naming the app itself, this is the equivalent of Auth0's
-`skip_consent_for_verifiable_first_party_clients`.
+`api.preAuthorizedApplications` naming the app itself, this is what suppresses the per-user consent
+screen. Note it is **not** what authenticates the token exchange — that is the client secret the
+proxy injects — and conflating the two invites removing the wrong setting.
 
 > ⚠️ **This command also assigns the consenting user to the app.** With
 > `appRoleAssignmentRequired = true`, running it created an individual `User` assignment for
@@ -784,9 +740,9 @@ and nobody noticed for months" — and a procedure nobody has to run cannot rot.
 
 **The cost, stated honestly:** it is a code change to the OAuth proxy's token forwarding in
 `Program.cs`, not configuration, so it cannot be reverted by an environment variable the way the
-Auth0 rollback can. It should therefore land while the Auth0 rollback is still retained *or* after
-that path is abandoned, not in the window where both are half-true. It also needs the app to have
-**no** usable password credential left, or the old path stays silently available.
+a configuration change can. That sequencing constraint is now moot — #156 abandoned the provider
+rollback, so there is no window in which two identity paths are half-true. It still needs the app to
+have **no** usable password credential left, or the old path stays silently available.
 
 **Not scheduled by #138**, which covers the procedure. Raised separately so the deadline and the
 redesign do not block each other — the rotation above is safe to run on its own, and remains the
@@ -810,18 +766,20 @@ and running on both throughout — the OIDC discovery, the proxy and the `resour
 on production before the flip. What the flip changed was the **posture**: with
 `OAuth__UpstreamResourceScope` empty the proxy had been relaying `resource` exactly as it always had,
 which is why the deploy was a no-op and setting the variables was the whole change. Both targets now
-terminate `resource` and name the API by scope; the relay is the rollback posture.
+terminate `resource` and name the API by scope; the relay is the RFC 8707 default this server keeps
+for providers that expect it.
 
-The variable table and the rollback live in **CLAUDE.md**, under *The Auth0 → Entra cutover (#108)
-and its rollback*; the per-target values are in `infra/terraform/variables.tf`. What belongs here is
+The variable table lives in **CLAUDE.md**; the per-target values are in
+`infra/terraform/variables.tf`. What belongs here is
 what the cutover **learned about this registration**, since that is what the next person changing it
 needs — and those lessons come from the staging flip and the validation against the live tenant, so
 they held for the staging flip and still hold now that production has followed.
 
 ### `resource` had to be dropped, not reshaped — and the reason recorded earlier was wrong
 
-#105 shipped validation only, relaying the parameter because on Auth0 the relay was the only thing
-binding the token audience. The note here predicted the relay would fail under Entra "because Entra
+#105 shipped validation only, relaying the parameter because under the previous provider the relay
+was the only thing binding the token audience. The note here predicted the relay would fail under
+Entra "because Entra
 matches `resource` exactly against a registered identifier and will not accept the trailing-slash
 form". Driving `/oauth2/v2.0/authorize` against the live tenant on 2026-09-02 showed something
 different, and more absolute:
@@ -869,8 +827,9 @@ passes audience validation. It is not an escalation (same client, same user, and
 the live Graph lookup), and narrowing it would mean requiring `scp`, a provider-specific rule in a
 deliberately provider-neutral class. Tracked separately rather than bundled into the cutover.
 
-### The Auth0 side is retained, not removed
+### The previous provider is gone
 
-Its client, both Resource Servers and the `Vitally MCP claims` Action stay in place until production
-has soaked on Entra — deleting them early turns a one-command rollback into an outage. The tenant's
-*Resource Parameter Compatibility Profile* is now irrelevant to this server and can be left alone.
+Its client, both API registrations and its post-login hook were retained through the soak as a
+rollback path, and deleted by **#156** once that rollback was abandoned. There is no longer a second
+identity path for this server, which is what removes the two-app parity class of failure recorded
+under *Gate 1*.

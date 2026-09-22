@@ -69,7 +69,7 @@ public class OAuthProxyPublicOriginTests : IClassFixture<OAuthProxyPublicOriginT
         authorize.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         var callback = await client.GetAsync(
-            $"/oauth/callback?code=test-code&state={state}&iss={Uri.EscapeDataString("https://example.auth0.com/")}");
+            $"/oauth/callback?code=test-code&state={state}&iss={Uri.EscapeDataString("https://example-issuer.test/")}");
         callback.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         var iss = QueryHelpers.ParseQuery(callback.Headers.Location!.Query)["iss"];

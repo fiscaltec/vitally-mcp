@@ -234,7 +234,7 @@ claude mcp add --transport http vitally-staging https://vitally-staging.fiscalte
 
 or `npx @modelcontextprotocol/inspector` pointed at the same URL — the harness #90 established.
 
-**Expect:** a Microsoft sign-in (not Auth0), no consent screen, and the flow completing. A consent
+**Expect:** a Microsoft sign-in, no consent screen, and the flow completing. A consent
 prompt would mean the admin-consent grant or `api.preAuthorizedApplications` has drifted.
 
 ### 2. Decode the access token
@@ -298,72 +298,16 @@ mistaken for something this change caused.
 
 ## If something fails
 
-Staging rolls back in **two** steps. Both are required, and the order matters:
+**There is no provider rollback.** The previous identity provider was decommissioned by #156, so a
+failure here is fixed forwards — by correcting the Entra app registration, the group assignments or
+the Container App configuration — not by reverting to another provider. The five `OAuth__*` values
+each target runs are in `CLAUDE.md`.
 
-1. **Replace the Container App secret** `oauth-shared-client-secret` with the **Auth0** client secret.
-   It is **not** in Key Vault — that vault holds only `entra-mcp-client-secret` and `vitally-shared`.
-   It is on *production's* Container App and is readable, so this needs no vault window. The two
-   commands are in *The Auth0 → Entra cutover and its rollback* in `CLAUDE.md`, which is the only
-   place they are written down.
-2. **Then** revert the `OAuth__*` variables. **Do not paste production's command from `CLAUDE.md`** —
-   its `OAuth__Audience` is production's Resource Server, and staging has its own. Staging's:
-
-   ```bash
-   az containerapp update -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
-     --set-env-vars \
-       "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \
-       "OAuth__Audience=https://vitally-staging.fiscaltec.com/" \
-       "OAuth__SharedClientId=VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D" \
-       "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret" \
-     --remove-env-vars OAuth__UpstreamResourceScope
-   ```
-
-   `OAuth__Resource` and `OAuth__PublicBaseUrl` are untouched — they name staging's origin under either
-   provider.
-
-   ⚠️ **Confirm the audience and client id in the tenant before relying on them.** Neither was read
-   back from Auth0: the audience is staging's retained **Resource Server** identifier (Auth0 →
-   Applications → APIs) and the client id is the retained **Application** (Auth0 → Applications →
-   Applications), assumed to be the same native client production used. They are two different
-   objects — looking for the client id among the APIs finds nothing — and nothing has exercised this
-   path since staging flipped on 2026-09-03.
-
-**In that order, and the reason is the revision model.** `az containerapp secret set` does **not**
-roll a revision — the running one keeps serving with the value it already loaded — whereas
-`--set-env-vars` does. The two orderings therefore fail differently:
-
-- **Variables first** breaks sign-in *immediately*: the update rolls a new revision carrying Auth0's
-  client id alongside the Entra secret still in the store, and every token exchange returns
-  `invalid_client` while the app boots clean and `/health` returns 200.
-- **Secret first** breaks nothing now — the running revision is untouched — but leaves a *latent*
-  mismatch: the next revision rolled for any reason would pair the Auth0 secret with Entra variables.
-  Step 2 rolls that revision seconds later with both values correct, which closes the window.
-
-So secret first is not a preference. It is the ordering whose failure mode is latent and immediately
-resolved, rather than live and user-visible.
-
-⚠️ **"It is only staging" is true of the configuration and false of the data.** Nothing here
-changes production's Container App or its OAuth settings. But staging reads the **production**
-`vitally-shared` Vitally key — one tenant, no sandbox — so any write or delete tool call made during
-this validation mutates real customer records. `Authorization__ReadOnly=true` is what prevents that,
-and steps 3 and 4 deliberately remove it. Put it back the moment they are done, and verify it is
-back on the revision serving traffic rather than on the desired template.
-
-⚠️ **Staging needs its secret put back; production does not.** Staging carries a single Container
-App secret, `oauth-shared-client-secret`, and since its 2026-09-03 flip that one holds the **Entra**
-value — the Auth0 value is not sitting there waiting. Revert the variables without restoring it and
-you pair the Auth0 client id with the Entra secret. That is not caught at startup — the app boots
-clean and `/health` returns 200 — and surfaces only at the token exchange, where the provider
-returns `invalid_client` and sign-in fails for everyone. Late, not silent: if you are debugging one,
-the token endpoint's response is where the answer is.
-
-**Restoring it needs no Key Vault window.** The Auth0 secret is not in that vault at all — it holds
-only `entra-mcp-client-secret` and `vitally-shared`. It is on *production's* Container App and is
-readable; the two commands are in *The Auth0 → Entra cutover and its rollback* in `CLAUDE.md`.
-
-Production is the opposite: its flip added `entra-oauth-client-secret` alongside the retained
-`oauth-shared-client-secret` rather than overwriting it, so its rollback is variables only, with no
-vault window at all.
+The failure that is *not* visible from `/health` is a client-secret mismatch: the app boots clean and
+`/health` returns 200, and it surfaces only at the token exchange, where the provider returns
+`invalid_client` and sign-in fails for everyone. Late, not silent — if you are debugging one, the
+token endpoint's response is where the answer is. Both targets hold that secret as
+`entra-oauth-client-secret`, a copy of the Key Vault secret `entra-mcp-client-secret`.
 
 ## After it passes
 
@@ -376,36 +320,11 @@ What this runbook is now: the **Entra acceptance suite**. Its checks assert Entr
 **Re-run everything above while Entra is the active provider** — after any change to this app
 registration, to the tenant, or to the `mcp.access` scope, and after a re-flip *to* Entra.
 
-⚠️ **After a rollback to Auth0, most of this suite still applies — but not all of it, and the parts
-that do not will produce failures that mean nothing.** The table below says which is which; read the
-inapplicable rows as inapplicable, not as a broken rollback. The risk is that someone "fixes" the
-configuration back to Entra and undoes, during an incident, the rollback they had just deliberately
-performed.
+**There is no rollback, and this suite is now unconditional.** The previous provider's objects were
+deleted by #156, so every check above applies on every run — there is no "inapplicable under a
+rollback" column any more, and nothing to re-read as provider-dependent.
 
-| after an Auth0 rollback | |
-|---|---|
-| `verify-oauth-metadata.sh` | **still applies** — it names no provider, asserting only the façade contract (our own `issuer`, its byte-for-byte match with `authorization_servers`, the `iss` flag, `jwks_uri` absolute https, no null optionals), all of which hold under either |
-| the app booting at all | **still applies** — it proves OIDC discovery resolved and matched whatever `OAuth:Authority` now names |
-| `POST /mcp` unauthenticated / bad token | **still applies** — exactly 401 with `resource_metadata` and `error="invalid_token"` is our own behaviour |
-| `resource` we do not publish / do publish | **still applies** — 400 `invalid_target` / 302 is our own validation, unchanged by provider |
-| `POST /oauth/register` | **still applies**, but expect the **Auth0** client id back, not `c3812e7d-…` |
-| `/oauth/authorize` → upstream | **inapplicable** — it asserts Entra's v2 endpoint, `resource` **absent** and `mcp.access` merged. On Auth0 the endpoint differs and `resource` is *relayed*, which is the correct rollback behaviour |
-| following that to the provider | **inapplicable** — there is no `AADSTS` code to assert |
-| the token-claim table | **inapplicable** — `iss`, `aud` and `scp` all name Entra values |
-
-Add one check the Entra suite does not need: `jwks_uri` should now read `fiscal-it.uk.auth0.com`. If
-it still names `login.microsoftonline.com`, the variables did not take — check the revision actually
-serving traffic, not the desired template. And one real sign-in per tier, which is the only check
-that proves the client secret matches the client id — the failure a rollback most often hits.
-
-If a *future* target ever needs the five `OAuth__*` variables applied, they are in `CLAUDE.md`, and
-its Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the
+If a *future* target ever needs the `OAuth__*` variables applied, they are in `CLAUDE.md`, and its
+Container App secret comes from the Key Vault secret `entra-mcp-client-secret` through the
 two-switch network window in `docs/runbooks/entra-app-registration.md` — driven under a
-`trap … EXIT INT TERM HUP` so an interrupted run cannot leave a private vault reachable. The code
-ships ahead of the configuration and is inert until `OAuth__UpstreamResourceScope` is set, so setting
-the variables is the whole change.
-
-⚠️ **Reverting them is the whole rollback only where the Auth0 secret is still on the app.** That is
-production's position, not staging's: staging overwrote its one secret at the flip, so rolling *it*
-back means restoring that secret first — see *If something fails* above, which is the procedure for
-this target. A new target inherits whichever position it is built into.
+`trap … EXIT INT TERM HUP` so an interrupted run cannot leave a private vault reachable.

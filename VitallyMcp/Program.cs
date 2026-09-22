@@ -178,8 +178,7 @@ if (!noAuth)
             // Entra v1 token names the App ID URI (OAuth:Audience); a v2 token names the resource
             // application's appId GUID — which, because one registration is both our OAuth client
             // and our API resource, is OAuth:SharedClientId. Accepting both settles it rather than
-            // betting on it, and stays correct on Auth0, where SharedClientId is simply a second
-            // audience nothing mints for this API. See OAuthOptions.ValidAudiences.
+            // betting on it. See OAuthOptions.ValidAudiences.
             jwt.TokenValidationParameters.ValidAudiences = oauth.Value.ValidAudiences;
 
             // MCP requires the 401 to point at the protected-resource metadata document. Without
@@ -451,13 +450,14 @@ app.MapGet(ProtectedResourceMetadataBuilder.MetadataPath, resourceMetadataHandle
 app.MapGet($"{ProtectedResourceMetadataBuilder.MetadataPath}/mcp", resourceMetadataHandler);
 
 // RFC 8414 — Authorization Server Metadata, served by us when the DCR proxy is enabled.
-// `issuer` names our *own* origin, not Auth0's. §3.3 requires the issuer to correspond to the URL
-// the document was fetched from (an anti-mix-up control), and from the client's point of view we
-// genuinely are the authorization server: authorize, token and register are all ours. The upstream
-// provider still issues the tokens, which is why `jwks_uri` and `userinfo_endpoint` remain upstream —
-// and why they are read from its own discovery document rather than assembled from Authority, whose
-// concatenation only ever produced Auth0-shaped paths and cannot produce Entra's. Declaring our origin here is coupled to the `iss` injection
-// in /oauth/callback below — see the façade section in CLAUDE.md before changing either.
+// `issuer` names our *own* origin, not the upstream provider's. §3.3 requires the issuer to
+// correspond to the URL the document was fetched from (an anti-mix-up control), and from the
+// client's point of view we genuinely are the authorization server: authorize, token and register
+// are all ours. The upstream provider still issues the tokens, which is why `jwks_uri` and
+// `userinfo_endpoint` remain upstream — and why they are read from its own discovery document
+// rather than assembled from Authority, which cannot produce Entra's endpoint shapes. Declaring our
+// origin here is coupled to the `iss` injection in /oauth/callback below — see the façade section in
+// CLAUDE.md before changing either.
 app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IOptions<OAuthOptions> oauth, UpstreamOidcMetadata upstream) =>
 {
     var o = oauth.Value;
@@ -507,7 +507,7 @@ app.MapGet("/.well-known/oauth-authorization-server", async (HttpContext ctx, IO
 // `http://localhost`) but it applies to PUBLIC clients, and this registration is not one: entra.tf
 // declares a `web {}` block with two fixed HTTPS callbacks, i.e. a confidential client, which is what
 // lets the proxy inject the secret at /oauth/token. So the substitution is load-bearing for loopback
-// too, not only for claude.ai's hosted callback. Auth0 had no loopback wildcard at all.
+// too, not only for claude.ai's hosted callback.
 //
 // Do not narrow this to "only the hosted callback needs it" on the strength of Entra's general
 // loopback behaviour — that exemption is real and simply does not reach this app.
@@ -530,9 +530,9 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
 
     // Without this check, /oauth/callback would happily redirect victims to any attacker-
     // supplied URL with the authorisation code in the query string — and because we replace
-    // the upstream redirect_uri with our own fixed callback, Auth0's own allowlist offers
-    // no protection (every redirect_uri passes there). Loopback any-port is allowed per RFC
-    // 8252 §7.3 (Claude Code, VS Code, Cursor, MCP Inspector); cloud-hosted MCP callbacks
+    // the upstream redirect_uri with our own fixed callback, the provider's own allowlist
+    // offers no protection (every redirect_uri passes there). Loopback any-port is allowed per
+    // RFC 8252 §7.3 (Claude Code, VS Code, Cursor, MCP Inspector); cloud-hosted MCP callbacks
     // must be listed in OAuth:AllowedClientRedirectUris.
     if (!o.IsRedirectUriAllowed(clientRedirectUri))
     {
@@ -545,10 +545,10 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
     // value afterwards, because the check is about what we are willing to request, not about which
     // provider consumes it.
     //
-    // What happens afterwards is OAuth:UpstreamResourceScope's job. Empty (Auth0): the value is
-    // relayed verbatim, because the tenant's Resource Parameter Compatibility Profile consuming it
-    // is the only thing binding the audience there. Set (Entra): it is dropped here and the
-    // configured scope carries the same meaning instead, because Entra's v2 authorize endpoint
+    // What happens afterwards is OAuth:UpstreamResourceScope's job. Empty: the value is relayed
+    // verbatim, which is what RFC 8707 specifies and what a conforming provider expects. Set
+    // (Entra, and so both deployed targets): it is dropped here and the configured scope carries
+    // the same meaning instead, because Entra's v2 authorize endpoint
     // refuses *any* `resource` alongside a custom-API `scope` — AADSTS9010010, "the resource
     // parameter provided in the request doesn't match with the requested scopes". Verified against
     // the live tenant on 2026-09-02: the slashed form, the exact App ID URI and an unregistered
@@ -587,9 +587,9 @@ app.MapGet("/oauth/authorize", async (HttpContext ctx, IOptions<OAuthOptions> oa
     foreach (var kv in query)
     {
         if (kv.Key == "redirect_uri") continue;
-        // Strip `prompt` — some MCP clients send `prompt=consent` which forces Auth0 to
-        // re-prompt every session even when a user_grant already exists. Without prompt=*
-        // Auth0 honours the cached grant and silently issues an authorization code.
+        // Strip `prompt` — some MCP clients send `prompt=consent`, which forces the provider to
+        // re-prompt every session even when consent has already been granted. Without prompt=*
+        // the cached grant is honoured and an authorization code is issued silently.
         if (kv.Key == "prompt") continue;
         if (mergedScope is not null
             && (string.Equals(kv.Key, "resource", StringComparison.OrdinalIgnoreCase)
@@ -631,8 +631,8 @@ app.MapGet("/oauth/callback", (HttpContext ctx, IOptions<OAuthOptions> oauth, IM
     var sb = new System.Text.StringBuilder(clientRedirectUri).Append(separator);
     foreach (var kv in ctx.Request.Query)
     {
-        // Drop any upstream `iss` — ours is appended below. Auth0 sends one naming itself when the
-        // tenant is configured for RFC 9207, and whether it does is tenant configuration we don't
+        // Drop any upstream `iss` — ours is appended below. A provider configured for RFC 9207
+        // sends one naming itself, and whether it does is provider-side configuration we don't
         // control. Forwarding it would contradict the issuer we publish; appending ours alongside
         // would leave the client two values to choose between. Clients compare a *present* `iss`
         // against the metadata issuer even when the parameter is not advertised, so both shapes
@@ -737,9 +737,9 @@ app.MapPost("/oauth/token", async (HttpContext ctx, IOptions<OAuthOptions> oauth
     // upstream. This authenticates the token exchange and nothing else — it is NOT what suppresses the
     // consent screen, and conflating the two invites removing the wrong setting. Consent suppression is
     // provider-side configuration this code never touches: on Entra, tenant-wide admin consent plus
-    // `api.preAuthorizedApplications` naming the app itself; on Auth0 — the rollback —
-    // `skip_consent_for_verifiable_first_party_clients`. Remove the secret injection and the token
-    // exchange fails; remove the provider-side settings and every user sees a consent prompt instead.
+    // `api.preAuthorizedApplications` naming the app itself. Remove the secret injection and the
+    // token exchange fails; remove the provider-side settings and every user sees a consent prompt
+    // instead.
     if (!string.IsNullOrWhiteSpace(o.SharedClientSecret))
     {
         pairs.RemoveAll(p => p.Key == "client_secret");

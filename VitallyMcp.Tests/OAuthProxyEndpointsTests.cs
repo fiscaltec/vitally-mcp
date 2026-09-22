@@ -13,8 +13,8 @@ namespace VitallyMcp.Tests;
 /// <summary>
 /// Integration tests for the OAuth proxy endpoints in Program.cs. Uses
 /// <see cref="WebApplicationFactory{TEntryPoint}"/> against the real composition root, with
-/// configuration overrides supplied via in-memory config so we don't depend on a real Auth0
-/// tenant or Key Vault.
+/// configuration overrides supplied via in-memory config so we don't depend on a real identity
+/// provider or Key Vault.
 /// </summary>
 public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.Factory>
 {
@@ -33,7 +33,7 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
     {
         // Regression test for the open-redirector finding. Without this validation, the
         // /oauth/callback handler would happily redirect victims to any attacker-controlled
-        // URL with the authorisation code in the query string, since the upstream Auth0 app
+        // URL with the authorisation code in the query string, since the upstream app
         // only ever sees our fixed /oauth/callback as redirect_uri.
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -85,7 +85,7 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
 
         var location = response.Headers.Location!.ToString();
         location.Should().StartWith(StubOidcDiscovery.AuthorizationEndpoint + "?");
-        location.Should().NotContain("example.auth0.com");
+        location.Should().NotContain("example-issuer.test");
         // The proxy's own callback still has to survive the rewrite, or the code never comes back.
         location.Should().Contain(Uri.EscapeDataString("http://localhost/oauth/callback"));
     }
@@ -123,10 +123,11 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
     [InlineData("https://vitally.example.com/")]
     public async Task Authorize_ForwardsAMatchingResourceUnchanged(string resource)
     {
-        // `resource` still goes upstream: while Auth0 is the authority, the tenant's Resource
-        // Parameter Compatibility Profile consumes it locally and it is the only thing binding
-        // the issued token's audience (Program.cs sends no `audience` parameter anywhere).
-        // Terminating it here is #108's job, once Authority points at Entra.
+        // The relay posture: with OAuth:UpstreamResourceScope unset, `resource` goes upstream
+        // verbatim, which is what RFC 8707 specifies and the only thing binding the issued token's
+        // audience (Program.cs sends no `audience` parameter anywhere). This fixture leaves the
+        // scope unset deliberately; OAuthProxyResourceTerminationTests pins the Entra posture, which
+        // is what both deployed targets run.
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false
@@ -281,14 +282,14 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         // to serve you a metadata document could point you at another issuer's endpoints while you
         // believe you are talking to the issuer you trust. We serve this document from our own
         // origin and front /oauth/authorize, /oauth/token and /oauth/register ourselves, so our own
-        // origin is the honest answer; declaring Auth0's made strict clients (the TypeScript MCP
-        // SDK, hence MCP Inspector) abort before ever reaching DCR.
+        // origin is the honest answer; declaring the upstream provider's made strict clients (the
+        // TypeScript MCP SDK, hence MCP Inspector) abort before ever reaching DCR.
         using var client = _factory.CreateClient();
 
         using var doc = JsonDocument.Parse(await client.GetStringAsync("/.well-known/oauth-authorization-server"));
 
         doc.RootElement.GetProperty("issuer").GetString().Should().Be("http://localhost");
-        doc.RootElement.GetProperty("issuer").GetString().Should().NotContain("auth0.com",
+        doc.RootElement.GetProperty("issuer").GetString().Should().NotContain("example-issuer.test",
             "the upstream authority still issues the tokens, but it is not what this document speaks for");
     }
 
@@ -348,8 +349,8 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
     [Fact]
     public async Task Callback_ReplacesAnUpstreamIssWithOurOwn()
     {
-        // Auth0 sends `iss` naming itself when the tenant is configured for RFC 9207, and whether
-        // it does is tenant configuration we do not control. Forwarding that value — or appending
+        // A provider configured for RFC 9207 sends `iss` naming itself, and whether it does is
+        // provider-side configuration we do not control. Forwarding that value — or appending
         // ours alongside it — breaks strict clients: the SDK compares a *present* `iss` against the
         // metadata issuer even when support is not advertised. So the upstream value must be
         // dropped rather than kept, and there must be exactly one `iss` on the way out.
@@ -359,12 +360,12 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         });
 
         var location = await AuthorizeThenCallbackAsync(client, state: "iss-replaced",
-            upstreamExtras: "&iss=" + Uri.EscapeDataString("https://example.auth0.com/"));
+            upstreamExtras: "&iss=" + Uri.EscapeDataString("https://example-issuer.test/"));
 
         var iss = QueryHelpers.ParseQuery(location.Query)["iss"];
         iss.Count.Should().Be(1, "a duplicated parameter lets a client read whichever one it happens to pick first");
         iss[0].Should().Be("http://localhost");
-        location.Query.Should().NotContain("auth0.com");
+        location.Query.Should().NotContain("example-issuer.test");
     }
 
     [Fact]
@@ -381,7 +382,7 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
         });
 
         var location = await AuthorizeThenCallbackAsync(client, state: "iss-mixed-case",
-            upstreamExtras: "&ISS=" + Uri.EscapeDataString("https://example.auth0.com/"));
+            upstreamExtras: "&ISS=" + Uri.EscapeDataString("https://example-issuer.test/"));
 
         var issLike = QueryHelpers.ParseQuery(location.Query)
             .Where(kv => string.Equals(kv.Key, "iss", StringComparison.OrdinalIgnoreCase))
@@ -455,7 +456,7 @@ public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.F
             });
             // The proxy resolves the upstream endpoints from the provider's discovery document at
             // startup and refuses to boot without it, so a stub is mandatory here rather than a
-            // convenience — without one the host would try to reach example.auth0.com.
+            // convenience — without one the host would try to reach the configured authority.
             builder.ConfigureServices(services => services.UseStubDiscovery());
             return base.CreateHost(builder);
         }

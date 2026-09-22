@@ -2,7 +2,7 @@ namespace VitallyMcp;
 
 /// <summary>
 /// OAuth / OIDC configuration for the Vitally MCP server. Provider-agnostic — works with any
-/// OIDC-compliant authorization server (Auth0, Microsoft Entra, Keycloak, Okta, ...).
+/// OIDC-compliant authorization server (Microsoft Entra, Keycloak, Okta, ...).
 /// </summary>
 public class OAuthOptions
 {
@@ -10,7 +10,7 @@ public class OAuthOptions
 
     /// <summary>
     /// Issuer URL of the authorization server, used as JwtBearer Authority. Must include scheme.
-    /// Examples: <c>https://fiscal-it.uk.auth0.com/</c>, <c>https://login.microsoftonline.com/{tenant-id}/v2.0</c>.
+    /// Example: <c>https://login.microsoftonline.com/{tenant-id}/v2.0</c>.
     /// </summary>
     public string Authority { get; set; } = string.Empty;
 
@@ -22,10 +22,11 @@ public class OAuthOptions
     /// </summary>
     /// <remarks>
     /// <b>Not the same value as <see cref="Resource"/>, and must not be reconciled with it.</b> They
-    /// were equal under Auth0 by coincidence — that identifier happened to carry a trailing slash —
-    /// and differ by exactly that slash under Entra. Making them agree breaks token validation in one
-    /// direction and the RFC 9728 document in the other. On staging they differ by host as well,
-    /// because one app registration serves both origins.
+    /// differ by exactly one trailing slash: Entra refuses to register one on <c>identifierUris</c>,
+    /// while Claude Code normalises the published resource identifier <i>to</i> the slashed form.
+    /// Making them agree breaks token validation in one direction and the RFC 9728 document in the
+    /// other. On staging they differ by host as well, because one app registration serves both
+    /// origins.
     /// </remarks>
     public string Audience { get; set; } = string.Empty;
 
@@ -166,10 +167,11 @@ public class OAuthOptions
     /// </para>
     /// <para>
     /// So this is the provider switch, expressed as configuration rather than inferred from
-    /// <see cref="Authority"/>: leave it empty on Auth0, where the tenant's Resource Parameter
-    /// Compatibility Profile consumes the relayed <c>resource</c> and is the only thing binding the
-    /// audience; set it on Entra. Keeping it configuration is what keeps a cutover rollback a
-    /// revert of environment variables rather than a redeploy.
+    /// <see cref="Authority"/>. Empty is the RFC 8707 default — relay the resource indicator, which
+    /// is what a conforming provider expects and what binds the audience there. Set it on Entra,
+    /// which is the outlier. Both deployed targets set it; the empty posture is retained because it
+    /// keeps Entra's deviation a configured <i>value</i> rather than a branch in this code, which is
+    /// what lets this server front another provider without a change here (#156).
     /// </para>
     /// </remarks>
     public string UpstreamResourceScope { get; set; } = string.Empty;

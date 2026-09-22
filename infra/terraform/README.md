@@ -28,9 +28,7 @@ and DR-able.
   block in `providers.tf` and `terraform init -migrate-state`. (Local state works for the first pass.)
 - Secrets — supply via env (not committed):
   ```bash
-  export TF_VAR_oauth_shared_client_secret='…'          # Entra app secret — production
-  export TF_VAR_staging_oauth_shared_client_secret='…'  # Entra app secret — staging (same value)
-  export TF_VAR_auth0_rollback_client_secret='…'        # retained Auth0 secret — production rollback only
+  export TF_VAR_oauth_shared_client_secret='…'  # Entra app secret — BOTH targets
   export TF_VAR_teams_webhook_url='…'
   ```
   > ⚠️ Terraform persists these values in **state** even though the variables are `sensitive`. Always use a
@@ -42,9 +40,9 @@ and DR-able.
 > ⚠️ **`terraform apply` has never been run against this estate, and the standing rule is that it
 > must not be** (`.github/ISSUE_TEMPLATE/ops.yml`): `infra/terraform/` is back-filled documentation
 > of record and the live resources are managed with `az cli`. A plan against shared state would try
-> to reconcile production drift as a side effect of whatever you were doing — and since the 2026-09-16
-> flip that includes the OAuth secrets, where an apply could overwrite the retained Auth0 value and
-> take the rollback with it.
+> to reconcile production drift as a side effect of whatever you were doing — and that includes the
+> OAuth client secret, where an apply from a stale or wrong value overwrites what the app actually
+> sends.
 >
 > Adoption — actually importing this capture so Terraform becomes the source of truth — remains the
 > intended end state, and is described below as a **plan, not a runnable recipe**. It is deliberately
@@ -57,16 +55,18 @@ output is read line by line — it shows the imports from `imports.tf` plus any 
 means the capture disagrees with the live estate, which is a thing to investigate rather than
 reconcile. Only then the apply that performs the imports. Afterwards, comment out `imports.tf`.
 
-⚠️ Before any of that, confirm the OAuth secret layout: production carries **two** Container App
-secrets — `entra-oauth-client-secret` (live) and `oauth-shared-client-secret` (the retained Auth0
-value, which is what makes a production rollback free of a Key Vault window).
+⚠️ Before any of that, confirm the OAuth secret layout: each target carries **one** Container App
+secret, `entra-oauth-client-secret`, holding the same value — a **copy** of the Key Vault secret
+`entra-mcp-client-secret`, not a reference to it.
 
 Being precise about the hazard, because the obvious guess is wrong: *omitting*
-`auth0_rollback_client_secret` is safe — it has no default, so Terraform prompts or fails before it
-can change anything. What destroys the rollback is supplying the **wrong value** for it, most
-plausibly the Entra secret again out of muscle memory, which overwrites the Auth0 credential with a
-copy of the live one and leaves two names holding the same useless value. Applying a stale capture
-does the same by a different route. Read the plan output for both secrets by name before proceeding.
+`oauth_shared_client_secret` is safe — it has no default, so Terraform prompts or fails before it
+can change anything. What breaks sign-in is supplying a **wrong value**, most plausibly a stale one
+from a previous rotation, which overwrites what the app sends. That failure is invisible to the
+usual checks: the app boots, `/health` returns 200 and the unauthenticated `/mcp` still returns 401,
+because none of them exercises the credential. It surfaces only at `/oauth/token`, as
+`invalid_client`, for every user at once. Read the plan output for that secret by name before
+proceeding, and verify afterwards by signing in.
 
 A few resources need an ID looked up before their import block works (see notes in `imports.tf`):
 role assignments (`az role assignment list --scope <id> --query "[].id"`), diagnostic settings

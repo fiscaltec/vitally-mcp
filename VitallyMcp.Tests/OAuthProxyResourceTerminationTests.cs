@@ -11,16 +11,17 @@ using Microsoft.Extensions.Options;
 namespace VitallyMcp.Tests;
 
 /// <summary>
-/// The proxy with <c>OAuth:UpstreamResourceScope</c> set — the Entra posture (#105 part B / #108).
-/// The sibling proxy classes cover the Auth0 posture, where <c>resource</c> is validated and then
-/// relayed; here it is validated and then <b>terminated</b>, with the configured scope carrying the
-/// same meaning upstream.
+/// The proxy with <c>OAuth:UpstreamResourceScope</c> set — the Entra posture (#105 part B / #108),
+/// which both deployed targets run. The sibling proxy classes cover the relay posture, where
+/// <c>resource</c> is validated and then passed upstream per RFC 8707; here it is validated and then
+/// <b>terminated</b>, with the configured scope carrying the same meaning upstream.
 /// </summary>
 /// <remarks>
 /// A separate fixture rather than extra cases on the existing ones, because the switch is a
-/// composition-time option and the two postures must both stay pinned. Both targets terminate the
-/// parameter now — staging since 2026-09-03, production since 2026-09-16 — and the Auth0 relay is
-/// what a rollback returns to, so it stays covered here for as long as that rollback is retained.
+/// composition-time option and both postures must stay pinned. The relay half is not dead coverage:
+/// it is the RFC 8707 default, and keeping Entra's deviation a configured value rather than a branch
+/// in <c>Program.cs</c> is what lets this server front another provider without a code change
+/// (#156).
 /// </remarks>
 public class OAuthProxyResourceTerminationTests : IClassFixture<OAuthProxyResourceTerminationTests.Factory>
 {
@@ -196,7 +197,9 @@ public class OAuthProxyResourceTerminationTests : IClassFixture<OAuthProxyResour
         var scopes = doc.RootElement.GetProperty("scopes_supported")
             .EnumerateArray().Select(e => e.GetString()).ToArray();
         scopes.Should().Contain(ApiScope);
-        scopes.Should().NotContain("mcp.access", "the bare name is the Auth0 spelling and Entra rejects it");
+        scopes.Should().NotContain("mcp.access",
+            "Entra resolves an unqualified scope against Microsoft Graph, so the bare name yields a "
+            + "token for the wrong resource rather than a visible rejection");
     }
 
     public class Factory : WebApplicationFactory<Program>

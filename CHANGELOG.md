@@ -119,16 +119,17 @@ All notable changes to this project are documented here. Format based on
 - **Remote HTTP MCP server** using the streamable HTTP transport (MCP
   2025-06-18, stateless mode) on the `ModelContextProtocol.AspNetCore`
   package. Replaces the previous stdio transport.
-- **OAuth 2.0 protection** on the `/mcp` endpoint via JwtBearer, with
-  Auth0 as the authorisation server federating to Microsoft Entra for
-  FISCAL identity. Publishes a `/.well-known/oauth-protected-resource`
-  metadata document (RFC 9728) so MCP clients discover the authorisation
-  server automatically.
-- **In-process OAuth proxy** in front of the upstream Auth0 tenant
+- **OAuth 2.0 protection** on the `/mcp` endpoint via JwtBearer, with a
+  third-party authorisation server federating to Microsoft Entra for
+  FISCAL identity. (That intermediary was removed later — both targets
+  authenticate against Entra directly as of 2026-09-16.) Publishes a
+  `/.well-known/oauth-protected-resource` metadata document (RFC 9728) so
+  MCP clients discover the authorisation server automatically.
+- **In-process OAuth proxy** in front of the upstream provider
   (`/oauth/authorize`, `/oauth/callback`, `/oauth/token`, `/oauth/register`,
   `/.well-known/oauth-authorization-server`). Implements an RFC 7591
   Dynamic Client Registration shim that collapses every MCP client onto
-  one pre-registered first-party Auth0 app, skipping the per-session
+  one pre-registered first-party app, skipping the per-session
   consent screen and accepting any RFC 8252 loopback port. Configured via
   `OAuth:SharedClientId` + `OAuth:SharedClientSecret`.
 - **Forwarded-headers handling** for the Container Apps ingress so

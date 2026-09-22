@@ -94,7 +94,7 @@ catalogue filter all reuse it.
 
 ### SP4 — Safety / least-privilege rollout
 **Items:** P1.5 (and the "remove" half of P1.6 if SP1 chooses removal).
-**Files:** mostly **outside this repo** — Auth0 Action, Entra group assignments, Terraform/IaC;
+**Files:** mostly **outside this repo** — identity-provider configuration, Entra group assignments, Terraform/IaC;
 within the repo, an optional deploy-time "read-only mode".
 **Shape:** verify the RBAC backstop is actually enforced in the deployed revision
 (`Authorization:Enabled`, `LiveGroupCheck`), assign the reader/editor/admin Entra groups so CS

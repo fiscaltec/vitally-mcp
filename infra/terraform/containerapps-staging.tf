@@ -4,9 +4,9 @@
 # 2026-08-28), so this resource frequently describes something that does not currently exist — that
 # is the intended state, not drift to reconcile. Its import block in imports.tf therefore only
 # applies while the app is live; comment it out otherwise. Everything else staging needs (the CAE,
-# managed identity, ACR, Key Vault, DNS records, Auth0 Resource Server, GitHub environment and the
-# federated credential) is persistent scaffolding that deliberately survives a teardown — see the
-# teardown table in CLAUDE.md before deleting any of it.
+# managed identity, ACR, Key Vault, DNS records, the Entra app's staging redirect URI, GitHub
+# environment and the federated credential) is persistent scaffolding that deliberately survives a
+# teardown — see the teardown table in CLAUDE.md before deleting any of it.
 #
 # WHY IT EXISTS. Authentication has the largest blast radius in this system, so identity-provider
 # changes are validated here before production — which is what happened for the Entra migration
@@ -44,20 +44,17 @@ resource "azurerm_container_app" "staging" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # The SAME value as production's, under a different Container App secret name. Both targets run the
-  # one Entra app registration — staging since 2026-09-03, production since 2026-09-16 — so this and
-  # production's `entra-oauth-client-secret` hold the same secret. Production kept the name
-  # `oauth-shared-client-secret` for the retained *Auth0* value instead, which is what lets a
-  # production rollback change nothing but variables. Staging has only this one name, so a staging
-  # rollback must put its Auth0 secret back first — copied from production's Container App, NOT from
-  # Key Vault, which holds only entra-mcp-client-secret and vitally-shared. Commands in CLAUDE.md.
+  # The SAME value as production's, under the SAME name since #156 normalised it. Both targets run
+  # the one Entra app registration — staging since 2026-09-03, production since 2026-09-16 — so the
+  # value, the name and the variable are now shared, and a difference between the two captures should
+  # mean something rather than being a leftover.
   #
   # Handing the wrong secret to either app is not caught at startup: the app boots and /health passes.
-  # It surfaces at the token exchange as an authentication error from the provider, so sign-in fails for
-  # everyone while the app looks healthy. Collapse the variables and the names when Auth0 is retired
-  # (#102).
+  # It surfaces at the token exchange as an authentication error from the provider, so sign-in fails
+  # for everyone while the app looks healthy. That is why a secret change is verified by signing in,
+  # not by a health probe.
   secret {
-    name  = "oauth-shared-client-secret"
+    name  = "entra-oauth-client-secret"
     value = var.staging_oauth_shared_client_secret
   }
 
@@ -118,22 +115,26 @@ resource "azurerm_container_app" "staging" {
       }
       # Standing policy: a new identity provider goes to staging first and production follows only
       # once it has passed there. That is how the Entra move ran — staging 2026-09-03, production
-      # 2026-09-16, both complete — so the five IDENTITY variables now agree and are ready to be collapsed onto the
-      # oauth_* ones: authority, audience, upstream_resource_scope, shared_client_id and the secret
-      # value. NOT staging_oauth_resource or staging_public_base_url — each target publishes its own
-      # origin, and collapsing those makes staging advertise production's, which strict RFC 9728
-      # clients reject. Tracked in #102; not done here to keep this change to current-state
-      # corrections.
+      # 2026-09-16, both complete — so the five IDENTITY variables agree and were collapsed onto the
+      # shared oauth_* ones by #156 (closing #102): authority, audience, upstream_resource_scope,
+      # shared_client_id and the secret. During the NEXT such migration they diverge again, and the
+      # way to do that is to reintroduce a staging_* variable for the one setting under test rather
+      # than forking the whole set.
+      #
+      # NOT staging_oauth_resource and NOT staging_public_base_url — each target publishes its own
+      # origin, and sharing those would make staging advertise production's, which strict RFC 9728
+      # clients reject.
       env {
         name  = "OAuth__Authority"
-        value = var.staging_oauth_authority
+        value = var.oauth_authority
       }
-      # Note this is *production's* App ID URI: one Entra registration serves both origins, so a
-      # staging token's `aud` names production. Resource below must still name the staging origin,
-      # so here the two diverge by host as well as by slash. See variables.tf.
+      # Note this is *production's* App ID URI — the shared variable, deliberately: one Entra
+      # registration serves both origins, so a staging token's `aud` names production. Resource below
+      # must still name the staging origin, so here the two diverge by host as well as by slash.
+      # See variables.tf.
       env {
         name  = "OAuth__Audience"
-        value = var.staging_oauth_audience
+        value = var.oauth_audience
       }
       env {
         name  = "OAuth__Resource"
@@ -141,7 +142,7 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__UpstreamResourceScope"
-        value = var.staging_oauth_upstream_resource_scope
+        value = var.oauth_upstream_resource_scope
       }
       env {
         name  = "OAuth__NoAuth"
@@ -149,11 +150,11 @@ resource "azurerm_container_app" "staging" {
       }
       env {
         name  = "OAuth__SharedClientId"
-        value = var.staging_oauth_shared_client_id
+        value = var.oauth_shared_client_id
       }
       env {
         name        = "OAuth__SharedClientSecret"
-        secret_name = "oauth-shared-client-secret"
+        secret_name = "entra-oauth-client-secret"
       }
       env {
         name  = "OAuth__AllowedClientRedirectUris__0"

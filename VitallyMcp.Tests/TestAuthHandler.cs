@@ -24,7 +24,7 @@ public class TestAuthHandlerOptions : AuthenticationSchemeOptions
 /// <summary>
 /// Authenticates every request as a fixed principal holding <see cref="TestAuthHandlerOptions.Permissions"/>.
 /// Lets the integration tests exercise real policy evaluation and tools/list filtering without an
-/// Auth0 tenant or a real token.
+/// identity provider or a real token.
 /// </summary>
 public class TestAuthHandler(
     IOptionsMonitor<TestAuthHandlerOptions> options,

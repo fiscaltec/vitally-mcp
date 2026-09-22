@@ -76,9 +76,8 @@ public class StaleEntitlementCompositionTests
     public async Task GraphOutage_DeniesEvenACallerWhoseTokenClaimGrantsTheTier()
     {
         // The cutover half of the same story (#108). Before it, exhausting the stale window fell
-        // through to the Auth0 post-login Action's `permissions` claim. #108 removed that
-        // fall-through — see ToolAuthorizer's class remarks for what that did and did not change
-        // about the Action itself, which is the sort of detail that goes stale when restated.
+        // through to a `permissions` claim minted by the provider's sign-in hook. #108 removed that
+        // fall-through, and nothing mints such a claim today — so the tier is gone twice over.
         // What matters here: this principal carries the claim, and a version that still consulted
         // it would show the full tool list.
         using var harness = new Harness(memberOf: [AdminGroup], tokenPermissions:
@@ -143,7 +142,7 @@ public class StaleEntitlementCompositionTests
             Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
             Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
-            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
+            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example-issuer.test/");
             Environment.SetEnvironmentVariable("OAuth__Audience", "https://example.test/");
             Environment.SetEnvironmentVariable("Authorization__LiveGroupCheck", "true");
             Environment.SetEnvironmentVariable("Authorization__LiveGroupCacheSeconds", FreshSeconds.ToString());

@@ -22,7 +22,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 - **Scanner:** re-platform the Consumption Logic App → a VNet-integrated scanner. *(As-built: implemented as a Container Apps **Job** on `python:3-slim`, not a Function — see the As-built section.)*
 - **Cutover:** anytime / low-traffic; parallel-run old + new for rollback.
 - **Ingress stays external** (public) — only the *back-end dependencies* go private. Public
-  hostname `vitally.fiscaltec.com` is preserved, so **no Auth0/OAuth changes**.
+  hostname `vitally.fiscaltec.com` is preserved, so **no OAuth changes**.
 
 ## Target resources (subscription IT-Production `282207c6…`, RG `vitally-prod-rg-uksouth`, UK South)
 | Resource | Name | Notes |
@@ -31,7 +31,7 @@ environment + private endpoints, as a reusable *private-by-default* standard.
 | Subnet (env) | `snet-aca` | `10.80.0.0/27`, delegate `Microsoft.App/environments` |
 | Subnet (PE) | `snet-pe` | `10.80.0.32/28`, private-endpoint network policies disabled |
 | ~~Subnet (func)~~ | ~~`snet-func`~~ | **Never built** — the scanner became a Container Apps Job, which needs no subnet of its own |
-| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Auth0 (retained for the rollback only since the 2026-09-16 flip — egress kept so a rollback works), Vitally, Graph, Teams |
+| NAT Gateway | `vitally-prod-natgw-uksouth` (+ PIP) | static egress for the Container App and the `vitally-prod-secscan-uksouth` Job → `login.microsoftonline.com` (OIDC discovery + JWKS), Vitally, Graph, Teams |
 | Private DNS | `privatelink.vaultcore.azure.net` | linked to VNet |
 | Private DNS | `privatelink.azurecr.io` | linked to VNet |
 | KV private endpoint | `vitally-prod-pe-kv-uksouth` | in `snet-pe` |

@@ -56,7 +56,7 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
 
         // Syntactically valid JWT shape (header.payload.signature, all base64url) but an
         // unverifiable signature — enough to reach JwtBearerHandler's failed-validation path
-        // without needing a real Auth0 tenant.
+        // without needing a real identity provider.
         const string junkJwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.aW52YWxpZC1zaWduYXR1cmU";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
@@ -107,7 +107,7 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
         scopes.EnumerateArray().Select(e => e.GetString()).Should()
             .BeEquivalentTo(ProtectedResourceMetadataBuilder.BaseScopes.Append("mcp.access"),
                 "the advertised scopes must match the builder's list exactly, with no duplicates; "
-                + "this fixture leaves OAuth:UpstreamResourceScope unset, so the API scope is the bare Auth0 form");
+                + "this fixture leaves OAuth:UpstreamResourceScope unset, so the API scope is the bare, unqualified form");
     }
 
     [Theory]
@@ -143,7 +143,7 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
             Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
             Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
-            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
+            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example-issuer.test/");
             Environment.SetEnvironmentVariable("OAuth__Audience", "https://example.test/");
             Environment.SetEnvironmentVariable("OAuth__Resource", "https://example.test/");
             Environment.SetEnvironmentVariable("OAuth__PublicBaseUrl", "https://example.test");

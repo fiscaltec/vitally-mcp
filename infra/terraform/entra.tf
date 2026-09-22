@@ -1,6 +1,7 @@
 # Entra app registration for the Vitally MCP server (#107) — the OAuth client *and* the API
-# resource in one registration, replacing the Auth0 client + Resource Server pair at the #108
-# cutover.
+# resource in one registration. It has been the sole identity provider for both targets since the
+# #108 cutover (staging 2026-09-03, production 2026-09-16); the previous provider's objects were
+# decommissioned by #156.
 #
 # AS-BUILT CAPTURE, like the rest of this directory: the objects below were created with `az` /
 # Microsoft Graph on 2026-09-02 and are recorded here so they are reviewable and reproducible.
@@ -40,31 +41,31 @@ data "azuread_service_principal" "msgraph" {
 # display name, so these are provably the same groups that gate sign-in today and not merely
 # same-named ones.
 #
-# THIS LIST MUST EQUAL `FISCAL IT Auth0`'s ASSIGNMENTS EXACTLY, and it has drifted twice:
+# ⚠️ THIS LIST IS NOW THE ONLY RECORD OF WHO CAN SIGN IN. There is no second app to diff it
+# against: #156 decommissioned the previous provider, so the cross-check that existed during the
+# rollback window is gone and nothing detects an omission from this list.
+#
+# It drifted twice while that second app existed, and the history is worth keeping because the
+# failure mode survives the simplification:
 #
 #   2026-09-03  Development Department missing (15 members, reader tier via sg-vitally-readers)
 #   2026-09-15  Data Science Department missing (2 members, same tier) — onboarded in between
 #
 # Both would have been signed out at the #108 cutover with AADSTS50105. The second is the
 # informative one: the first was fixed by correcting this list and the runbook, and it happened
-# again twelve days later anyway — because ACCESS.md, the procedure admins actually follow, told
-# them to assign a department to `FISCAL IT Auth0` and named no other app. Both departments were
-# onboarded exactly as documented. ACCESS.md is corrected alongside this, and now tells admins to
-# assign a department to BOTH apps.
+# again twelve days later anyway — because ACCESS.md, the procedure admins actually follow, named
+# the wrong app. Both departments were onboarded exactly as documented.
 #
-# ⚠️ NO AUTOMATED CHECK EXISTS, AND NONE IS COMING. #134 proposed one and was closed `not planned`
-# on 2026-09-21 with the move to Entra-only: it is only useful while the Auth0 rollback is retained,
-# and needed an admin-consented Application.Read.All grant to build. So the control here is once
-# again a document — which is precisely what failed twice above. What makes that acceptable is that
-# the direction has inverted: onboarding now touches Entra, so `FISCAL IT Auth0` is the app that
-# goes stale, and the consequence is no longer "a department cannot sign in" but "a department
-# cannot sign in IF we ever roll back".
+# What makes the single-app state SAFER rather than more fragile: there is now exactly one place to
+# assign a department, ACCESS.md names it, and getting it wrong fails immediately and visibly at
+# that department's next sign-in rather than lying dormant until a cutover. The drift class that
+# produced both incidents — two apps that had to be kept identical by hand — no longer exists.
 #
-# So: diff the two apps immediately before any cutover or rollback, and never trust either document.
-# Once Auth0 is retired the cross-check is gone and this becomes the only record.
+# #134 proposed automating the parity check and was closed `not planned` on 2026-09-21, correctly:
+# it only ever made sense while both apps existed.
 variable "entra_gate1_group_object_ids" {
   type        = map(string)
-  description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate. Must match FISCAL IT Auth0's assignments while that app exists."
+  description = "Department groups assigned directly to the Vitally MCP app for the sign-in gate. The sole record of who can sign in — an omission here is an outage for that department."
   default = {
     "Product Department"                     = "012658dd-392f-4d84-af07-f97937f3a23e"
     "IT & Security Department"               = "6ba9bf61-e959-4dd9-8a96-d477a35b0d03"
@@ -89,7 +90,7 @@ resource "azuread_application" "vitally_mcp" {
   sign_in_audience = "AzureADMyOrg"
   owners           = [data.azuread_client_config.current.object_id]
 
-  notes = "OAuth client + API resource for the Vitally MCP server (github.com/fiscaltec/vitally-mcp). Replaces the Auth0 client + Resource Server pair. See issue #107."
+  notes = "OAuth client + API resource for the Vitally MCP server (github.com/fiscaltec/vitally-mcp). See issue #107."
 
   # No trailing slash — Entra refuses to register one (`IdentifierUrisEndsWithSlash` /
   # `ValueCannotEndWithSlash`). Clients still send the trailing-slash form as their RFC 8707
@@ -162,9 +163,10 @@ resource "azuread_application" "vitally_mcp" {
   }
 }
 
-# Pre-authorising the app for its own scope is what suppresses the consent screen — the equivalent
-# of Auth0's `skip_consent_for_verifiable_first_party_clients`, which the Vitally MCP Resource
-# Server sets today. Separate resource by necessity: see ordering constraint 2 in the header.
+# Pre-authorising the app for its own scope is what suppresses the per-user consent screen, together
+# with tenant-wide admin consent. Note this is NOT what authenticates the token exchange — that is
+# the injected client secret — and conflating the two invites removing the wrong setting.
+# Separate resource by necessity: see ordering constraint 2 in the header.
 resource "azuread_application_pre_authorized" "self" {
   application_id       = azuread_application.vitally_mcp.id
   authorized_client_id = azuread_application.vitally_mcp.client_id
@@ -176,8 +178,7 @@ resource "azuread_service_principal" "vitally_mcp" {
   owners    = [data.azuread_client_config.current.object_id]
 
   # Gate 1 — sign-in is restricted to principals assigned below. This app enforces it for both
-  # targets since the 2026-09-16 flip; `FISCAL IT Auth0` must keep an identical list only so a rollback
-  # does not lock anyone out.
+  # targets, and since #156 it is the only app that does.
   app_role_assignment_required = true
 }
 

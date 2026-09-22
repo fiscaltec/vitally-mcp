@@ -11,7 +11,7 @@ public class ToolAuthorizerTests
 {
     private const string AdminGroup = "70b48a20-d4b1-47dc-a132-21bc99272a86";
     private const string ReaderGroup = "71451cc9-f5df-44ee-8ed1-3acc41a911eb";
-    private const string SubWithOid = "waad|fiscal-entra|675ebdda-7590-4d79-8ec3-a2d17ab029ba";
+    private const string CallerOid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
 
     private sealed class StubResolver(IReadOnlySet<string>? result) : IGroupPermissionResolver
     {
@@ -49,9 +49,13 @@ public class ToolAuthorizerTests
     private static ClaimsPrincipal UserWithScope(string scope) =>
         new(new ClaimsIdentity(new[] { new Claim("scope", scope) }, "Test"));
 
-    private static ClaimsPrincipal UserWithSub(string sub, params string[] permissions)
+    /// <summary>
+    /// A principal carrying the <c>oid</c> claim, which is the only thing
+    /// <see cref="CallerIdentity"/> reads — a subject is never parsed for an object id (#156).
+    /// </summary>
+    private static ClaimsPrincipal UserWithOid(string oid, params string[] permissions)
     {
-        var claims = new List<Claim> { new("sub", sub) };
+        var claims = new List<Claim> { new("oid", oid) };
         claims.AddRange(permissions.Select(p => new Claim("permissions", p)));
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
     }
@@ -154,24 +158,26 @@ public class ToolAuthorizerTests
     public async Task LiveCheck_Allows_WhenLiveGroupsGrantPermission()
     {
         var resolver = new StubResolver(new HashSet<string> { "vitally:read", "vitally:write", "vitally:delete" });
-        var authorizer = Build(user: UserWithSub(SubWithOid), options: LiveOptions(), resolver: resolver);
+        var authorizer = Build(user: UserWithOid(CallerOid), options: LiveOptions(), resolver: resolver);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
-        resolver.LastObjectId.Should().Be("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "the oid is parsed from the sub");
+        resolver.LastObjectId.Should().Be(CallerOid, "the oid claim is what the resolver is keyed on");
     }
 
     [Fact]
-    public async Task LiveCheck_Engages_WhenSubIsMappedToNameIdentifier()
+    public async Task LiveCheck_Engages_WhenTheObjectIdArrivesUnderItsMappedClaimType()
     {
-        // Regression: JwtBearer maps "sub" -> ClaimTypes.NameIdentifier in production, so the live
-        // path must still find the object id from the mapped claim (no raw "sub" present here).
+        // Regression: JwtBearer's default inbound claim mapping can present `oid` under its
+        // WS-Federation URI instead of the short name. Which one arrives is a property of that
+        // mapping rather than of the token, so reading only the short name finds nothing in
+        // production while passing every test that mints it.
         var resolver = new StubResolver(new HashSet<string> { "vitally:read", "vitally:write", "vitally:delete" });
         var user = new ClaimsPrincipal(new ClaimsIdentity(
-            new[] { new Claim(ClaimTypes.NameIdentifier, SubWithOid) }, "Test"));
+            new[] { new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", CallerOid) }, "Test"));
         var authorizer = Build(user: user, options: LiveOptions(), resolver: resolver);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
-        resolver.LastObjectId.Should().Be("675ebdda-7590-4d79-8ec3-a2d17ab029ba");
+        resolver.LastObjectId.Should().Be(CallerOid);
     }
 
     [Fact]
@@ -179,7 +185,7 @@ public class ToolAuthorizerTests
     {
         // Live membership says read-only — must override a stale token claim that still has delete.
         var resolver = new StubResolver(new HashSet<string> { "vitally:read" });
-        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: resolver);
+        var authorizer = Build(user: UserWithOid(CallerOid, "vitally:delete"), options: LiveOptions(), resolver: resolver);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*vitally:delete*");
@@ -194,7 +200,7 @@ public class ToolAuthorizerTests
         // plainly grants delete. Asserting *with* the claim present is the whole point: a version
         // that still consulted it would pass a test written without one.
         var resolver = new StubResolver(null);
-        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: resolver);
+        var authorizer = Build(user: UserWithOid(CallerOid, "vitally:delete"), options: LiveOptions(), resolver: resolver);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*vitally:delete*");
@@ -203,9 +209,10 @@ public class ToolAuthorizerTests
     [Fact]
     public async Task LiveCheck_Denies_WhenNoObjectIdCanBeDetermined_EvenThoughTheTokenClaimWouldGrantIt()
     {
-        // Same fail-closed rule for the other way out of the live path. An Entra v2 token always
-        // carries `oid`, so a subject with no GUID in it is a malformed token rather than an
-        // un-entitled user — and before #108 it fell through to the claim, which here would allow.
+        // Same fail-closed rule for the other way out of the live path. An Entra token always
+        // carries `oid`, so a principal without one is a malformed token rather than an un-entitled
+        // user — and before #108 it fell through to the claim, which here would allow. The subject
+        // is deliberately present and deliberately not consulted (#156).
         var resolver = new StubResolver(new HashSet<string> { "vitally:delete" });
         var user = new ClaimsPrincipal(new ClaimsIdentity(
             new[] { new Claim("sub", "not-a-guid"), new Claim("permissions", "vitally:delete") }, "Test"));
@@ -222,7 +229,7 @@ public class ToolAuthorizerTests
         // The mode is chosen by the flag alone. Testing the resolver for null alongside it — which
         // is how this was first written — hands a miswired container back to the token claim, a
         // silent revert to the posture the cutover removed, by the one route nobody is watching.
-        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), options: LiveOptions(), resolver: null);
+        var authorizer = Build(user: UserWithOid(CallerOid, "vitally:delete"), options: LiveOptions(), resolver: null);
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete))
             .Should().ThrowAsync<UnauthorizedAccessException>();
@@ -239,7 +246,7 @@ public class ToolAuthorizerTests
         // itself, in exactly the logs someone is reading because authorisation is failing.
         var logger = new CapturingLogger<ToolAuthorizer>();
         var authorizer = Build(
-            user: UserWithSub(SubWithOid),
+            user: UserWithOid(CallerOid),
             options: LiveOptions(),
             resolver: noResolver ? null : new StubResolver(null),
             logger: logger);
@@ -262,7 +269,7 @@ public class ToolAuthorizerTests
         // Removing the fall-through must not remove the mode. With LiveGroupCheck off the token
         // claim is the entire resolution rather than a fallback beneath Graph, and a deployment
         // configured that way has to keep working.
-        var authorizer = Build(user: UserWithSub(SubWithOid, "vitally:delete"), resolver: new StubResolver(null));
+        var authorizer = Build(user: UserWithOid(CallerOid, "vitally:delete"), resolver: new StubResolver(null));
 
         await authorizer.Invoking(a => a.EnsureAuthorizedAsync(HttpMethod.Delete)).Should().NotThrowAsync();
     }

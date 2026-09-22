@@ -23,17 +23,18 @@ namespace VitallyMcp;
 /// sitting alongside an <c>oid</c> that resolves in one command.
 /// </para>
 /// <para>
-/// The <c>sub</c> fallback exists for Auth0-shaped subjects (<c>waad|connection|{objectId}</c>),
-/// which embed the same object id — so the value returned here is the <i>same GUID</i> under either
-/// provider. Historical Auth0-era audit records that stored the whole <c>sub</c> can therefore still
-/// be joined to current ones by taking the trailing GUID.
+/// <b>There is no <c>sub</c> fallback, and reinstating one would be wrong.</b> An Entra <c>sub</c>
+/// carries no object id in any form, so nothing could be recovered from it; a token with no
+/// <c>oid</c> yields <c>null</c> here and the caller fails closed. The federated-subject fallback
+/// this once had (<c>waad|connection|{objectId}</c>) existed for the previous identity provider,
+/// and was removed with it in #156.
 /// </para>
 /// </remarks>
 public static class CallerIdentity
 {
     /// <summary>
-    /// The caller's Entra object id (a GUID), or <c>null</c> when none can be determined — the
-    /// <c>oid</c> claim if present, else the trailing GUID of an Auth0-shaped <c>sub</c>.
+    /// The caller's Entra object id (a GUID) from the <c>oid</c> claim, or <c>null</c> when the
+    /// token carries none.
     /// </summary>
     public static string? TryGetObjectId(ClaimsPrincipal? user)
     {
@@ -42,27 +43,13 @@ public static class CallerIdentity
             return null;
         }
 
+        // Both spellings: JwtBearer's default inbound claim mapping rewrites some short claim names
+        // to their WS-Federation URIs, and which one arrives depends on that mapping rather than on
+        // the token. Checking only one finds nothing in production while passing every test that
+        // mints the other.
         var oid = user.FindFirst("oid")?.Value
             ?? user.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
-        if (!string.IsNullOrWhiteSpace(oid) && Guid.TryParse(oid, out _))
-        {
-            return oid;
-        }
 
-        // JwtBearer's default inbound claim mapping renames "sub" to ClaimTypes.NameIdentifier, so
-        // check both — otherwise the object id is never found in production and callers silently
-        // fall back to whatever their own null-handling does.
-        var sub = user.FindFirst("sub")?.Value
-            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (!string.IsNullOrWhiteSpace(sub))
-        {
-            var last = sub.Split('|', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-            if (last is not null && Guid.TryParse(last, out _))
-            {
-                return last;
-            }
-        }
-
-        return null;
+        return !string.IsNullOrWhiteSpace(oid) && Guid.TryParse(oid, out _) ? oid : null;
     }
 }

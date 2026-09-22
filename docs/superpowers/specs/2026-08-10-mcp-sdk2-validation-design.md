@@ -1,7 +1,17 @@
 # Validating MCP SDK 2.0 / spec 2026-07-28 adoption without affecting production — design
 
 **Date:** 2026-08-10
-**Status:** Approved
+**Status:** Approved; executed 2026-08-12
+
+> ⚠️ **Historical record, and its identity-provider detail is doubly out of date.** This document is
+> kept because `docs/runbooks/mcp-sdk2-staging-validation.md` executes from it, and for its
+> validation *method* — the three-layer structure and what each layer can and cannot reach. Read the
+> identity-provider specifics as illustrative only: when this was written and executed, sign-in ran
+> through a different provider, which #108 replaced with Entra (staging 2026-09-03, production
+> 2026-09-16) and #156 then decommissioned entirely. Those references have been **generalised rather
+> than corrected**, because no rewording would make a 2026-08 design accurately describe an
+> architecture that did not yet exist. For the current shape see `CLAUDE.md` and
+> `docs/runbooks/entra-app-registration.md`.
 
 ## Problem
 
@@ -43,9 +53,9 @@ does not progress until its layer's gate passes.
 
 The layers are deliberately unequal. **Layer 1 carries the load** — it is where correctness is
 actually established, because it is free, repeatable and runs on every PR. Layer 3 is expensive
-and manual, so it exists to confirm only what Layer 1 structurally cannot reach: real Auth0
-token issuance, real Entra group resolution through Graph, real Key Vault access via managed
-identity, and the behaviour of a real MCP client.
+and manual, so it exists to confirm only what Layer 1 structurally cannot reach: real token
+issuance by the identity provider, real Entra group resolution through Graph, real Key Vault access
+via managed identity, and the behaviour of a real MCP client.
 
 ### Sequencing
 
@@ -57,10 +67,11 @@ failure will already have been narrowed by test results before staging is inspec
 pushes — changes 1 and 2 (auth path) separately, then 3–6 together — to recover attribution.
 
 Staging is provisioned and baselined against current `main` **before** the branch is deployed to
-it. This is a required step, not an optional one: staging differs from production in its Auth0
-objects, managed identity, FQDN and `PublicBaseUrl`, so without a known-good baseline a
-connection failure is indistinguishable between "the metadata rework is broken" and "staging's
-Auth0 client is misconfigured". Both present identically — a client that will not connect.
+it. This is a required step, not an optional one: staging differed from production in its
+identity-provider objects, managed identity, FQDN and `PublicBaseUrl`, so without a known-good
+baseline a connection failure is indistinguishable between "the metadata rework is broken" and
+"staging's OAuth client is misconfigured". Both present identically — a client that will not
+connect.
 
 ## Layer 1 — in-process integration tests
 
@@ -175,10 +186,10 @@ read from `vitally-prod-ca-uksouth` on 2026-08-10.
 | `Authorization__ReadOnly` | `true` | **Hard-wired, not a variable.** Deliberate deviation — production does not set this (defaults `false`). Only guard against mutating real customer data. |
 | `Authorization__LiveGroupCheck` | `true` | **Matches production**, which runs `true` (verified). Same permission-resolution path, so no fidelity gap. |
 | `Authorization__ReaderGroupId` / `EditorGroupId` / `AdminGroupId` | same three Entra group ids as production | Permission tiers must resolve identically to live. |
-| `OAuth__Authority` | `https://fiscal-it.uk.auth0.com/` | Same tenant as production, different API. |
-| `OAuth__Audience` | new staging Resource Server identifier | Isolated from production's `https://vitally.fiscaltec.com/`. |
+| `OAuth__Authority` | the identity provider in use at the time | Same tenant as production, different API. |
+| `OAuth__Audience` | a staging-specific API identifier | Isolated from production's `https://vitally.fiscaltec.com/`. |
 | `OAuth__Resource` | same as staging `Audience` | Production sets this explicitly; staging must too. |
-| `OAuth__SharedClientId` / `SharedClientSecret` | new staging native client; secret via a Container App secret ref | Staging callback only. Production stores its secret as secret ref `oauth-shared-client-secret`. |
+| `OAuth__SharedClientId` / `SharedClientSecret` | a staging-specific OAuth client; secret via a Container App secret ref | Staging callback only. |
 | `OAuth__PublicBaseUrl` | staging ACA FQDN | Metadata documents must match the real origin. |
 | `OAuth__NoAuth` | `false` | Matches production. Auth is the point of this layer. |
 | `Vitally__Region` | `EU` | Matches production. |
@@ -193,19 +204,18 @@ Stated explicitly so the fidelity of the soak is known rather than assumed:
 |---|---|---|
 | `Authorization__ReadOnly=true` | One live Vitally tenant; no sandbox | Write paths unexercised on staging (see [Not covered](#not-covered)) |
 | `minReplicas=0` vs production `1` | Cost | Staging cold-starts; irrelevant to correctness, but do not read staging latency as representative |
-| Separate Auth0 API + client | Isolation | Token `aud` differs; the Action's namespaced claim may be absent |
+| Separate API + OAuth client at the provider | Isolation | Token `aud` differs; the provider's namespaced permissions claim may be absent |
 | Default ACA FQDN vs custom domain | Avoids DNS/cert work | `PublicBaseUrl` differs, which is itself worth exercising since the metadata documents are built from it |
 
 Everything else — region, vault, authority, group ids, `LiveGroupCheck`, `NoAuth` — matches
 production.
 
-### Auth0
+### Identity provider
 
-A **new Resource Server and new native client** in the existing `fiscal-it.uk.auth0.com` tenant,
-with the staging `/oauth/callback` as its only allowed callback. No production Auth0 object is
-modified.
+A **new API registration and new OAuth client** in the existing tenant, with the staging
+`/oauth/callback` as its only allowed callback. No production identity object is modified.
 
-Critically, **the post-login Action is not touched** — and this costs nothing, because production
+Critically, **the post-login hook is not touched** — and this costs nothing, because production
 runs `LiveGroupCheck=true`, meaning permissions already resolve from current Entra group
 membership through Graph rather than from the Action's token claim. Staging using the same
 setting is therefore *more* faithful to live, not less.
@@ -216,23 +226,23 @@ a tenant-wide object that runs on every production login — a poor trade for a 
 engages on Graph failure. It is therefore explicitly out of scope (see
 [Not covered](#not-covered)).
 
-Worth confirming in Auth0 while provisioning: if the Action is not audience-gated it will run for
-staging logins anyway and emit the `https://vitally.fiscaltec.com/permissions` claim regardless,
+Worth confirming at the provider while provisioning: if the hook is not audience-gated it will run
+for staging logins anyway and emit the `https://vitally.fiscaltec.com/permissions` claim regardless,
 in which case the fallback path is incidentally covered too. Either outcome is acceptable; no
 edit is made in response.
 
 ### Sequence
 
 1. Prerequisite check — **already complete**, passed 2026-08-10 (see above).
-2. Provision staging app, identity, role grants and Auth0 objects.
+2. Provision staging app, identity, role grants and identity-provider objects.
 3. **Baseline** — deploy the current `main` image. Gate: `/health` 200; unauthenticated `/mcp`
    401; a real MCP client completes the OAuth flow and lists tools.
 4. Deploy the feature-branch image. Gate: all of the above, plus `tools/list` differs by
    caller tier, the elicitation prompt appears on a destructive tool, and the TTL is present.
-5. Teardown — `az containerapp delete`, remove the identity and role grants, delete the Auth0
-   Resource Server and client.
+5. Teardown — `az containerapp delete`, remove the identity and role grants, delete the
+   staging-specific API registration and OAuth client.
 
-Teardown is recorded in the runbook rather than left to memory, since an orphaned Auth0 client
+Teardown is recorded in the runbook rather than left to memory, since an orphaned OAuth client
 and an unused managed identity are both standing security debt.
 
 ## Blast radius
@@ -257,9 +267,10 @@ Stated explicitly so these are accepted rather than assumed:
   layer.
 - **Entra revocation timing** under the 60-second `LiveGroupCacheSeconds` window. Testable on
   staging by removing oneself from a group, but slow; a manual spot-check, not a gate.
-- **The Auth0 Action claim fallback path.** Production uses it only when the Graph lookup fails.
-  Covering it would require editing a tenant-wide Action on the live login path; the trade is not
-  worth it. The primary Graph path is fully covered.
+- **The post-login-hook claim fallback path.** Production used it only when the Graph lookup
+  failed. Covering it would require editing a tenant-wide hook on the live login path; the trade is
+  not worth it. The primary Graph path is fully covered. (That fallback tier was removed outright by
+  #108 and no claim can authorise anyone today — see `ToolAuthorizer`.)
 - **Load and concurrency.** The 95-tool `tools/list` payload is measured but not load-tested.
   Note staging runs `minReplicas=0` against production's `1`, so it is not a valid latency
   comparison in any case.
@@ -270,7 +281,7 @@ Stated explicitly so these are accepted rather than assumed:
 |---|---|
 | ~~Private-endpoint reachability from a new Container App~~ | **Retired** — verified 2026-08-10, the environment is VNet-injected and both private DNS zones are linked to it |
 | Graph `GroupMember.Read.All` grant needs Global Administrator | PIM activation; the `infra-pims` skill covers this |
-| Orphaned staging Auth0 client / managed identity | Teardown step in the committed runbook |
+| Orphaned staging OAuth client / managed identity | Teardown step in the committed runbook |
 | Staging cost | Consumption plan, `minReplicas=0`, deleted after the soak |
 | `tools/list` wire-format assumption | Wire property names confirmed against the SDK before assertions are written |
 
