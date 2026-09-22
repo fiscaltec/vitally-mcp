@@ -681,8 +681,13 @@ personal data — see the policy section.
 
 Rows are in execution order, which is not numeric order. The issue column is the index: phase numbers
 here and issue numbers in GitHub are **different schemes**, and reading one as the other is what made
-this section hard to follow — #93 was titled "Phase 2" while being phase 7 of this document. Issue
-titles no longer carry phase numbers; the phase is stated in the issue body instead.
+this section hard to follow — #93 was titled "Phase 2" while being phase 7 of this document.
+
+⚠️ **Trust this column, not the issue title.** The *open* issues were retitled on 2026-09-22 to drop
+phase numbers, with the phase stated in the body instead — but **closed issues keep their original
+titles**, and one of them collides with this very table: **#92 is titled "Observability Phase 1" and
+is phase 0 here**, while phase 1 is #139. Retitling a closed issue would rewrite the record of what
+was actually done, so the collision is left in place and flagged rather than tidied away.
 
 | | Work | Issue | State |
 |---|---|---|---|
