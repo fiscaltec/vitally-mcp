@@ -1,8 +1,12 @@
 # Logging and observability — design (supersedes the 2026-08-11 spec)
 
-**Status:** proposed. **Supersedes** `2026-08-11-observability-design.md`, which is kept as a dated
-artefact. That spec's shape was right in outline and wrong in two load-bearing ways, both found on
-2026-09-17 once its own Phase 1 made the workspace readable for the first time:
+**Status:** partly implemented — phases 0, 1, 2a, 3 and 3a are done; 4 onwards are not. The
+*Phasing* table at the foot of this document is the current state and the map to the GitHub issues;
+it is the section to read first and the section to keep current.
+
+**Supersedes** `2026-08-11-observability-design.md`, which is kept as a dated artefact. That spec's
+shape was right in outline and wrong in two load-bearing ways, both found on 2026-09-17 once its own
+Phase 1 made the workspace readable for the first time:
 
 - it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server has ever
   reached Log Analytics.**
@@ -675,18 +679,51 @@ personal data — see the policy section.
 
 ## Phasing
 
-| | Work | Depends on |
-|---|---|---|
-| 0 | query path open | **done** 2026-09-17 |
-| 1 | audit reads by default | **done** — #139 / PR #140 |
-| 3 | logging configuration: noise + `HttpClient` PII | — |
-| **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | — |
-| **2b** | add **`ContainerAppConsoleLogs`** to that setting | 3, **4** |
-| **3a** | ✅ **Done 2026-09-21 (#146) — access review, a gate rather than a task.** Humans pass: 4 named IT administrators, elevated access PIM-gated, plus 2 by-design break-glass accounts. Gap is machine-side: 8 FISCAL-controlled service principals (2 with `Owner`, 1 a test app), 4 orphaned assignments, and an external MSP with `Owner`. Table-level RBAC found **unable** to help — RBAC is allow-only. See *Who can read this* | — |
-| 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id | 3, **3a** |
-| 5 | failure logging | 3 |
-| 6 | performance: durations, counters, tracing | 3 |
-| 7 | routing and retention per tier | **2a, 2b**, 4, measured volume |
+Rows are in execution order, which is not numeric order. The issue column is the index: phase numbers
+here and issue numbers in GitHub are **different schemes**, and reading one as the other is what made
+this section hard to follow — #93 was titled "Phase 2" while being phase 7 of this document.
+
+⚠️ **Trust this column, not the issue title.** The *open* issues were retitled on 2026-09-22 to drop
+phase numbers, with the phase stated in the body instead — but **closed issues keep their original
+titles**, and one of them collides with this very table: **#92 is titled "Observability Phase 1" and
+is phase 0 here**, while phase 1 is #139. Retitling a closed issue would rewrite the record of what
+was actually done, so the collision is left in place and flagged rather than tidied away.
+
+| | Work | Issue | State |
+|---|---|---|---|
+| 0 | query path open | #92 | ✅ **done** 2026-09-17 |
+| 1 | audit reads by default | #139 / PR #140 | ✅ **done** 2026-09-17 |
+| 3 | logging configuration: noise + `HttpClient` PII | #143 | ✅ **done** 2026-09-21 |
+| **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | #142 | ✅ **done** 2026-09-17 — and **still delivering**: 868 rows spanning 2026-09-17T18:25:09Z → 2026-09-22T11:38:18Z, re-checked 2026-09-22 |
+| **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | blocked on 3 ✅, **4** |
+| **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
+| 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | **ready** — 3 and 3a both done |
+| 5 | failure logging | #94 | **ready** — 3 done |
+| 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done |
+| 7 | routing and retention per tier | #93 | blocked on **2b**, **4**, measured volume (2a ✅) |
+| 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
+
+**3a in one line:** humans pass — 4 named IT administrators with elevated access PIM-gated, plus 2
+by-design break-glass accounts. The residual is machine-side: 8 FISCAL-controlled service principals
+(2 with `Owner`, 1 a test app) and an external MSP with `Owner`, none of them actioned. **4 orphaned
+principals** were also found, holding **14** assignments between them — **13 removed on 2026-09-21**,
+the 14th held because it sits at management-group scope; that one is a pending decision, not an open
+exposure, since nothing can authenticate as a deleted principal. Table-level RBAC was found
+**unable** to help — Azure RBAC is allow-only and cannot subtract from an inherited `*/read`.
+
+**Phase 8 is not designed in this document**, and that is the one gap in it. The Workbook layout and
+the seven alert rules live only in #159, which was split out of #94 on 2026-09-22 for that reason. If
+this document is ever treated as complete, start there.
+
+**Two fields were added to phase 4 on 2026-09-22** — `effectivePermissionTier` and `mcpClient` —
+recovered from #93 before its rescope. The first is the load-bearing one: `LiveGroupCheck` resolves
+entitlement from live Entra group membership, so entitlement at a past moment **cannot be
+reconstructed**, and a record written without it can never answer *"was this person entitled to do
+that at the time?"*. It is cheap while the record is being written and impossible afterwards — which
+is why it is called out here rather than left in an issue. Record alongside it whether the tier was
+served **stale** — `GraphGroupPermissionResolver` serves a retained set for up to
+`LiveGroupStaleSeconds` when Graph fails, so a stale tier is a weaker claim than a fresh one and a
+record that cannot tell them apart overstates its own confidence.
 
 ⚠️ **Console export is split out as 2b and gated, because the console stream carries customer
 identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in
