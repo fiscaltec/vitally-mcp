@@ -2,7 +2,7 @@
 
 The **sole** identity provider for this server. Live on **both** targets — staging since
 2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156 (its
-tenant objects are deleted in that issue's final step). It is **both** the shared OAuth client and the API resource, because that is what the
+previous provider's tenant objects were deleted 2026-09-22). It is **both** the shared OAuth client and the API resource, because that is what the
 proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
 valid `aud` as well as the `client_id`.
 
@@ -828,6 +828,6 @@ deliberately provider-neutral class. Tracked separately rather than bundled into
 
 Its client, both API registrations and its post-login hook were retained through the soak as a
 rollback path. **#156 abandoned that rollback**: nothing in this repository or on either Container
-App references them, and deleting the tenant objects is that issue's final step. Either way there is
-no supported second identity path for this server, which is what removes the two-app parity class of
-failure recorded under *Gate 1*.
+App references them, and the tenant objects were deleted on **2026-09-22**. There is no second
+identity path for this server, which is what removes the two-app parity class of failure recorded
+under *Gate 1* — and why that gate's assignment list is now the sole record of who can sign in.

@@ -299,7 +299,7 @@ mistaken for something this change caused.
 ## If something fails
 
 **There is no provider rollback.** #156 abandoned it — no configuration here or on either Container
-App references the previous provider, and its tenant objects are deleted in that issue's final step. So a
+App references the previous provider, and its tenant objects were deleted on 2026-09-22. So a
 failure here is fixed forwards — by correcting the Entra app registration, the group assignments or
 the Container App configuration — not by reverting to another provider. The five `OAuth__*` values
 each target runs are in `CLAUDE.md`.
