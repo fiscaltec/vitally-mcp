@@ -457,8 +457,10 @@ because neither half is usable alone.
 conforming provider that is the relayed `resource`, consumed at the tenant; under Entra it is the
 scope. Dropping `resource` without the scope leaves the token bound
 to nothing; adding the scope while still relaying `resource` is the failure below. Hence one switch,
-and hence it is **configuration rather than a check on `OAuth:Authority`** — which is what keeps a
-rollback a revert of environment variables.
+and hence it is **configuration rather than a check on `OAuth:Authority`** — which is what keeps the
+provider difference a value this server can be pointed at another provider with, rather than a branch
+in `Program.cs`. It is a portability property, not an operational fallback: there is no rollback, and
+an identity failure is fixed forwards (#156).
 
 **Relaying `resource` to Entra is a hard failure, and the reason is not the one #105/#107 recorded.**
 Verified against the live tenant on 2026-09-02 by driving `/oauth2/v2.0/authorize` directly:

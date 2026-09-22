@@ -608,8 +608,7 @@ carries on, walking a failed roll straight through the sign-in and into the irre
 a failing `verify_target` exits the subshell `rc=1` and the following step never runs; the same
 text fed inline to `bash -c` printed the mismatch and **carried on to the next step with `rc=0`**,
 because bash's final-command optimisation changes `set -e` semantics there. The protection is real
-but it is not in the characters — it is in how you invoke them. Same reasoning as the staging
-rollback subshell in `CLAUDE.md`.
+but it is not in the characters — it is in how you invoke them.
 
 ```bash
 (
