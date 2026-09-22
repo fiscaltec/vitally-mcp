@@ -22,7 +22,7 @@ public static class StubOidcDiscovery
     /// Issuer the stub speaks for. Every factory that stubs discovery must configure this same value
     /// as <c>OAuth:Authority</c>, or the resolver refuses the document.
     /// </summary>
-    public const string Issuer = "https://example.auth0.com/";
+    public const string Issuer = "https://example-issuer.test/";
 
     public const string AuthorizationEndpoint = "https://login.example-idp.com/tenant-id/oauth2/v2.0/authorize";
     public const string TokenEndpoint = "https://login.example-idp.com/tenant-id/oauth2/v2.0/token";

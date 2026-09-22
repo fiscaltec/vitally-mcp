@@ -2,9 +2,10 @@
 #
 # ⚠⚠ ADOPTION HAS NEVER BEEN PERFORMED, AND `terraform apply` MUST NOT BE RUN HERE. The standing
 # rule is in .github/ISSUE_TEMPLATE/ops.yml: this directory is back-filled documentation of record
-# and the live resources are managed with `az cli`. Since the 2026-09-16 flip that includes the
-# OAuth secrets — production carries TWO, and the retained Auth0 one is what keeps a rollback free
-# of a Key Vault window. An apply from incomplete or stale variables destroys it.
+# and the live resources are managed with `az cli`. That includes the OAuth client secret, which
+# each target holds as a COPY of a Key Vault value rather than a reference to it — so an apply from
+# incomplete or stale variables overwrites what the app actually sends, and sign-in fails while
+# /health keeps passing.
 #
 # These resources ALREADY EXIST (deployed manually). Adopting them so Terraform becomes the source
 # of truth remains the intended end state, but it is a separately approved migration rather than a
@@ -194,7 +195,7 @@ import {
 #                       "https://vitally-prod-cmk-uksouth.vault.azure.net/keys/acr-cmk/<version>"
 # DNS vnet links / NAT associations: see README for the composite ID formats.
 
-# ---- 2026-09-02: Entra app registration replacing the Auth0 client + Resource Server (#107) ----
+# ---- 2026-09-02: Entra app registration — the OAuth client and API resource (#107) ----
 # Created via `az` / Microsoft Graph; entra.tf is the as-built capture. Entra imports take the
 # object's own id, not an ARM resource id, and the app/SP ids are DIFFERENT objects — using the
 # appId for the application import silently adopts nothing.

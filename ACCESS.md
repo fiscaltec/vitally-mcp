@@ -87,23 +87,21 @@ Entra enterprise application: only users whose **department group** is assigned 
 your department isn't assigned, the Microsoft sign-in fails and you never reach the server —
 regardless of any `sg-vitally-*` membership.
 
-> ⚠️ **There are currently two such apps, and a department must be assigned to BOTH.**
+> ✅ **There is exactly ONE such app: `Vitally MCP`.** It gates sign-in on both production and
+> staging.
 >
-> | App | Role |
-> |---|---|
-> | **Vitally MCP** | gates sign-in on **both** production and staging |
-> | **FISCAL IT Auth0** | no longer gates sign-in — retained as the rollback, so it must stay at parity |
+> This used to be two apps that had to be kept identical by hand, and assigning only one was the
+> single most common way to break access here — it happened twice, because this page named the wrong
+> one. A department assigned to just one app worked perfectly **until** the server was switched to
+> the other, and then that whole department was refused at sign-in with `AADSTS50105`.
 >
-> Assigning only one is the single most common way to break access here, and it has happened twice —
-> because this page used to name only *FISCAL IT Auth0*. A department assigned to just one app works
-> perfectly **until** the server is switched to the other, and then that whole department is refused
-> at sign-in with `AADSTS50105`. Neither app tells you the other is missing.
->
-> Assign to both until IT confirms the Auth0 app has been retired, at which point this note goes.
+> The second app was decommissioned in September 2026, so that failure mode no longer exists. If you
+> find another app that looks like it gates this server, it does not — check with the Infrastructure
+> team before assigning anything to it.
 
-So access requires **both**: your department assigned to the sign-in app(s) above, **and** membership
+So access requires **both**: your department assigned to the sign-in app above, **and** membership
 of an `sg-vitally-*` group (permission tier). The assigned departments can be verified live in
-Entra → Enterprise applications → *(each app)* → Users and groups, which is the authority — the IT
+Entra → Enterprise applications → **Vitally MCP** → Users and groups, which is the authority — the IT
 helpdesk article *Vitally MCP – access & administration (IT)* is a copy and has been wrong before.
 
 > **Direct assignment only (important).** The app requires assignment
@@ -113,8 +111,7 @@ helpdesk article *Vitally MCP – access & administration (IT)* is a copy and ha
 > itself** to the app (the dynamic `*-Department` groups qualify, since their members are direct
 > members). Nesting a department inside an `sg-vitally-*` group grants the *tier* but **not**
 > sign-in, so a team needs both: the department nested in `sg-vitally-editors`/etc. **and** that
-> same department directly assigned to **each** sign-in app listed above — *FISCAL IT Auth0* and
-> *Vitally MCP*. Assigning one is the mistake this page previously caused twice.
+> same department directly assigned to the **Vitally MCP** app.
 
 ## Getting access
 
@@ -123,12 +120,16 @@ granted, access appears within about a minute — no need to reconnect or sign i
 
 **As an admin:** granting access is two independent steps, and both are required.
 
-### 1. Sign-in (Gate 1) — assign the department to *both* apps
+### 1. Sign-in (Gate 1) — assign the department to the app
 
-Entra → Enterprise applications → **Vitally MCP** → Users and groups, *and* the same under
-**FISCAL IT Auth0**. Assign the department group to **every** app it is missing from; see the
-warning above for why missing one is invisible until the day it is not. The scripted version, which
-is idempotent and safe to re-run, is in `docs/runbooks/entra-app-registration.md`.
+Entra → Enterprise applications → **Vitally MCP** → Users and groups. Assign the department group
+there. The scripted version, which is idempotent and safe to re-run, is in
+`docs/runbooks/entra-app-registration.md`.
+
+⚠️ **Nothing detects an omission.** This assignment list is the only record of who can sign in, so a
+department left off it simply cannot reach the server. The failure is at least immediate and
+visible now — that department's next sign-in fails with `AADSTS50105` — rather than lying dormant
+until a provider switch, which is how the two historical incidents stayed hidden.
 
 ### 2. Tier (Gate 2) — grant, change or revoke
 
@@ -230,7 +231,7 @@ request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is
 
 - **Sign-in:** Microsoft Entra, directly, on both production and staging (production since 2026-09-16). FISCAL staff sign in with their normal Microsoft account.
 - **Authorisation:** the server resolves your `vitally:*` permissions from your **live** Entra group membership (via Microsoft Graph, evaluated transitively so nested groups count) on each call — so access reflects your *current* groups, not a stale token.
-- **Auditing:** every action is logged against the acting user. That is their Entra object id where one can be resolved — a GUID, resolvable with `az ad user show --id` — falling back to the raw token subject, then `NameIdentifier`, then `unknown`; an unauthenticated caller records as `anonymous`. The fallbacks matter for the retained Auth0 rollback path, whose tokens carry no object id. ⚠️ **Not queryable yet** — the records are written to stdout and no export has ever delivered one to Log Analytics or Application Insights (verified 2026-09-17, tracked in #142). Treat the trail as existing but unretained until that lands. **Planned, not yet built:** the agreed design adds tool arguments to the record — which will include names or email addresses that were searched for — so the trail can say which customer was accessed. Today there are three record shapes: an **action** (per upstream call — actor, method, resource path, status); a **service denial** (actor, method, path, *no status* — the call never happened); and a **tier denial**, rejected before any upstream call, carrying the actor, tool name and required permission but no method or path. See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`.
+- **Auditing:** every action is logged against the acting user. That is their Entra object id where one can be resolved — a GUID, resolvable with `az ad user show --id` — falling back to the raw token subject, then `NameIdentifier`, then `unknown`; an unauthenticated caller records as `anonymous`. Those fallbacks should not fire in practice, since an Entra token always carries an object id; a record keyed on anything but a GUID means an unexpected token shape. ⚠️ **Not queryable yet** — the records are written to stdout and no export has ever delivered one to Log Analytics or Application Insights (verified 2026-09-17, tracked in #142). Treat the trail as existing but unretained until that lands. **Planned, not yet built:** the agreed design adds tool arguments to the record — which will include names or email addresses that were searched for — so the trail can say which customer was accessed. Today there are three record shapes: an **action** (per upstream call — actor, method, resource path, status); a **service denial** (actor, method, path, *no status* — the call never happened); and a **tier denial**, rejected before any upstream call, carrying the actor, tool name and required permission but no method or path. See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`.
 - **Hosting:** Azure Container Apps + Azure Key Vault (holds the Vitally key) on `vitally.fiscaltec.com`.
 
 Group membership is managed in Entra by the IT & Security team. Questions: contact the Infrastructure team.

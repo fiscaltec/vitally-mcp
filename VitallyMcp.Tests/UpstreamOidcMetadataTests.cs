@@ -8,7 +8,7 @@ namespace VitallyMcp.Tests;
 
 /// <summary>
 /// The OAuth proxy used to build its four upstream URLs by concatenating provider-specific path
-/// shapes onto <c>OAuth:Authority</c>, which only ever produced Auth0's. These tests pin the
+/// shapes onto <c>OAuth:Authority</c>, which only ever produced one provider's. These tests pin the
 /// replacement: the values come from the provider's own discovery document, that document has to
 /// speak for the configured issuer, they are reused rather than refetched, and an unusable document
 /// is a loud failure rather than a plausible-looking wrong URL.
@@ -60,7 +60,7 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
         await resolver.GetAsync();
 
         handler.RequestedUrls.Should().ContainSingle()
-            .Which.Should().Be("https://example.auth0.com/.well-known/openid-configuration");
+            .Which.Should().Be("https://example-issuer.test/.well-known/openid-configuration");
     }
 
     [Theory]
@@ -68,8 +68,8 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
     [InlineData("https://example-idp.com/tenant-id/v2.0")]
     public void DiscoveryUrlFor_DoesNotDoubleTheSlashOnATrailingSlashAuthority(string authority)
     {
-        // Auth0 issuers conventionally carry a trailing slash and Entra's do not, so both shapes
-        // reach this code in practice.
+        // Providers differ on whether their issuer carries a trailing slash — Entra's does not — so
+        // both shapes reach this code in practice.
         UpstreamOidcMetadata.DiscoveryUrl(authority)
             .Should().Be("https://example-idp.com/tenant-id/v2.0/.well-known/openid-configuration");
     }
@@ -218,8 +218,8 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
 
     [Theory]
     [InlineData("https://attacker.example.com/")]
-    [InlineData("https://example.auth0.com.evil.test/")]
-    [InlineData("https://example.auth0.com/tenant")]
+    [InlineData("https://example-issuer.test.evil.test/")]
+    [InlineData("https://example-issuer.test/tenant")]
     public void Parse_RejectsADocumentSpeakingForADifferentIssuer(string declaredIssuer)
     {
         // OIDC Discovery §4.3 — the same anti-mix-up control as RFC 8414 §3.3. The discovery client
@@ -233,13 +233,13 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
     }
 
     [Theory]
-    [InlineData("https://example.auth0.com/", "https://example.auth0.com")]
-    [InlineData("https://example.auth0.com", "https://example.auth0.com/")]
+    [InlineData("https://example-issuer.test/", "https://example-issuer.test")]
+    [InlineData("https://example-issuer.test", "https://example-issuer.test/")]
     public void Parse_ToleratesATrailingSlashDifferenceOnTheIssuer(string declaredIssuer, string configuredAuthority)
     {
-        // Auth0 issuers conventionally carry the slash and Entra's do not, so configuration drifts by
-        // exactly one character in practice. Tolerating that much — and nothing else — absorbs the
-        // drift without weakening the check.
+        // Providers differ by exactly that one character — Entra's issuer carries no slash — so
+        // configuration drifts by it in practice. Tolerating that much, and nothing else, absorbs
+        // the drift without weakening the check.
         var document = StubOidcDiscovery.BuildDocument(issuer: declaredIssuer);
 
         var act = () => UpstreamOidcMetadata.Parse(document, DiscoveryUrl, configuredAuthority);

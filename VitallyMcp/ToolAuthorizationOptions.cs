@@ -47,12 +47,9 @@ public class ToolAuthorizationOptions
     /// </summary>
     /// <remarks>
     /// <b>Consulted only when <see cref="LiveGroupCheck"/> is false.</b> It exists for the
-    /// namespaced-custom-claim convention (Auth0 required custom claims to be namespaced on a domain
-    /// you control). The Auth0 post-login Action that mints it is retained for the #108 rollback
-    /// window, but nothing reaches it: both deployed targets authenticate against Entra directly, so
-    /// this claim is absent from their tokens rather than merely ignored. Either way
-    /// <see cref="LiveGroupCheck"/> is true on every deployed target, so nothing reads this value
-    /// and no claim can grant access.
+    /// namespaced-custom-claim convention, which some providers require of claims they mint. Nothing
+    /// mints it for this server: <see cref="LiveGroupCheck"/> is true on every deployed target, so
+    /// this value is never read and no claim can grant access.
     /// See <see cref="ToolAuthorizer"/>.
     /// </remarks>
     public string CustomPermissionsClaim { get; set; } = "https://vitally.fiscaltec.com/permissions";
@@ -65,12 +62,10 @@ public class ToolAuthorizationOptions
     ///
     /// On a Graph failure the caller's last known-good permission set is served for up to
     /// <see cref="LiveGroupStaleSeconds"/>; when there is no such copy the call is <b>denied</b>.
-    /// There is no third tier: #108 removed the fall-through to the token claim. Note that is a
-    /// change to what this server <i>reads</i>, not to what the provider mints — the Auth0 Action
-    /// still exists, though nothing reaches it while both targets sign in against Entra directly, so
-    /// a rollback to Auth0 would not restore the tier either. Never
-    /// fail-open: an empty set denies just as a missing one does. Requires the server's managed
-    /// identity to hold Microsoft Graph <c>GroupMember.Read.All</c>.
+    /// There is no third tier: #108 removed the fall-through to the token claim, and nothing mints a
+    /// permissions claim for this server in any case. Never fail-open: an empty set denies just as a
+    /// missing one does. Requires the server's managed identity to hold Microsoft Graph
+    /// <c>GroupMember.Read.All</c>.
     /// </summary>
     public bool LiveGroupCheck { get; set; }
 

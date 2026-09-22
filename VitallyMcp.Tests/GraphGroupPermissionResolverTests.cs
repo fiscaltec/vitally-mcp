@@ -224,10 +224,11 @@ public class GraphGroupPermissionResolverTests : IDisposable
     }
 
     // ---- Serve-stale-on-error (#106) ----------------------------------------------------------
-    // Once Auth0 is retired, Graph is the sole source of entitlement, so a Graph outage would deny
-    // every user. These cover the replacement fallback: the last known-good result for that user,
-    // served for a bounded window. Note the claim fall-through *below* this still exists while Auth0
-    // is live — removing it is #108's job, so nothing here asserts a denial in its place.
+    // Graph is the sole source of entitlement, so a Graph outage would otherwise deny every user.
+    // These cover the fallback that prevents that: the last known-good result for that user, served
+    // for a bounded window. #108 removed the claim fall-through that once sat below it, so beyond
+    // the window the answer is a denial — see StaleEntitlementCompositionTests, which drives that
+    // through the composed host.
 
     [Fact]
     public async Task ServesStaleResult_WhenGraphFails_AfterAnEarlierSuccess()

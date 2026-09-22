@@ -59,18 +59,27 @@ public class AuditLoggerTests
     }
 
     [Fact]
-    public void LogAction_AttributesAnAuth0SubjectToTheSameObjectId()
+    public void CallerIdentity_DoesNotMineAnObjectIdOutOfAFederatedSubject()
     {
-        // The join across the cutover. An Auth0 federated subject embeds the same object id, so both
-        // providers attribute to one value and a user's history is continuous rather than splitting
-        // into two unrelated identifiers at the migration.
-        var (audit, logger) = Build(user: AuthenticatedUser(
-            email: null, sub: "waad|fiscal-entra|675ebdda-7590-4d79-8ec3-a2d17ab029ba"));
+        // Regression guard for #156. The previous identity provider issued federated subjects shaped
+        // `waad|connection|{objectId}`, and CallerIdentity used to split on '|' and take the trailing
+        // GUID. Nothing mints that shape for this server any more, so the fallback was removed — and
+        // reinstating it would resolve an object id out of a value an attacker-influenced token could
+        // shape, for no gain. A token with no `oid` must resolve to null and the caller must fail
+        // closed.
+        var user = AuthenticatedUser(
+            email: null, sub: "waad|fiscal-entra|675ebdda-7590-4d79-8ec3-a2d17ab029ba");
 
+        CallerIdentity.TryGetObjectId(user).Should().BeNull(
+            "only the oid claim names the directory object; a subject is not parsed for one");
+
+        // The audit record still attributes, because AuditLogger's own raw-subject fallback catches
+        // it — recording the whole opaque subject rather than a GUID extracted from it.
+        var (audit, logger) = Build(user: user);
         audit.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200);
 
         logger.Entries.Should().ContainSingle().Subject.Message
-            .Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba");
+            .Should().Contain("waad|fiscal-entra|675ebdda-7590-4d79-8ec3-a2d17ab029ba");
     }
 
     [Fact]
@@ -113,14 +122,14 @@ public class AuditLoggerTests
     [Fact]
     public void LogAction_RecordsUserVerbAndResource_ForMutations()
     {
-        var (audit, logger) = Build(user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
+        var (audit, logger) = Build(user: AuthenticatedUser("alice@fiscaltec.com", "opaque-subject-123"));
 
         audit.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1?limit=20", 200);
 
         logger.Entries.Should().ContainSingle();
         var (level, message) = logger.Entries[0];
         level.Should().Be(LogLevel.Information);
-        message.Should().Contain("auth0|123", "the stable subject id is the audit actor key");
+        message.Should().Contain("opaque-subject-123", "the stable subject id is the audit actor key");
         message.Should().NotContain("alice@fiscaltec.com", "email must not be written to the audit log");
         message.Should().Contain("DELETE");
         message.Should().Contain("/resources/accounts/acc-1");
@@ -144,7 +153,7 @@ public class AuditLoggerTests
     [Fact]
     public void LogAction_SkipsReads_WhenIncludeReadsDisabled()
     {
-        var (audit, logger) = Build(includeReads: false, user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
+        var (audit, logger) = Build(includeReads: false, user: AuthenticatedUser("alice@fiscaltec.com", "opaque-subject-123"));
         audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/accounts", 200);
         logger.Entries.Should().BeEmpty();
     }
@@ -152,7 +161,7 @@ public class AuditLoggerTests
     [Fact]
     public void LogAction_LogsReads_WhenIncludeReadsEnabled()
     {
-        var (audit, logger) = Build(includeReads: true, user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
+        var (audit, logger) = Build(includeReads: true, user: AuthenticatedUser("alice@fiscaltec.com", "opaque-subject-123"));
         audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/accounts", 200);
         logger.Entries.Should().ContainSingle();
     }
@@ -160,7 +169,7 @@ public class AuditLoggerTests
     [Fact]
     public void LogAction_NoOp_WhenDisabled()
     {
-        var (audit, logger) = Build(enabled: false, user: AuthenticatedUser("alice@fiscaltec.com", "auth0|123"));
+        var (audit, logger) = Build(enabled: false, user: AuthenticatedUser("alice@fiscaltec.com", "opaque-subject-123"));
         audit.LogAction(HttpMethod.Post, "https://rest.vitally-eu.io/resources/accounts", 201);
         logger.Entries.Should().BeEmpty();
     }
@@ -168,14 +177,14 @@ public class AuditLoggerTests
     [Fact]
     public void LogDenied_RecordsWarning_WithUser()
     {
-        var (audit, logger) = Build(user: AuthenticatedUser("bob@fiscaltec.com", "auth0|999"));
+        var (audit, logger) = Build(user: AuthenticatedUser("bob@fiscaltec.com", "opaque-subject-999"));
 
         audit.LogDenied(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1");
 
         logger.Entries.Should().ContainSingle();
         var (level, message) = logger.Entries[0];
         level.Should().Be(LogLevel.Warning);
-        message.Should().Contain("auth0|999", "the stable subject id is the audit actor key");
+        message.Should().Contain("opaque-subject-999", "the stable subject id is the audit actor key");
         message.Should().NotContain("bob@fiscaltec.com", "email must not be written to the audit log");
         message.Should().Contain("DENIED");
     }
@@ -218,7 +227,7 @@ public class AuditLoggerTests
     {
         var (audit, logger) = Build(enabled: false);
 
-        audit.LogToolCallDenied(AuthenticatedUser(null, "auth0|123"), "Delete_account", "vitally:delete");
+        audit.LogToolCallDenied(AuthenticatedUser(null, "opaque-subject-123"), "Delete_account", "vitally:delete");
 
         logger.Entries.Should().BeEmpty();
     }

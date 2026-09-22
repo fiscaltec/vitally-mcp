@@ -5,7 +5,7 @@
 > **Every command below is superseded.** This records a validation executed on 2026-08-12 and is kept
 > only because the Layer 2/3 evidence is the basis for the SDK 2.0 adoption sign-off. It is not a
 > procedure, and following its section headings will provision infrastructure that does not exist in
-> the current estate — notably the Auth0 client in step 2.5, replaced by the Entra app registration.
+> the current estate — notably the identity-provider client in step 2.5, which is no part of it.
 >
 > | If you came here to… | Go to |
 > |---|---|
@@ -25,12 +25,12 @@ by the test suite — this runbook is for the two layers that are not.
 > found. Both gates passed: the baseline (production image) showed a bare `Bearer` challenge and a 404
 > on the `/mcp`-suffixed metadata path, and the branch image showed the `resource_metadata` pointer and
 > 200 on both paths — with the status staying exactly 401 throughout. A real MCP client completed the
-> Auth0→Entra flow, listed 56 tools, and successfully invoked a read tool that fetched the Vitally key
+> OAuth sign-in flow, listed 56 tools, and successfully invoked a read tool that fetched the Vitally key
 > from Key Vault via managed identity. Teardown completed and production verified unaffected.
 
 > **Read this in full before running anything.** Section 3 provisions a real Container App
 > against production's Key Vault and ACR. Section 5 (teardown) is not optional — skipping it
-> leaves an orphaned Auth0 client and an unused managed identity as standing security debt.
+> leaves an orphaned OAuth client and an unused managed identity as standing security debt.
 
 ## Prerequisite check — already passed
 
@@ -103,7 +103,7 @@ Graph grant in step 2.3).
 > provider`. This silently cost two role-assignment grants on the first run.
 
 **Each block below redeclares the shell variables it needs**, rather than relying on variables
-set by an earlier block. Creating the Auth0 client (step 2.5) happens in the portal, between
+set by an earlier block. Creating the OAuth client (step 2.5) happened in the portal, between
 blocks — treat every block as if it is starting a fresh shell session, because in practice it
 will be.
 
@@ -209,14 +209,14 @@ az containerapp create -g "$RG" -n "$APP" --environment "$CAE" \
     "Authorization__EditorGroupId=19b9d659-284c-4f93-b1c3-a6354db1027c" \
     "Authorization__AdminGroupId=70b48a20-d4b1-47dc-a132-21bc99272a86" \
     "OAuth__NoAuth=false" \
-    "OAuth__Authority=https://fiscal-it.uk.auth0.com/" \
+    "OAuth__Authority=<the identity provider issuer of the time>" \
     "OAuth__Audience=https://placeholder.invalid/CORRECTED-IN-STEP-2.5"
 
 FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
 echo "Staging FQDN: https://$FQDN"
 ```
 
-Note the FQDN — it is needed to create the Auth0 objects in step 2.5, and that block re-derives
+Note the FQDN — it was needed to create the identity-provider objects in step 2.5, and that block re-derives
 it independently rather than relying on this shell's `$FQDN` surviving.
 
 > **Why the audience is a deliberate placeholder.** `OAuthOptions.Validate()` throws
@@ -229,56 +229,17 @@ it independently rather than relying on this shell's `$FQDN` surviving.
 > only checks the audience is non-empty. **Step 2.5 must overwrite it** — if it is left in place,
 > every token validation fails on audience mismatch.
 
-### 2.5 Configure Auth0 and finish wiring
+### 2.5 Configure the identity provider and finish wiring
 
-Create the Auth0 Resource Server and application, mirroring production — read the production
-objects first rather than trusting this list, since Auth0 defaults differ from what the proxy needs.
+**This section is removed rather than updated.** It described provisioning a staging API
+registration and OAuth client at the identity provider in use in August 2026, which #156
+decommissioned. Rewriting it to name Entra would not make it correct either: the current estate uses
+**one** Entra app registration serving both origins, with no staging-specific client to create, so
+the procedure has no equivalent rather than a changed one.
 
-**Resource Server (API):**
-
-- Identifier: `https://<staging FQDN>/` — **with a trailing slash.** MCP clients request the audience
-  in that form, and production's identifier (`https://vitally.fiscaltec.com/`) carries one for exactly
-  this reason. Omitting it produces `access_denied: Service not found: https://<FQDN>/` at sign-in, and
-  **Auth0 API identifiers are immutable**, so getting it wrong costs a second API. `OAuth__Audience`
-  must then match it character-for-character.
-- `signing_alg: RS256`, `allow_offline_access: true`, `token_lifetime: 28800`
-- `skip_consent_for_verifiable_first_party_clients: true` — this is what suppresses the consent screen
-- `enforce_policies: true`, and the four scopes `mcp.access`, `vitally:read`, `vitally:write`,
-  `vitally:delete`
-- **A client grant is then mandatory**, because `enforce_policies: true` pairs with
-  `require_client_grant`. Without it, token requests fail.
-
-**Application — `app_type: regular_web` with `token_endpoint_auth_method: client_secret_post`.**
-Not a native app: the proxy injects the client secret server-side, so this must be a *confidential*
-client. Auth0 defaults a Native app to `token_endpoint_auth_method: none`, which cannot accept the
-injected secret. Also set `oidc_conformant: true`, `is_first_party: true`, grant types
-`authorization_code` and `refresh_token`, and the single allowed callback
-`https://<staging FQDN>/oauth/callback`.
-
-**Enable the Entra connection on the new application.** Connections are enabled per-application in
-Auth0, so a new app does not inherit it. Without this, sign-in fails before ever reaching the server.
-
-Then apply the remaining settings:
-
-```bash
-set -euo pipefail
-RG=vitally-prod-rg-uksouth
-APP=vitally-staging-ca-uksouth
-FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
-
-az containerapp secret set -g "$RG" -n "$APP" \
-  --secrets "oauth-shared-client-secret=<staging client secret>"
-
-az containerapp update -g "$RG" -n "$APP" --set-env-vars \
-  "OAuth__Audience=https://$FQDN/" \
-  "OAuth__Resource=https://$FQDN/" \
-  "OAuth__PublicBaseUrl=https://$FQDN" \
-  "OAuth__SharedClientId=<staging client id>" \
-  "OAuth__SharedClientSecret=secretref:oauth-shared-client-secret"
-```
-
-`<staging client secret>` and `<staging client id>` come from the Auth0 application created
-above. **Never paste the actual secret into a committed file** — supply it at the prompt only.
+Nothing after it depended on those details — the gates in sections 3 and 4 assert the server's own
+behaviour, not the provider's. For the current shape see `docs/runbooks/entra-app-registration.md`,
+and for validating an identity change `docs/runbooks/entra-cutover-staging-validation.md`.
 
 ## 3. Baseline gate
 
@@ -291,7 +252,7 @@ it explicitly). Verify:
 
 Do not proceed to the change gate until all three pass. Without this baseline, a connection
 failure on the branch image is indistinguishable between "the change broke it" and "staging's
-Auth0 client is misconfigured" — both look identical from the client's side.
+OAuth client is misconfigured" — both look identical from the client's side.
 
 ## 4. Change gate
 
@@ -344,40 +305,30 @@ This is expected, not a defect. Per-caller filtering is proven by
 only control preventing a validation run from mutating real customer records, because there is one
 live Vitally tenant and no sandbox.
 
-### Note: a non-production audience gets no Auth0 `permissions` claim
+### Note: a non-production audience got no `permissions` claim
 
-The post-login Action `Vitally MCP claims` begins with
+**Historical, and no longer reachable.** The provider's post-login hook minted the `permissions`
+claim only for production's audience, so a staging-specific audience got none. That mattered in
+August 2026 because `ToolAuthorizer` could still fall back to the token claim; #108 removed that
+fall-through and #156 removed the hook with the rest of that provider, so no claim can authorise
+anyone today regardless of audience.
 
-```js
-if (event.resource_server?.identifier !== 'https://vitally.fiscaltec.com/') return;
-```
+What survives is the diagnostic, which is still the right first move and has the same cause:
 
-so **no `permissions` claim is minted for any audience except production's** — including the staging
-Resource Server that section 2.5 creates. What that causes depends on which resolution path is live,
-and the two outcomes look nothing alike:
+> **An empty `tools/list` does not implicate the code under test.** It means the live-group path is
+> not working — check the §2.3 Graph grant first, since a missing `GroupMember.Read.All` fails
+> silently to exactly this state. Observed on 2026-08-22 while validating #90.
 
-| Configuration | Result |
-|---|---|
-| `LiveGroupCheck=true` **and** the Graph grant from §2.3 in place — the staging config in §2.4 | Entitlement resolves from **live Entra group membership**, independently of the claim. A group member sees their tier's tools; the missing claim is invisible. Normal. |
-| `LiveGroupCheck` off (the code default), or the Graph lookup failing/ungranted | `ToolAuthorizer` falls back to the token claim, finds nothing, and filters **every** tool out of `tools/list`. |
-
-So an empty tool list here does **not** implicate the code under test. It means the live-group path
-is not working *and* the claim is absent — check the §2.3 Graph grant first, since a missing
-`GroupMember.Read.All` fails silently to exactly this state. Observed on 2026-08-22 while validating
-#90, on a run that had deliberately left `LiveGroupCheck` at its default.
-
-Read the inverse carefully too: **a populated tool list is not evidence the Action ran.** Under
-§2.4's configuration it only proves live Entra membership resolved.
+Read the inverse carefully too: a populated tool list only proves live Entra membership resolved.
 
 To isolate the rest of the path from authorisation entirely, set `Authorization__Enabled=false` and
-re-list — `ReadOnly=true` still hides the destructive tools, so expect 56. Do **not** widen the
-Action's audience guard instead: that edits a production Action for the sake of a temporary API.
+re-list — `ReadOnly=true` still hides the destructive tools, so expect 56.
 
 ### Optional: validating the tier split against real Entra groups
 
 Only if you specifically want to see tier filtering working against live group membership rather
 than synthetic test principals. `tools/list` makes no Vitally API call at all, so this needs a valid
-Auth0 token and group membership — not a working Vitally key.
+token and group membership — not a working Vitally key.
 
 > **Read this warning before running anything below.** Staging deliberately reuses **production's
 > Key Vault** (`vitally-prod-kv-uksouth`, set in step 2.4) and, because
@@ -444,7 +395,7 @@ Skip this step unless you need it. The in-process test covers the same invariant
 
 ## 5. Teardown
 
-**Mandatory, not optional.** An orphaned Auth0 client and an unused managed identity are both
+**Mandatory, not optional.** An orphaned OAuth client and an unused managed identity are both
 standing security debt — do not leave this for later.
 
 ```bash
@@ -473,12 +424,11 @@ The Microsoft Graph `GroupMember.Read.All` app-role assignment needs no separate
 managed identity removes its service principal, and the assignment with it. Delete it explicitly only
 if you tore down in a different order.
 
-**Then in Auth0, via the dashboard** (the Auth0 MCP tools expose no delete for these):
+**Then, at the identity provider:** delete the staging-specific OAuth client and API registration
+that step 2.5 created. Neither is part of the current estate — #156 decommissioned that provider — so
+this applies only to a historical run, and is kept because an orphaned OAuth client is exactly the
+standing security debt this section exists to prevent.
 
-- the staging **application** — this also removes its client grants, and if the client secret was ever
-  pasted anywhere, **deleting the application is what invalidates it**
-- the staging **Resource Server (API)** — and check whether there is more than one. Identifiers are
-  immutable, so a wrong audience on the first attempt leaves an orphaned API behind.
 
 Confirm the production client `VgB00WSYN2V0KkhtYx3WZXYH9XRBvK1D` and the API
 `https://vitally.fiscaltec.com/` are untouched.

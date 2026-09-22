@@ -26,19 +26,13 @@ namespace VitallyMcp;
 /// select mode 2 — it denies, because a miswired container silently reverting to token claims is
 /// exactly the posture this arrangement exists to rule out.</para>
 ///
-/// <para>The token claim used to sit beneath the stale cache as a third tier in mode 1. It was the
-/// Auth0 post-login Action's <c>permissions</c> claim, and while it was consulted it genuinely
-/// authorised — which is why #106 added the stale cache beneath it rather than in place of it. #108
-/// removed the fall-through. Note what that did and did not change, because the two live states differ:
-/// <b>today</b>, both targets sign in against Entra directly, so no Auth0 Action is in the path and the
-/// claim is simply <i>absent</i> from their tokens; <b>after an Auth0 rollback</b> the Action runs again
-/// and mints the claim <i>on production</i> — its guard returns before adding one for staging's Resource
-/// Server, so a staging rollback stays claim-less — but a minted claim is still <i>unread</i>, because
-/// <see cref="ToolAuthorizationOptions.LiveGroupCheck"/> stays on and #108 removed the only route from
-/// that mode to the claim. Unminted now, unreachable then — either way the tier does not come back, and
-/// a rollback restores the Action without restoring the fall-through. Keeping
-/// the fall-through would have left code that reads like a working fallback and behaves like a silent
-/// denial; the explicit deny below says what actually happens, and logs why.</para>
+/// <para>The token claim used to sit beneath the stale cache as a third tier in mode 1, minted by a
+/// sign-in hook at the identity provider, and while it was consulted it genuinely authorised — which
+/// is why #106 added the stale cache beneath it rather than in place of it. #108 removed the
+/// fall-through, and nothing mints such a claim for this server today, so the tier is gone twice
+/// over. Keeping the fall-through would have left code that reads like a working fallback and
+/// behaves like a silent denial; the explicit deny below says what actually happens, and logs
+/// why.</para>
 /// </summary>
 public class ToolAuthorizer
 {

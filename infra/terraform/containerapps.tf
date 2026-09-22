@@ -54,22 +54,16 @@ resource "azurerm_container_app" "app" {
     identity = azurerm_user_assigned_identity.app.id
   }
 
-  # TWO secrets, and both are load-bearing. `entra-oauth-client-secret` is what the app uses;
-  # `oauth-shared-client-secret` still holds the **Auth0** client secret and is the reason a
-  # rollback needs no Key Vault window. The 2026-09-16 flip added the Entra value under a new name
-  # rather than overwriting the Auth0 one, precisely so the old value survived.
+  # ONE secret. Staging holds the same value under the same name (#156 normalised it), so the two
+  # captures read alike — which is the point: a difference between them should mean something.
   #
-  # Do not "tidy" these into one. Collapsing them discards the rollback credential, and this
-  # capture would then no longer reproduce the live app — which is the point of it existing.
-  # They merge when Auth0 is retired (#102).
+  # The name records provenance deliberately. This is a COPY of the Key Vault secret
+  # `entra-mcp-client-secret`, not a reference to it, so rotating the vault copy alone changes
+  # nothing the app sends (#138). A provider-neutral name would hide the Entra credential behind it
+  # and the 2027-03-01 expiry that comes with it.
   secret {
     name  = "entra-oauth-client-secret"
     value = var.oauth_shared_client_secret
-  }
-
-  secret {
-    name  = "oauth-shared-client-secret"
-    value = var.auth0_rollback_client_secret
   }
 
   ingress {
@@ -131,13 +125,13 @@ resource "azurerm_container_app" "app" {
         value = var.oauth_audience
       }
       # Deliberately a different variable from OAuth__Audience — see the note on oauth_resource in
-      # variables.tf. They were one value on Auth0 by coincidence and must not be reunified.
+      # variables.tf. They differ by exactly one trailing slash and must not be reunified.
       env {
         name  = "OAuth__Resource"
         value = var.oauth_resource
       }
       # Terminates the RFC 8707 `resource` parameter at the proxy and names the API by scope
-      # instead. Required under Entra; empty is the Auth0 relay behaviour a rollback returns to.
+      # instead. Required under Entra; empty is the RFC 8707 relay default, which Entra rejects.
       env {
         name  = "OAuth__UpstreamResourceScope"
         value = var.oauth_upstream_resource_scope

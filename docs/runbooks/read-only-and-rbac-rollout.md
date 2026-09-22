@@ -118,40 +118,27 @@ The server-side RBAC backstop already exists (`ToolAuthorizer` maps HTTP verb �
    > each department that should have access must be **directly assigned** to that app as well as
    > nested into its `sg-vitally-*` tier.
    >
-   > ⚠️ **There are two such apps — `FISCAL IT Auth0` and `Vitally MCP` — and a department must be
-   > assigned to BOTH** while the #108 migration keeps one as the rollback path. Naming only the
-   > Auth0 app here is what caused two departments to be onboarded one-sidedly; each would have lost
-   > access entirely at the cutover. See `ACCESS.md` (canonical) for the full model, and
-   > `docs/runbooks/entra-app-registration.md` for the parity check.
-3. **Auth0 token claim — retained configuration, NOT a fallback.** The Auth0 post-login Action
-   `Vitally MCP claims` maps Entra group membership to the `vitally:*` permissions and writes them
-   to the namespaced `Authorization:CustomPermissionsClaim`. **Nothing consults that claim on any
-   deployed target, and nothing has since #108 deployed.** With `LiveGroupCheck=true` — set
-   everywhere — the order is **fresh Graph → stale Graph → deny**, and `ToolAuthorizer` has no
-   route from the live mode to the claim mode, including when the resolver is absent, which
-   denies. So during a Graph outage this claim authorises nobody. What covers an outage is
-   `LiveGroupStaleSeconds` (default 1 h) serving each caller's last known-good tier; past that,
-   calls are denied.
+   > That app is **`Vitally MCP`**, and since #156 it is the only one — there was briefly a second
+   > that had to be kept identical by hand, and naming the wrong one here caused two departments to
+   > be onboarded one-sidedly. See `ACCESS.md` (canonical) for the full model.
+   >
+   > ⚠️ Its assignment list is now the **only** record of who can sign in, and nothing detects an
+   > omission. A department left off it cannot reach the server.
+3. **There is no token-claim tier, and nothing mints one.** `Authorization:CustomPermissionsClaim`
+   still exists as a setting, but with `LiveGroupCheck=true` — set on every deployed target — the
+   order is **fresh Graph → stale Graph → deny**, and `ToolAuthorizer` has no route from the live
+   mode to the claim mode, including when the resolver is absent, which denies. #108 removed that
+   fall-through and #156 removed the provider hook that used to mint the claim, so the tier is gone
+   twice over. What covers a Graph outage is `LiveGroupStaleSeconds` (default 1 h) serving each
+   caller's last known-good tier; past that, calls are denied.
 
-   It is kept solely so an Auth0 rollback restores a working *sign-in* path, and it goes with the
-   rest of the Auth0 configuration when that is retired. Do not reinstate it as a safety net —
-   a fall-through that can only ever deny reads like a working fallback and behaves like a silent
-   denial, which is why #108 removed it.
-
-   > **If it is ever revived, it has a nested-group defect to fix first.** The Action reads
-   > `event.user.group_ids` / `event.user.groups` from the Auth0 Entra (waad) connection, and those
-   > are **direct** memberships. Every tier but `sg-vitally-admins` is granted by nesting, so the
-   > claim would under-grant almost everyone. Either emit transitive security-group memberships on
-   > the Entra app registration feeding the waad connection, or have the Action resolve
-   > `transitiveMembers` via Graph — which is exactly what step 2's live check already does.
+   Do not reinstate a claim fall-through as a safety net — one that can only ever deny reads like a
+   working fallback and behaves like a silent denial, which is why #108 removed it.
 4. **Verify on the live revision:** with a reader token, a write returns the RBAC denial; with an
    editor token, writes succeed but deletes are denied; with admin, all tiers succeed. Confirm
-   denials appear in the audit log — keyed by the caller's Entra **object id**, resolved `oid`-first
-   and falling back to the trailing GUID of an Auth0-shaped `sub` (`waad|connection|{objectId}`).
-   That fallback is no longer a live path — neither target signs in through Auth0 since the 2026-09-16 flip —
-   but it is retained for the rollback window, and it yields the *same GUID* either way — which is what lets an Auth0-era
-   record join an Entra-era one. Only when neither is derivable is the raw subject used. See
-   `CallerIdentity` and #127. Expect **`LogToolCallDenied`**, not `LogDenied`: the SDK
+   denials appear in the audit log — keyed by the caller's Entra **object id** from the `oid` claim.
+   An Entra token always carries one, so a record keyed on anything else means an unexpected token
+   shape; only then is the raw subject used. See `CallerIdentity` and #127. Expect **`LogToolCallDenied`**, not `LogDenied`: the SDK
    authorisation filter rejects an out-of-tier call at the per-tool `[Authorize]` checkpoint, before
    `VitallyService.SendAsync` runs, and `LogDenied` is only reached from inside `SendAsync`. Looking
    for the wrong event is indistinguishable from the denial not being audited at all.

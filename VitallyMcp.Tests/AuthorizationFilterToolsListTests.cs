@@ -56,7 +56,7 @@ public class AuthorizationFilterToolsListTests
         Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
         Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
         Environment.SetEnvironmentVariable("Vitally__Region", "EU");
-        Environment.SetEnvironmentVariable("OAuth__Authority", noAuth ? null : "https://example.auth0.com/");
+        Environment.SetEnvironmentVariable("OAuth__Authority", noAuth ? null : "https://example-issuer.test/");
         Environment.SetEnvironmentVariable("OAuth__Audience", noAuth ? null : "https://example.test/");
 
         try
@@ -205,7 +205,7 @@ public class AuthorizationFilterToolsListTests
         Environment.SetEnvironmentVariable("Authorization__ReadPermission", "vitally:read ");
         try
         {
-            // The caller holds the *trimmed* permission, as a real Auth0/Entra principal would.
+            // The caller holds the *trimmed* permission, as a real Entra principal would.
             var names = await ToolNamesAsync(noAuth: false, permissions: ["vitally:read"]);
 
             names.Should().Contain(n => n.StartsWith("List_", StringComparison.Ordinal),

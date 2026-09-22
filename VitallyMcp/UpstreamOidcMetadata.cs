@@ -26,7 +26,8 @@ public sealed record UpstreamOidcEndpoints(
 /// </summary>
 /// <remarks>
 /// <para>
-/// Concatenation only ever worked for Auth0. Entra hangs its endpoints off
+/// Concatenation only ever worked for a provider that hangs every endpoint off one prefix. Entra
+/// does not: it hangs its endpoints off
 /// <c>{authority}/oauth2/v2.0/…</c> while its issuer is <c>{authority}/v2.0</c>, and its
 /// <c>userinfo_endpoint</c> lives on <c>graph.microsoft.com</c> entirely — so no choice of
 /// <c>Authority</c> yields all four. The discovery <em>path</em> is the one part that is genuinely
@@ -205,9 +206,9 @@ public sealed class UpstreamOidcMetadata(
         }
 
         // Trailing slashes are normalised on both sides and nothing else is: the comparison stays a
-        // literal string match per the spec. Auth0 issuers conventionally carry the slash and
-        // Entra's do not, so tolerating exactly that much absorbs configuration drift without
-        // weakening the control.
+        // literal string match per the spec. Providers differ on whether their issuer carries the
+        // slash — Entra's does not — so tolerating exactly that much absorbs configuration drift
+        // without weakening the control.
         var published = value.GetString()!.Trim().TrimEnd('/');
         var expected = (expectedIssuer ?? string.Empty).Trim().TrimEnd('/');
 

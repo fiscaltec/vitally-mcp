@@ -1,5 +1,5 @@
 name: Ops / infrastructure
-description: Azure, deployment, configuration, or identity-provider (Entra / Auth0) work
+description: Azure, deployment, configuration, or identity-provider (Entra) work
 title: "chore: <short description>"
 labels: ["ops", "status: ready"]
 
@@ -68,7 +68,7 @@ body:
     id: teardown
     attributes:
       label: Teardown
-      description: If this creates temporary resources, what must be removed and in what order — role assignments before identities, and any Entra or Auth0 objects. Say so if not applicable.
+      description: If this creates temporary resources, what must be removed and in what order — role assignments before identities, and any Entra objects. Say so if not applicable.
     validations:
       required: false
 

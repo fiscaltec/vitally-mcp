@@ -181,7 +181,7 @@ public class OAuthOptionsTests
     {
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             AllowedClientRedirectUris = ["not-a-uri"]
         };
@@ -203,7 +203,7 @@ public class OAuthOptionsTests
         // IsRedirectUriAllowed's RFC 8252 exemption and never needs to be listed.
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             AllowedClientRedirectUris = [entry]
         };
@@ -232,7 +232,7 @@ public class OAuthOptionsTests
         // check alone would have been inert where it matters most.
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             Resource = resource
         };
@@ -250,7 +250,7 @@ public class OAuthOptionsTests
         // `aud` value but not a resource identifier, and it must not be published as one.
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "11111111-2222-3333-4444-555555555555"
         };
 
@@ -344,13 +344,15 @@ public class OAuthOptionsTests
         options.IsResourceIndicatorAllowed("https://anything.example.com/").Should().BeTrue();
     }
 
-    // ---- UpstreamResourceScope: the Auth0-relay / Entra-terminate switch (#105 part B, #108) ----
+    // ---- UpstreamResourceScope: the relay / Entra-terminate switch (#105 part B, #108) ----
 
     [Fact]
     public void TerminatesResourceParameter_IsFalse_WhenNoUpstreamScopeIsConfigured()
     {
-        // The Auth0 posture, and the default: `resource` is relayed, because the tenant's Resource
-        // Parameter Compatibility Profile consuming it is the only thing binding the audience there.
+        // The default, and the RFC 8707 behaviour: `resource` is relayed, because for a conforming
+        // provider the relayed indicator is the only thing binding the audience. Entra is the
+        // outlier that needs this set — which is why the deviation is a configured value here and
+        // not a branch in Program.cs (#156).
         new OAuthOptions().TerminatesResourceParameter.Should().BeFalse();
     }
 
@@ -361,7 +363,7 @@ public class OAuthOptionsTests
         // whitespace would smuggle extra scopes into every authorize request this server makes.
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             SharedClientId = "test-client-id",
             UpstreamResourceScope = "https://api.example.com/mcp.access openid"
@@ -376,7 +378,7 @@ public class OAuthOptionsTests
     {
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             SharedClientId = "test-client-id",
             UpstreamResourceScope = "  https://api.example.com/mcp.access  "
@@ -422,7 +424,7 @@ public class OAuthOptionsTests
         // conclude from the metadata document that termination is happening.
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             UpstreamResourceScope = "https://api.example.com/mcp.access"
         };
@@ -462,7 +464,7 @@ public class OAuthOptionsTests
     {
         var options = new OAuthOptions
         {
-            Authority = "https://example.auth0.com/",
+            Authority = "https://example-issuer.test/",
             Audience = "https://api.example.com",
             AllowedClientRedirectUris = allowedRedirectUris
         };

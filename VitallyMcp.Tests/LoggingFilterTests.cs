@@ -299,7 +299,7 @@ public class LoggingFilterTests
             Environment.SetEnvironmentVariable("Authorization__ReadOnly", "false");
             Environment.SetEnvironmentVariable("Vitally__DevelopmentApiKey", "sk_test_dummy");
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
-            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example.auth0.com/");
+            Environment.SetEnvironmentVariable("OAuth__Authority", "https://example-issuer.test/");
             Environment.SetEnvironmentVariable("OAuth__Audience", "https://example.test/");
 
             using var baseFactory = new WebApplicationFactory<Program>();

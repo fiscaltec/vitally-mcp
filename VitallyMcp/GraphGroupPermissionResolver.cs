@@ -206,7 +206,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         return member;
     }
 
-    // Cumulative tiers, mirroring the Auth0 post-login Action: admin ⊇ editor ⊇ reader.
+    // Cumulative tiers: admin ⊇ editor ⊇ reader.
     private HashSet<string> MapGroupsToPermissions(HashSet<string> memberGroupIds)
     {
         var permissions = new HashSet<string>(StringComparer.Ordinal);

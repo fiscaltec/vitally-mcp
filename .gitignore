@@ -128,8 +128,5 @@ appsettings.*.json
 ehthumbs.db
 [Dd]esktop.ini
 
-# Auth0 credentials
-.auth0-shared-credentials.env
-
 # Superpowers SDD scratch (ledger, briefs, review packages)
 .superpowers/

@@ -76,8 +76,8 @@ public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardT
     [Fact]
     public async Task Token_ForwardsAMatchingResourceUnchanged()
     {
-        // Same reasoning as /oauth/authorize: validated here, still relayed, because Auth0's
-        // compatibility profile consumes it and nothing else binds the token's audience.
+        // Same reasoning as /oauth/authorize: validated here, then relayed, because this fixture
+        // leaves OAuth:UpstreamResourceScope unset and nothing else binds the token's audience.
         using var client = _factory.CreateClient();
 
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
