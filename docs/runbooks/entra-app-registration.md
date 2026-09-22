@@ -1,10 +1,10 @@
 # Entra app registration — Vitally MCP (#107)
 
 The **sole** identity provider for this server. Live on **both** targets — staging since
-2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156 (its
-tenant objects are deleted in that issue's final step). It is **both** the shared OAuth client and the API resource, because that is what the
-proxy's `SharedClientId` / `SharedClientSecret` model expects — which is also why its appId is a
-valid `aud` as well as the `client_id`.
+2026-09-03, production since 2026-09-16; the previous provider was decommissioned by #156, and its
+tenant objects were deleted on 2026-09-22. It is **both** the shared OAuth client and the API
+resource, because that is what the proxy's `SharedClientId` / `SharedClientSecret` model expects —
+which is also why its appId is a valid `aud` as well as the `client_id`.
 
 Provisioned 2026-09-02 via `az` / Microsoft Graph; captured as-built in `infra/terraform/entra.tf`.
 Serving staging since 2026-09-03 and **production since 2026-09-16** — both targets now sign in through this registration. The cutover code was merged and deployed first, and ran from the moment it shipped — OIDC discovery, the proxy and the `resource` validation were all live on production before the flip. What stayed inert was the Entra **posture**: with `OAuth__UpstreamResourceScope` empty the proxy relayed `resource` exactly as it always had. Setting that and the other four `OAuth__*` variables is what the flip did.
@@ -828,6 +828,6 @@ deliberately provider-neutral class. Tracked separately rather than bundled into
 
 Its client, both API registrations and its post-login hook were retained through the soak as a
 rollback path. **#156 abandoned that rollback**: nothing in this repository or on either Container
-App references them, and deleting the tenant objects is that issue's final step. Either way there is
-no supported second identity path for this server, which is what removes the two-app parity class of
-failure recorded under *Gate 1*.
+App references them, and the tenant objects were deleted on **2026-09-22**. There is no second
+identity path for this server, which is what removes the two-app parity class of failure recorded
+under *Gate 1* — and why that gate's assignment list is now the sole record of who can sign in.
