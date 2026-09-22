@@ -572,8 +572,8 @@ az keyvault secret set-attributes --vault-name "$VAULT" \
 #    Setting production's secret now is safe and deliberate: its warm replica keeps serving the
 #    old value until step 4 rolls it, so nothing changes for users — and it means this script is
 #    the only place the secret value is ever needed, so it need not survive into a second shell.
-#    ⚠️ The secret NAMES differ per target; using the wrong one adds an unused secret and
-#    rotates nothing. Both targets use the same name since #156.
+#    ⚠️ Both targets use the SAME secret name, `entra-oauth-client-secret` (#156 normalised
+#    staging onto production's). Using any other name adds an unused secret and rotates nothing.
 #    ⚠️ ONE STAMP PER TARGET, taken AFTER that target's own `secret set` returns. A single
 #       stamp taken before both would admit a replica created in the gap between the stamp and
 #       its target's update: it loaded the OLD credential, but started "after STAMP", so it
