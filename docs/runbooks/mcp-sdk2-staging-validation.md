@@ -5,7 +5,7 @@
 > **Every command below is superseded.** This records a validation executed on 2026-08-12 and is kept
 > only because the Layer 2/3 evidence is the basis for the SDK 2.0 adoption sign-off. It is not a
 > procedure, and following its section headings will provision infrastructure that does not exist in
-> the current estate — notably the identity-provider client in step 2.5, which no longer exists.
+> the current estate — notably the identity-provider client in step 2.5, which is no part of it.
 >
 > | If you came here to… | Go to |
 > |---|---|

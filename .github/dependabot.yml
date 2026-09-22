@@ -1,5 +1,9 @@
 version: 2
 
+# The labels named under each `labels:` key below must already exist in the repo.
+# Dependabot does not create them - a missing one is silently dropped from the PR.
+# Create with: gh label create <name> --color <hex> --description "<X> ecosystem dependency"
+
 updates:
   # Keep NuGet packages current across both projects.
   # We've already been bitten once by sitting on the MCP SDK preview far too
