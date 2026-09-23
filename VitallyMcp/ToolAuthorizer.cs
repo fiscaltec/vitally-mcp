@@ -236,6 +236,25 @@ public class ToolAuthorizer
     /// that mode's entire resolution rather than a fallback beneath the live check. See the class
     /// remarks for why there is no longer a fall-through from the live path to here.
     /// </remarks>
+    public static bool HasPermission(ClaimsPrincipal user, string required, string? customClaimType = null)
+    {
+        if (user.FindAll("permissions").Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(customClaimType)
+            && user.FindAll(customClaimType).Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        var scope = user.FindFirst("scope")?.Value;
+        return !string.IsNullOrEmpty(scope)
+            && scope.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Any(s => string.Equals(s, required, StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// Every Vitally permission the principal's claims assert, for the audit record. Mirrors the
     /// sources <see cref="HasPermission"/> consults, so the recorded tier cannot claim something the
@@ -267,24 +286,5 @@ public class ToolAuthorizer
             StringComparer.Ordinal);
         claimed.IntersectWith(governed);
         return claimed;
-    }
-
-    public static bool HasPermission(ClaimsPrincipal user, string required, string? customClaimType = null)
-    {
-        if (user.FindAll("permissions").Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
-        {
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(customClaimType)
-            && user.FindAll(customClaimType).Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))
-        {
-            return true;
-        }
-
-        var scope = user.FindFirst("scope")?.Value;
-        return !string.IsNullOrEmpty(scope)
-            && scope.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Any(s => string.Equals(s, required, StringComparison.Ordinal));
     }
 }
