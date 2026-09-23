@@ -130,4 +130,25 @@ public class ToolCallAuditContextTests
         summary.RecordsFetched.Should().Be(500, "no increment may be lost");
         summary.Ids.Count.Should().BeLessThanOrEqualTo(100, "the cap must hold under concurrency too");
     }
+
+    [Fact]
+    public void Summarise_IsASnapshot_NotAWindowOntoTheLiveList()
+    {
+        // The filter calls Summarise while upstream calls may still be in flight, and then
+        // enumerates the ids to write them. Handing back the live list means the record can change
+        // under the writer — or throw mid-enumeration — so the summary has to be a copy.
+        //
+        // Deterministic on purpose: an earlier attempt at this drove concurrent tasks and passed
+        // against the unfixed code, because the assertion never enumerated and the id cap closed the
+        // race window after 100 adds. A test that cannot fail is worse than no test.
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"}]}"""));
+
+        var taken = context.Summarise();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-2"}]}"""));
+
+        taken.Ids.Should().Equal(["org-1"], "a summary already taken must not change afterwards");
+        taken.IdsRecorded.Should().Be(1);
+        context.Summarise().Ids.Should().Equal(["org-1", "org-2"], "while a fresh one sees both");
+    }
 }

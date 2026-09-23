@@ -119,5 +119,21 @@ public sealed class ToolCallAuditContext
         }
     }
 
-    public ToolCallAuditSummary Summarise() => new(_ids, _recordsFetched, _pagerTruncated, _callsWithoutIds, _permissionTier, _tierServedStale);
+    /// <summary>
+    /// A snapshot of what this tool call touched.
+    /// </summary>
+    /// <remarks>
+    /// Takes the lock and copies the id list. The reader races as surely as the writers do: the
+    /// filter summarises while upstream calls may still be in flight, so handing back the live list
+    /// lets the record change under the writer — or throw mid-enumeration, which would then be an
+    /// audit failure taking a good tool call with it.
+    /// </remarks>
+    public ToolCallAuditSummary Summarise()
+    {
+        lock (_gate)
+        {
+            return new ToolCallAuditSummary(
+                [.. _ids], _recordsFetched, _pagerTruncated, _callsWithoutIds, _permissionTier, _tierServedStale);
+        }
+    }
 }

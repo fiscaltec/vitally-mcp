@@ -78,8 +78,14 @@ public static class AuditRecordIds
             return TryReadSingleRecord(root);
         }
 
+        // `GetString()` throws on a non-string element, and this runs inside
+        // `VitallyService.SendAsync` — so an unexpected id type in an otherwise successful response
+        // would turn a working tool call into an error. Check the kind, as the single-record path
+        // below already did.
         var ids = records.EnumerateArray()
-            .Select(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("id", out var id)
+            .Select(r => r.ValueKind == JsonValueKind.Object
+                && r.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String
                 ? id.GetString()
                 : null)
             .Where(id => !string.IsNullOrEmpty(id))

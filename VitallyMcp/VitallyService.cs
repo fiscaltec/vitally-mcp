@@ -106,7 +106,16 @@ public class VitallyService
         // passing `fields=name` receives results carrying no `id` at all — capturing downstream
         // would name nobody on exactly the calls a narrow projection was used for. Only on success:
         // a failure body is an error message, not records.
-        _auditContext?.RecordUpstream(AuditRecordIds.Extract(body));
+        try
+        {
+            _auditContext?.RecordUpstream(AuditRecordIds.Extract(body));
+        }
+        catch (Exception)
+        {
+            // The audit sidecar must never be the reason a call fails. `AuditRecordIds.Extract`
+            // guards the shapes it knows about, but it parses whatever an upstream returns, so the
+            // guarantee is made here rather than resting on that being exhaustive.
+        }
 
         return body;
     }

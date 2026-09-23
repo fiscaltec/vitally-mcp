@@ -130,4 +130,21 @@ public class AuditRecordIdsTests
         result.RecordsFetched.Should().Be(0);
         result.IdsAvailable.Should().BeTrue();
     }
+
+    [Fact]
+    public void Extract_DoesNotThrow_WhenAnIdIsNotAString()
+    {
+        // `JsonElement.GetString()` throws on a non-string element, and extraction runs inside
+        // `VitallyService.SendAsync` — so a numeric id in an otherwise successful response would turn
+        // a working tool call into an error. The single-record path already checked ValueKind; the
+        // array path did not.
+        var act = () => AuditRecordIds.Extract("""{"results":[{"id":123},{"id":"org-2"},{"id":true}]}""");
+
+        act.Should().NotThrow();
+
+        var result = AuditRecordIds.Extract("""{"results":[{"id":123},{"id":"org-2"},{"id":true}]}""");
+        result.Ids.Should().Equal(["org-2"], "only the ids that are actually ids are recorded");
+        result.RecordsFetched.Should().Be(3, "three records were still read");
+        result.IdsAvailable.Should().BeTrue("one of them could be named");
+    }
 }
