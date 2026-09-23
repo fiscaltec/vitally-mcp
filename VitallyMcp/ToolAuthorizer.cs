@@ -241,7 +241,7 @@ public class ToolAuthorizer
     /// sources <see cref="HasPermission"/> consults, so the recorded tier cannot claim something the
     /// decision would have refused.
     /// </summary>
-    private static IReadOnlySet<string> ClaimedPermissions(ClaimsPrincipal user, string? customClaimType)
+    private IReadOnlySet<string> ClaimedPermissions(ClaimsPrincipal user, string? customClaimType)
     {
         var claimed = new HashSet<string>(StringComparer.Ordinal);
         claimed.UnionWith(user.FindAll("permissions").Select(c => c.Value));
@@ -257,8 +257,15 @@ public class ToolAuthorizer
             claimed.UnionWith(scope.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         }
 
-        // Only the permissions this server governs; an OIDC scope like `openid` is not a tier.
-        claimed.RemoveWhere(p => !p.StartsWith("vitally:", StringComparison.Ordinal));
+        // Keep only the permissions this server governs, so an OIDC scope like `openid` is not
+        // recorded as a tier. Compared against the CONFIGURED names rather than a `vitally:` prefix:
+        // the three are settable and only validated as non-empty, so a deployment may legitimately
+        // use unprefixed names — and filtering on the prefix would let `HasPermission` authorise a
+        // call while the record claimed the caller held nothing.
+        var governed = new HashSet<string>(
+            [_options.ReadPermission, _options.WritePermission, _options.DeletePermission],
+            StringComparer.Ordinal);
+        claimed.IntersectWith(governed);
         return claimed;
     }
 

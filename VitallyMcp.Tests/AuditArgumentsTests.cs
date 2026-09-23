@@ -135,4 +135,25 @@ public class AuditArgumentsTests
         result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
             "scoping identifiers take priority from the budget rather than bypassing it");
     }
+
+    [Fact]
+    public void Format_AccountsForEscapingInArgumentNamesAsWellAsValues()
+    {
+        // Argument NAMES come from the MCP client too, and `WritePropertyName` escapes them exactly
+        // as values are escaped. The budget was taught to count escaped value length and left
+        // counting raw key length — so the values were handed a share computed against names that
+        // cost twice what the arithmetic allowed. Same defect as the value one, one field over.
+        //
+        // Note the invariant being tested is about the VALUES shrinking to fit: a single enormous
+        // name cannot be bounded at all, because names are never dropped (see the class remarks).
+        var quotedKey = new string('"', 10);
+        var args = Enumerable.Range(0, 100)
+            .Select(i => new KeyValuePair<string, object?>(quotedKey + i, new string('v', 500)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
+            "escaped names must be budgeted at what they cost to write, so the values shrink to fit");
+    }
 }

@@ -381,4 +381,31 @@ public class ToolAuthorizerTests
 
         context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
     }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheTier_WhenThePermissionNamesAreConfigured()
+    {
+        // ToolAuthorizationOptions lets the three permission names be configured, and only validates
+        // that they are non-empty — so a deployment may legitimately use names with no `vitally:`
+        // prefix. Filtering the recorded tier on that prefix meant HasPermission would authorise the
+        // call while the audit record claimed the caller held nothing.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions
+            {
+                Enabled = true,
+                LiveGroupCheck = false,
+                ReadPermission = "read",
+                WritePermission = "write",
+                DeletePermission = "delete",
+            },
+            auditContext: context);
+
+        var allowed = await authorizer.HasEffectivePermissionAsync(
+            UserWithPermissions("read", "write"), "read");
+
+        allowed.Should().BeTrue("the configured name is what authorises");
+        context.Summarise().PermissionTier.Should().Be("read,write",
+            "and the record must say what authorised it, not 'none'");
+    }
 }

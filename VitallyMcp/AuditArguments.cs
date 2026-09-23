@@ -79,6 +79,11 @@ public static class AuditArguments
                     Text: text,
                     a.Value,
                     Scoping: IsScopingIdentifier(a.Key, text),
+                    // Names are escaped on the way out too — `WritePropertyName` applies the same
+                    // rules as a value — and they come from the MCP client, so a name full of quotes
+                    // costs twice what its raw length suggests. Counting the raw length here handed
+                    // the values a share computed against names that cost more than that.
+                    KeyCost: EscapedLength(a.Key),
                     // What this value will actually COST once written. A string is escaped on the way
                     // out — a quote costs one character to hold and two to write — while any other
                     // element is emitted as its own raw JSON. Budgeting on the decoded length let a
@@ -96,7 +101,7 @@ public static class AuditArguments
         // Reserve the structural cost up front — quotes, colons, commas and the names themselves —
         // so the value budget is what is actually left rather than an optimistic figure the entries
         // then overrun one by one.
-        var overhead = entries.Sum(e => e.Key.Length + 6);
+        var overhead = entries.Sum(e => e.KeyCost + 6);
 
         // Floored, because the two rules collide at the extreme. Argument NAMES are never dropped —
         // an argument that vanished would read as one the caller never sent — so a call with hundreds
