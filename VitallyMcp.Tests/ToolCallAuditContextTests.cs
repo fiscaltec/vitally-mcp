@@ -1,0 +1,98 @@
+using FluentAssertions;
+using VitallyMcp;
+
+namespace VitallyMcp.Tests;
+
+/// <summary>
+/// One tool call can make several upstream calls — <c>Get_organization_summary</c> makes four, and the
+/// bounded auto-pager can make ten. The audit record is per <i>tool call</i>, so something has to
+/// gather what those upstream calls touched and hand it back as one answer.
+/// </summary>
+public class ToolCallAuditContextTests
+{
+    [Fact]
+    public void Summarise_AggregatesTheRecordsTouchedAcrossEveryUpstreamCall()
+    {
+        var context = new ToolCallAuditContext();
+
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"},{"id":"org-2"}]}"""));
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"goal-7"}]}"""));
+
+        var summary = context.Summarise();
+
+        summary.Ids.Should().Equal("org-1", "org-2", "goal-7");
+        summary.RecordsFetched.Should().Be(3);
+    }
+
+    [Fact]
+    public void Summarise_CapsTheMergedIdList_WhileTheFetchedCountStaysTrue()
+    {
+        // Each upstream response is capped at 100 ids, but the auto-pager can make ten calls — so
+        // without a second cap here a single record carries a thousand ids. The fetched count is what
+        // keeps the magnitude honest once the list is cut.
+        var context = new ToolCallAuditContext();
+        for (var page = 0; page < 10; page++)
+        {
+            var records = string.Join(",", Enumerable.Range(0, 100).Select(i => $$"""{"id":"org-{{page}}-{{i}}"}"""));
+            context.RecordUpstream(AuditRecordIds.Extract($$"""{"results":[{{records}}]}"""));
+        }
+
+        var summary = context.Summarise();
+
+        summary.Ids.Should().HaveCount(100, "the merged list is capped as well as each response");
+        summary.RecordsFetched.Should().Be(1000, "the true magnitude of the read survives the cap");
+    }
+
+    [Fact]
+    public void Summarise_DistinguishesAPagerTruncation_FromTheIdCap()
+    {
+        // These mean different things and must not be conflated. `Truncated` says the pager stopped
+        // at MaxAutoPageFetches, so the number of *matching* records is unknowable — Vitally's
+        // envelope exposes only `next`, there is no total. The id cap says the list was shortened
+        // while the count stayed true. "Fetched 1000, ids 100, truncated" is honest; a capped read
+        // claiming the total is unknown, or a truncated one implying RecordsFetched was all of it,
+        // is not.
+        var cappedButComplete = new ToolCallAuditContext();
+        var page = string.Join(",", Enumerable.Range(0, 200).Select(i => $$"""{"id":"org-{{i}}"}"""));
+        cappedButComplete.RecordUpstream(AuditRecordIds.Extract($$"""{"results":[{{page}}]}"""));
+
+        cappedButComplete.Summarise().Truncated.Should().BeFalse(
+            "the id list was capped, but the pager read everything that matched");
+
+        var pagerStopped = new ToolCallAuditContext();
+        pagerStopped.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"}]}"""));
+        pagerStopped.MarkPagerTruncated();
+
+        pagerStopped.Summarise().Truncated.Should().BeTrue(
+            "the pager gave up early, so the matching total is unknown");
+    }
+
+    [Fact]
+    public void CorrelationId_IsStableWithinOneToolCall_AndDistinctBetweenThem()
+    {
+        var first = new ToolCallAuditContext();
+        var second = new ToolCallAuditContext();
+
+        first.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        first.CorrelationId.Should().Be(first.CorrelationId,
+            "every upstream record from one tool call must carry the same id, or they cannot be joined");
+        first.CorrelationId.Should().NotBe(second.CorrelationId,
+            "two tool calls sharing an id would join one caller's reads to another's");
+    }
+
+    [Fact]
+    public void Summarise_ReportsUpstreamCallsThatYieldedNoIds()
+    {
+        // `Get_organization_summary` makes four upstream calls of different shapes. If one of them
+        // returns something this cannot read ids from, the record has to say so — otherwise it looks
+        // like a complete account of what was touched while silently missing a call.
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"}]}"""));
+        context.RecordUpstream(AuditRecordIds.Extract("""{"deleted":true}"""));
+
+        var summary = context.Summarise();
+
+        summary.Ids.Should().Equal("org-1");
+        summary.CallsWithoutIds.Should().Be(1, "the gap is stated rather than absorbed");
+    }
+}
