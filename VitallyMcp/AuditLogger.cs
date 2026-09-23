@@ -12,10 +12,15 @@ namespace VitallyMcp;
 /// <see cref="CallerIdentity"/>), then the raw <c>sub</c>, then <c>NameIdentifier</c>, then
 /// <c>unknown</c>; an unauthenticated caller is <c>anonymous</c>.
 /// <para>
-/// <b>Three record shapes, not one</b>, because they are emitted at different points:
+/// <b>Four record shapes, not one</b>, because they are emitted at different points:
 /// <list type="bullet">
+///   <item><see cref="LogToolCall"/> — the <b>primary</b> record, one per tool call: identity, tool,
+///     arguments, the record ids touched, outcome, duration, correlation id, and the permission tier
+///     resolved at the time. This is the one that satisfies the acceptance criterion.</item>
 ///   <item><see cref="LogAction"/> — from <see cref="VitallyService.SendAsync"/> after each upstream
-///     response: identity, verb, resource path (query string stripped), status.</item>
+///     response: identity, verb, resource path (query string stripped), status. <b>Corroboration</b>
+///     now rather than the mechanism: it shows what the server actually did, but names a customer
+///     only where the path carries an id — which excludes unscoped list and search.</item>
 ///   <item><see cref="LogDenied"/> — from the same choke point on an RBAC refusal: identity, verb,
 ///     path. <b>No status</b>, because the call never happened.</item>
 ///   <item><see cref="LogToolCallDenied"/> — from the SDK <c>[Authorize]</c> checkpoint, which rejects
@@ -35,10 +40,13 @@ namespace VitallyMcp;
 /// remain excluded — they can carry meeting transcripts and arbitrary traits.
 /// </para>
 /// <para>
-/// What this class does <i>today</i> is unchanged and narrower than that design: object id, verb,
-/// resource path with the query string stripped, and status. The tool-call record — arguments,
-/// returned record ids, result count, correlation id — is not implemented. Design:
-/// <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>.
+/// <b>The tool-call record is implemented</b> (#147) — arguments, returned record ids, counts,
+/// correlation id, and the effective permission tier. What is <i>not</i> yet done is routing: these
+/// records still go through <see cref="ILogger"/> to stdout, and stdout is not exported, so nothing
+/// here is queryable yet. Until <see cref="LogToolCall"/> writes via <c>TrackEvent</c> and the console
+/// provider is suppressed for this category, #142's console-log export stays gated — exporting it
+/// sooner would put customer identifiers into the table with the shortest retention and the broadest
+/// access. Design: <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -81,6 +89,43 @@ public class AuditLogger
             ResolveUserId(), method.Method, ResourcePath(url), statusCode);
     }
 
+    /// <summary>
+    /// Records one tool call: who, which tool, with what arguments, and which records it touched.
+    /// </summary>
+    /// <remarks>
+    /// This is the record that satisfies the acceptance criterion. <see cref="LogAction"/> remains as
+    /// corroboration — it shows what the server actually did — but it names a customer only where the
+    /// upstream path carries an id, which excludes unscoped list and search, and those are most reads.
+    /// </remarks>
+    public void LogToolCall(ToolCallAudit call)
+    {
+        if (!_options.Enabled)
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "Vitally audit: {AuditUserId} called {McpToolName} args={McpToolArguments} "
+            + "records={AuditRecordIds} fetched={AuditRecordsFetched} ids={AuditIdsRecorded} "
+            + "truncated={AuditPagerTruncated} unreadable={AuditCallsWithoutIds} "
+            + "outcome={AuditOutcome} durationMs={AuditDurationMs} correlation={AuditCorrelationId} "
+            + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName}",
+            ResolveUserId(),
+            call.ToolName,
+            call.Arguments.Rendered,
+            string.Join(",", call.Records.Ids),
+            call.Records.RecordsFetched,
+            call.Records.IdsRecorded,
+            call.Records.Truncated,
+            call.Records.CallsWithoutIds,
+            call.Outcome,
+            (long)call.Duration.TotalMilliseconds,
+            call.CorrelationId,
+            call.PermissionTier,
+            call.TierServedStale,
+            call.McpClient ?? "unknown");
+    }
+
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
     public void LogDenied(HttpMethod method, string url)
     {
@@ -103,9 +148,16 @@ public class AuditLogger
     ///
     /// <para>
     /// Called from <see cref="VitallyPermissionHandler"/>, which passes the policy's own principal
-    /// rather than relying on the ambient HTTP context. Records only the opaque subject id, the tool
-    /// name and the permission that was required — never the caller's email, and never the call
-    /// arguments (they can carry customer PII).
+    /// rather than relying on the ambient HTTP context. Records the caller's object id, the tool name
+    /// and the permission required — never the caller's email.
+    /// </para>
+    /// <para>
+    /// ⚠️ It does <b>not</b> record the call arguments, and the reason is no longer the one this
+    /// comment used to give. "They can carry customer PII" was the pre-2026-09-17 rule, withdrawn —
+    /// <see cref="LogToolCall"/> records arguments in full. The arguments are simply out of scope for
+    /// #147, which defined the tool-call record. Whether a <i>denied</i> call should record what the
+    /// caller tried to reach is a real question — it is the difference between "someone was refused"
+    /// and "someone was refused while reaching for this customer" — and it is open, not settled.
     /// </para>
     /// </summary>
     public void LogToolCallDenied(ClaimsPrincipal? user, string? toolName, string requiredPermission)

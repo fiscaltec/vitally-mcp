@@ -240,4 +240,104 @@ public class AuditLoggerTests
         logger.Entries.Should().ContainSingle();
         logger.Entries[0].Message.Should().Contain("anonymous");
     }
+
+    [Fact]
+    public void LogToolCall_ShowsThisUserCalledThisTool_AndWhichCustomersItTouched()
+    {
+        // The acceptance criterion for #147, stated as an outcome rather than a field list:
+        // "the audit trail must show that THIS USER called THIS TOOL and accessed, modified or
+        // deleted data for THESE CUSTOMERS". `List_organizations` is the case the upstream record
+        // cannot answer — an unscoped list whose customers exist only in the response body.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pAiRwiSeSuBjEcTeXaMpLeVaLuE0000000000000"));
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"},{"id":"org-2"}]}"""));
+
+        audit.LogToolCall(new ToolCallAudit(
+            ToolName: "List_organizations",
+            Arguments: AuditArguments.Format(null),
+            Records: context.Summarise(),
+            Outcome: "ok",
+            Duration: TimeSpan.FromMilliseconds(120),
+            CorrelationId: context.CorrelationId,
+            PermissionTier: "vitally:read",
+            TierServedStale: false,
+            McpClient: "claude-code"));
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "this user");
+        message.Should().Contain("List_organizations", "this tool");
+        message.Should().Contain("org-1").And.Contain("org-2", "these customers");
+    }
+
+    private static ToolCallAudit SampleCall(
+        string outcome = "ok",
+        string tier = "vitally:read",
+        bool tierStale = false) =>
+        new(
+            ToolName: "Search_users",
+            Arguments: AuditArguments.Format(null),
+            Records: new ToolCallAuditContext().Summarise(),
+            Outcome: outcome,
+            Duration: TimeSpan.FromMilliseconds(42),
+            CorrelationId: "corr-1",
+            PermissionTier: tier,
+            TierServedStale: tierStale,
+            McpClient: "claude-code");
+
+    [Fact]
+    public void LogToolCall_RecordsTheTierTheCallerResolvedTo_AndWhetherItWasStale()
+    {
+        // Entitlement is resolved live from Entra group membership, so it CANNOT be reconstructed
+        // afterwards — once someone leaves a group, nothing can say what they were entitled to at the
+        // time. And a tier served from the retained copy during a Graph outage is a weaker claim than
+        // a fresh one; a record that cannot tell them apart overstates its own confidence.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall(tier: "vitally:delete", tierStale: true));
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("vitally:delete", "the tier at the moment of the call");
+        message.Should().Contain("tierStale=True", "a stale tier is a weaker claim and must say so");
+    }
+
+    [Fact]
+    public void LogToolCall_RecordsAFailedCall_NotOnlyASuccessfulOne()
+    {
+        // A trail that records only successes cannot show an attempted deletion that errored, which
+        // is precisely the kind of event an access record exists to hold.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall(outcome: "error"));
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Should().Contain("outcome=error");
+    }
+
+    [Fact]
+    public void LogToolCall_NeverRecordsTheCallersEmail()
+    {
+        // The policy reversal opened up tool arguments, not the caller's own identity attributes. The
+        // object id resolves to a person with `az ad user show --id`, so the email adds nothing to
+        // attribution and only widens what the trail discloses.
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            new[]
+            {
+                new Claim("oid", "675ebdda-7590-4d79-8ec3-a2d17ab029ba"),
+                new Claim("preferred_username", "dsearle@fiscaltec.com"),
+                new Claim(ClaimTypes.Email, "dsearle@fiscaltec.com"),
+            },
+            authenticationType: "Test"));
+        var (audit, logger) = Build(user: user);
+
+        audit.LogToolCall(SampleCall());
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().NotContain("fiscaltec.com", "the object id is the identifier, not the email");
+    }
 }
