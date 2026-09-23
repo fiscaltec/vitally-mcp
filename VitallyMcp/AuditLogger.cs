@@ -192,6 +192,8 @@ public class AuditLogger
     /// </summary>
     private const int MaxClientNameChars = 64;
 
+    private const string TruncationMarker = "...";
+
     /// <summary>
     /// Makes an untrusted client name safe to put in a line-oriented log.
     /// </summary>

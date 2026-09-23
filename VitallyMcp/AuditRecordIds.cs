@@ -50,6 +50,39 @@ public static class AuditRecordIds
     /// <summary>The envelope properties Vitally wraps record arrays in.</summary>
     private static readonly string[] EnvelopeProperties = ["results", "data"];
 
+    /// <summary>
+    /// The record id a mutation's own URL names, for when the response body carries none.
+    /// </summary>
+    /// <remarks>
+    /// Vitally answers a delete with a bare acknowledgement, so <see cref="Extract"/> finds nothing
+    /// and the primary record would name nobody — on exactly the event an access trail is most often
+    /// kept for, and one the acceptance criterion names explicitly ("accessed, <b>modified or
+    /// deleted</b> data for these customers").
+    /// <para>
+    /// ⚠️ Deliberately restricted to methods whose URL ends in a record id. A general URL fallback
+    /// would read the last segment of an unscoped list — <c>/resources/organizations</c> — and record
+    /// the collection name as though it were a customer. <b>A fabricated identifier is far worse than
+    /// an honest gap</b>: it resolves to nothing and cannot be told apart from a real one.
+    /// </para>
+    /// </remarks>
+    public static AuditedRecords FromMutationUrl(HttpMethod method, string url)
+    {
+        if (method != HttpMethod.Delete && method != HttpMethod.Put && method != HttpMethod.Patch)
+        {
+            return Unavailable;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return Unavailable;
+        }
+
+        var last = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return string.IsNullOrEmpty(last)
+            ? Unavailable
+            : new AuditedRecords([Uri.UnescapeDataString(last)], 1, IdsAvailable: true);
+    }
+
     public static AuditedRecords Extract(string rawJson)
     {
         // An audit component must never be the reason a tool call fails. Vitally can answer with a

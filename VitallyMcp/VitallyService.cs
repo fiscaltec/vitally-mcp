@@ -108,7 +108,16 @@ public class VitallyService
         // a failure body is an error message, not records.
         try
         {
-            _auditContext?.RecordUpstream(AuditRecordIds.Extract(body));
+            var touched = AuditRecordIds.Extract(body);
+            if (!touched.IdsAvailable)
+            {
+                // A delete or update answers with a bare acknowledgement, so the body names nobody —
+                // but the request URL does, and losing the customer on a mutation is the worst place
+                // to lose it.
+                touched = AuditRecordIds.FromMutationUrl(method, url);
+            }
+
+            _auditContext?.RecordUpstream(touched);
         }
         catch (Exception)
         {
