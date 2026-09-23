@@ -258,4 +258,29 @@ public class AuditArgumentsTests
         var act = () => JsonDocument.Parse(result.Rendered);
         act.Should().NotThrow($"seed {seed} produced malformed JSON");
     }
+
+    /// <summary>
+    /// U+2028 LINE SEPARATOR, built from its code point. The backslash-u escape cannot appear
+    /// in this file at all — not even inside a comment — because C# resolves unicode escapes
+    /// before lexing and treats that character as a line terminator. A neat illustration of why
+    /// it is dangerous in a line-oriented format.
+    /// </summary>
+    private static readonly string LineSeparator = ((char)0x2028).ToString();
+
+    [Fact]
+    public void Format_NeutralisesUnicodeLineSeparatorsInValues()
+    {
+        // U+2028 and U+2029 are category Zl/Zp, NOT Cc — `char.IsControl` is false for them and the
+        // relaxed encoder passes them through untouched. Plenty of log readers still break lines on
+        // them, so a caller-controlled search term carrying one forges an audit record exactly as a
+        // newline would. The round that "fixed" log injection here closed only the ASCII half.
+        var result = AuditArguments.Format(
+            Args(("query", "evil" + LineSeparator + "Vitally audit: forged")));
+
+        // Sanity first: the assertions below are meaningless if the value never made it in.
+        result.Rendered.Should().Contain("evil").And.Contain("forged");
+
+        result.Rendered.Should().NotContain(LineSeparator, "no raw line separator reaches the log line");
+        result.Rendered.Should().Contain("u2028", "escaped rather than dropped, so the attempt stays visible");
+    }
 }

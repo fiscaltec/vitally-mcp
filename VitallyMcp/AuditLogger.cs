@@ -210,6 +210,22 @@ public class AuditLogger
     /// logs the exception <i>type</i> and never <c>Exception.Message</c>, because IdentityModel
     /// builds that text from the token's own claims.
     /// </remarks>
+    /// <summary>
+    /// Whether a character can start a new line in a line-oriented log.
+    /// </summary>
+    /// <remarks>
+    /// <c>char.IsControl</c> alone is not enough, and the gap is not obvious: <b>U+2028 LINE
+    /// SEPARATOR and U+2029 PARAGRAPH SEPARATOR are categories Zl and Zp, not Cc</b>, so
+    /// <c>IsControl</c> returns <c>false</c> for them while plenty of log readers still break lines
+    /// on them. Sanitising only the C0 controls closed half the injection this method exists to stop.
+    /// Checking the unicode category covers both without magic numbers.
+    /// </remarks>
+    private static bool IsLineBreaking(char c) =>
+        char.IsControl(c)
+        || char.GetUnicodeCategory(c)
+            is System.Globalization.UnicodeCategory.LineSeparator
+            or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
     private static string SanitiseClientName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -221,7 +237,7 @@ public class AuditLogger
         {
             for (var i = 0; i < source.Length; i++)
             {
-                span[i] = char.IsControl(source[i]) ? '_' : source[i];
+                span[i] = IsLineBreaking(source[i]) ? '_' : source[i];
             }
         });
 

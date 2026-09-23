@@ -419,4 +419,23 @@ public class AuditLoggerTests
         logger.Entries.Should().ContainSingle().Subject.Message
             .Should().Contain("correlation=corr-abc");
     }
+
+    [Fact]
+    public void LogToolCall_NeutralisesUnicodeLineSeparatorsInTheClientName()
+    {
+        // `char.IsControl` does not classify U+2028/U+2029 as control characters, so the sanitiser
+        // added for CR/LF let them straight through into a line-oriented log.
+        var lineSeparator = ((char)0x2028).ToString();
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with
+        {
+            McpClient = "evil" + lineSeparator + "Vitally audit: forged"
+        });
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().NotContain(lineSeparator, "a line separator cannot start a forged record either");
+    }
 }
