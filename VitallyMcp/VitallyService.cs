@@ -109,11 +109,14 @@ public class VitallyService
         try
         {
             var touched = AuditRecordIds.Extract(body);
-            if (!touched.IdsAvailable)
+            if (touched.IdsRecorded == 0)
             {
-                // A delete or update answers with a bare acknowledgement, so the body names nobody —
-                // but the request URL does, and losing the customer on a mutation is the worst place
-                // to lose it.
+                // Keyed on "no id was captured", NOT on "the shape was unreadable". An EMPTY result
+                // set is deliberately marked available — that rule stops a "no matches" search
+                // looking like a broken record — but a mutation answering `{results:[]}` is an
+                // acknowledgement rather than an empty search, and gating on availability skipped the
+                // fallback and lost the customer again by a second route. A GET is unaffected:
+                // FromMutationUrl only answers for the methods whose URL ends in a record id.
                 touched = AuditRecordIds.FromMutationUrl(method, url);
             }
 

@@ -214,7 +214,18 @@ public static class AuditArguments
             {
                 // Stated, not silent. A record that simply stopped would read as a call made with
                 // fewer arguments than it was.
-                writer.WriteNumber(OmittedPropertyName, omitted);
+                //
+                // The name is disambiguated against the caller's own, because argument names are
+                // caller-controlled: a client sending an argument called `__omittedArguments` would
+                // otherwise produce a record with DUPLICATE keys, and a parser picks one arbitrarily.
+                // Audit evidence a caller can make ambiguous is not evidence.
+                var name = OmittedPropertyName;
+                while (entries.Where((_, i) => included[i]).Any(e => e.Key == name))
+                {
+                    name += "_";
+                }
+
+                writer.WriteNumber(name, omitted);
             }
 
             writer.WriteEndObject();

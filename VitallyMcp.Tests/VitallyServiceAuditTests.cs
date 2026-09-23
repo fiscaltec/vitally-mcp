@@ -80,4 +80,20 @@ public class VitallyServiceAuditTests
 
         context.Summarise().Ids.Should().BeEmpty("no id is better than a made-up one");
     }
+
+    [Fact]
+    public async Task DeleteResourceAsync_NamesTheCustomer_EvenWhenTheBodyIsAnEmptyEnvelope()
+    {
+        // The URL fallback was gated on IdsAvailable, and an EMPTY result set is deliberately marked
+        // available — that rule exists so a "no matches" search does not look like a broken record.
+        // But a mutation answering with `{results:[]}` is an acknowledgement, not an empty search, so
+        // the gate skipped the fallback and the delete named nobody again by a different route.
+        using var client = TestHelpers.CreateMockHttpClient("""{"results":[]}""");
+        var context = new ToolCallAuditContext();
+        var service = TestHelpers.BuildVitallyService(client, auditContext: context);
+
+        await service.DeleteResourceAsync("accounts", "acc-2");
+
+        context.Summarise().Ids.Should().Equal(["acc-2"]);
+    }
 }

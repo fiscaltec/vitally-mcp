@@ -283,4 +283,25 @@ public class AuditArgumentsTests
         result.Rendered.Should().NotContain(LineSeparator, "no raw line separator reaches the log line");
         result.Rendered.Should().Contain("u2028", "escaped rather than dropped, so the attempt stays visible");
     }
+
+    [Fact]
+    public void Format_DoesNotCollideWithACallerSuppliedOmissionPropertyName()
+    {
+        // The omission count is written as a synthetic property, and argument names are
+        // caller-controlled — so a client can send an argument called `__omittedArguments` and, if
+        // anything is then omitted, the record carries DUPLICATE keys. Parsers pick one arbitrarily,
+        // so the reader may see the caller's value or the real count and cannot tell which. Audit
+        // evidence a caller can make ambiguous is not evidence.
+        var args = Enumerable.Range(0, 500)
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('g', 200)))
+            .Prepend(new KeyValuePair<string, object?>("__omittedArguments", "spoofed"))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Truncated.Should().BeTrue("this set cannot fit, so something is omitted");
+        using var parsed = JsonDocument.Parse(result.Rendered);
+        var names = parsed.RootElement.EnumerateObject().Select(p => p.Name).ToList();
+        names.Should().OnlyHaveUniqueItems("a record with duplicate keys cannot be read unambiguously");
+    }
 }
