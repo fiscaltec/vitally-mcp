@@ -13,6 +13,7 @@ public class VitallyService
     private readonly VitallyApiKeyProvider _apiKeyProvider;
     private readonly ToolAuthorizer _authorizer;
     private readonly AuditLogger _audit;
+    private readonly ToolCallAuditContext? _auditContext;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -43,13 +44,14 @@ public class VitallyService
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _apiKeyProvider = apiKeyProvider;
         _authorizer = authorizer;
         _audit = audit;
+        _auditContext = auditContext;
         _baseUrl = _options.BaseUrl;
     }
 
@@ -98,6 +100,14 @@ public class VitallyService
                 inner: null,
                 statusCode: response.StatusCode);
         }
+
+        // Capture the records touched HERE, from the raw body, because this is the last point at
+        // which they exist. GetResourcesAsync applies FilterJsonFields afterwards, so a caller
+        // passing `fields=name` receives results carrying no `id` at all — capturing downstream
+        // would name nobody on exactly the calls a narrow projection was used for. Only on success:
+        // a failure body is an error message, not records.
+        _auditContext?.RecordUpstream(AuditRecordIds.Extract(body));
+
         return body;
     }
 
@@ -181,7 +191,15 @@ public class VitallyService
             }
 
             if (stopped || string.IsNullOrEmpty(from)) break;     // early-stop or exhausted
-            if (pagesFetched >= maxPages) { truncated = true; break; }   // cap hit
+            if (pagesFetched >= maxPages)
+            {
+                truncated = true;
+                // Tell the audit record the total is UNKNOWN, not equal to what was fetched. Vitally's
+                // envelope exposes only `next`, so once the cap is hit the matching total cannot be
+                // known without the unbounded paging the cap exists to prevent.
+                _auditContext?.MarkPagerTruncated();
+                break;
+            }
         }
 
         var requestedFields = ResolveFields(fields, defaultsKey);
