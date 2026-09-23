@@ -95,4 +95,20 @@ public class ToolCallAuditContextTests
         summary.Ids.Should().Equal("org-1");
         summary.CallsWithoutIds.Should().Be(1, "the gap is stated rather than absorbed");
     }
+
+    [Fact]
+    public void Summarise_CarriesTheTierTheAuthorizerResolved_AndLeavesStalenessUnknownUntilItIsKnown()
+    {
+        // The tier has to come from the component that made the decision, not from a second lookup —
+        // or the record could disagree with the decision it purports to document.
+        var context = new ToolCallAuditContext();
+
+        context.RecordResolvedTier(new HashSet<string> { "vitally:write", "vitally:read" });
+
+        var summary = context.Summarise();
+        summary.PermissionTier.Should().Be("vitally:read,vitally:write", "sorted, so records compare");
+        summary.TierServedStale.Should().BeNull(
+            "GraphGroupPermissionResolver does not yet report whether it served a retained copy, and "
+            + "recording false would assert the tier was fresh when nothing checked");
+    }
 }

@@ -10,7 +10,9 @@ public readonly record struct ToolCallAuditSummary(
     IReadOnlyList<string> Ids,
     int RecordsFetched,
     bool Truncated,
-    int CallsWithoutIds)
+    int CallsWithoutIds,
+    string PermissionTier,
+    bool? TierServedStale)
 {
     /// <summary>How many ids the cap allowed into the record — not how many records were read.</summary>
     public int IdsRecorded => Ids.Count;
@@ -32,6 +34,8 @@ public sealed class ToolCallAuditContext
     private int _recordsFetched;
     private bool _pagerTruncated;
     private int _callsWithoutIds;
+    private string _permissionTier = "unresolved";
+    private bool? _tierServedStale;
 
     public void RecordUpstream(AuditedRecords records)
     {
@@ -67,5 +71,35 @@ public sealed class ToolCallAuditContext
     /// </summary>
     public void MarkPagerTruncated() => _pagerTruncated = true;
 
-    public ToolCallAuditSummary Summarise() => new(_ids, _recordsFetched, _pagerTruncated, _callsWithoutIds);
+    /// <summary>
+    /// Records the tier the authorizer actually resolved for this caller, at the moment of the call.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Written by <see cref="ToolAuthorizer"/> rather than re-derived here, for the same reason
+    /// <see cref="CallerIdentity"/> is shared: the tier in the record must be the one the decision
+    /// was made against, or the record can disagree with the decision it claims to document.
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>Unbackfillable.</b> Entitlement comes from live Entra group membership, so once someone
+    /// leaves a group nothing can reconstruct what they were entitled to at a past moment.
+    /// </para>
+    /// <param name="servedStale">
+    /// Whether the tier came from a retained copy during a Graph outage. <c>null</c> means
+    /// <i>not known</i>, which is the current state:
+    /// <see cref="GraphGroupPermissionResolver"/> serves stale internally and logs it, but does not
+    /// report it back through <see cref="IGroupPermissionResolver"/>. Recording <c>false</c> here
+    /// would assert the tier was fresh when nothing checked — a weaker claim dressed as a stronger
+    /// one, which is the opposite of what this field is for.
+    /// </param>
+    /// </remarks>
+    public void RecordResolvedTier(IReadOnlySet<string> permissions, bool? servedStale = null)
+    {
+        _permissionTier = permissions.Count == 0
+            ? "none"
+            : string.Join(",", permissions.OrderBy(p => p, StringComparer.Ordinal));
+        _tierServedStale = servedStale;
+    }
+
+    public ToolCallAuditSummary Summarise() => new(_ids, _recordsFetched, _pagerTruncated, _callsWithoutIds, _permissionTier, _tierServedStale);
 }

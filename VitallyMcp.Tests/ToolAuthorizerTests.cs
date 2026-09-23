@@ -29,7 +29,8 @@ public class ToolAuthorizerTests
         ClaimsPrincipal? user = null,
         ToolAuthorizationOptions? options = null,
         IGroupPermissionResolver? resolver = null,
-        ILogger<ToolAuthorizer>? logger = null)
+        ILogger<ToolAuthorizer>? logger = null,
+        ToolCallAuditContext? auditContext = null)
     {
         var accessor = new HttpContextAccessor
         {
@@ -40,7 +41,8 @@ public class ToolAuthorizerTests
             Options.Create(new OAuthOptions { NoAuth = noAuth }),
             accessor,
             resolver,
-            logger);
+            logger,
+            auditContext);
     }
 
     private static ClaimsPrincipal UserWithPermissions(params string[] permissions) =>
@@ -342,5 +344,24 @@ public class ToolAuthorizerTests
         var authorizer = Build(enabled: !disabled, noAuth: noAuth);
 
         (await authorizer.IsAuthorizationBypassedAsync()).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheResolvedTier_IntoTheAuditContext()
+    {
+        // The audit record's tier must be the one the DECISION was made against. Re-deriving it in
+        // the filter would mean a second Graph lookup that could answer differently, producing a
+        // record that disagrees with the decision it claims to document — and, because entitlement
+        // is resolved live, nothing could later tell which was right.
+        var resolver = new StubResolver(new HashSet<string> { "vitally:read", "vitally:write" });
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = true },
+            resolver: resolver,
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(UserWithOid("675ebdda-7590-4d79-8ec3-a2d17ab029ba"), "vitally:read");
+
+        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
     }
 }

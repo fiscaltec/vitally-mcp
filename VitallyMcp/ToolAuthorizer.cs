@@ -52,19 +52,22 @@ public class ToolAuthorizer
     private bool _loggedNoResolver;
     private bool _loggedNoObjectId;
     private bool _loggedUnresolvable;
+    private readonly ToolCallAuditContext? _auditContext;
 
     public ToolAuthorizer(
         IOptions<ToolAuthorizationOptions> options,
         IOptions<OAuthOptions> oauth,
         IHttpContextAccessor? httpContextAccessor = null,
         IGroupPermissionResolver? groupResolver = null,
-        ILogger<ToolAuthorizer>? logger = null)
+        ILogger<ToolAuthorizer>? logger = null,
+        ToolCallAuditContext? auditContext = null)
     {
         _options = options.Value;
         _noAuth = oauth.Value.NoAuth;
         _httpContextAccessor = httpContextAccessor;
         _groupResolver = groupResolver;
         _logger = logger;
+        _auditContext = auditContext;
     }
 
     /// <summary>
@@ -167,6 +170,17 @@ public class ToolAuthorizer
                 }
                 return false;
             }
+
+            // Hand the audit record the tier THIS decision was made against. Re-deriving it later
+            // would mean a second Graph lookup that could answer differently, leaving a record that
+            // disagrees with the decision it documents — and, because entitlement is resolved live,
+            // nothing could afterwards say which was right.
+            //
+            // Staleness is deliberately not passed: GraphGroupPermissionResolver serves a retained
+            // copy internally and logs it, but does not report it back through
+            // IGroupPermissionResolver, so nothing here knows. Passing `false` would assert the tier
+            // was fresh when nothing checked.
+            _auditContext?.RecordResolvedTier(live);
 
             // Authoritative when the live lookup succeeds (empty set => deny).
             return live.Contains(required);
