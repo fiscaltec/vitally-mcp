@@ -438,4 +438,34 @@ public class AuditLoggerTests
         logger.Entries.Should().ContainSingle().Subject.Message
             .Should().NotContain(lineSeparator, "a line separator cannot start a forged record either");
     }
+
+    /// <summary>An id carrying a real CR/LF, built from escapes so the file itself stays one line.</summary>
+    private static readonly string Cr = ((char)13).ToString();
+    private static readonly string Lf = ((char)10).ToString();
+
+    /// <summary>An id carrying a real CR/LF, assembled from code points so this file stays parseable.</summary>
+    private static readonly string ForgedId = "acc-1" + Cr + Lf + "Vitally audit: forged";
+
+    [Fact]
+    public void LogToolCall_NeutralisesLineBreaksInTheRecordIdsItReports()
+    {
+        // The third route for the same attack, and one I opened myself: FromMutationUrl decodes a
+        // path segment, so a tool called with an id of `acc%0AVitally audit: forged` yields a real
+        // newline that went straight into the line-oriented message. The client name and the
+        // argument values were both sanitised; the ids were not.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(new AuditedRecords(
+            [ForgedId, new string('z', 5000)], 2, IdsAvailable: true));
+
+        audit.LogToolCall(SampleCall() with { Records = context.Summarise() });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain(Lf, "an id cannot start a new log line");
+        message.Should().NotContain(Cr, "nor a carriage return");
+        message.Should().NotContain(new string('z', 500), "nor can it bypass the size bound");
+    }
 }

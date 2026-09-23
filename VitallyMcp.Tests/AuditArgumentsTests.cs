@@ -304,4 +304,24 @@ public class AuditArgumentsTests
         var names = parsed.RootElement.EnumerateObject().Select(p => p.Name).ToList();
         names.Should().OnlyHaveUniqueItems("a record with duplicate keys cannot be read unambiguously");
     }
+
+    [Fact]
+    public void Format_DisambiguatesArgumentNamesThatTruncateToTheSamePrefix()
+    {
+        // Name truncation was itself a way to make the record ambiguous: two DISTINCT names sharing
+        // their first 125 rendered characters both became the same prefix plus the marker, so the
+        // record carried duplicate keys and a parser returned whichever it liked. Same class as the
+        // omission-property collision, reached through the fix for a different problem.
+        var shared = new string('p', 300);
+        var args = Args(
+            (shared + "alpha", "first"),
+            (shared + "beta", "second"));
+
+        var result = AuditArguments.Format(args);
+
+        using var parsed = JsonDocument.Parse(result.Rendered);
+        var names = parsed.RootElement.EnumerateObject().Select(p => p.Name).ToList();
+        names.Should().HaveCount(2).And.OnlyHaveUniqueItems(
+            "two distinct arguments must stay distinguishable after their names are shortened");
+    }
 }

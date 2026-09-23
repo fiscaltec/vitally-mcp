@@ -125,7 +125,7 @@ public class AuditLogger
             ResolveUserId(),
             call.ToolName,
             call.Arguments.Rendered,
-            string.Join(",", call.Records.Ids),
+            SanitiseIds(call.Records.Ids),
             call.Records.RecordsFetched,
             call.Records.IdsRecorded,
             call.Records.Truncated,
@@ -222,11 +222,50 @@ public class AuditLogger
     /// on them. Sanitising only the C0 controls closed half the injection this method exists to stop.
     /// Checking the unicode category covers both without magic numbers.
     /// </remarks>
+    /// <summary>
+    /// Replaces anything that could break a line, and bounds the length.
+    /// </summary>
+    /// <remarks>
+    /// Allocates the CAPPED length, not the caller's. Sanitising the whole string and trimming
+    /// afterwards meant a 10 MB value forced a 10 MB allocation and scan per call for output that was
+    /// always going to be short — a bound on the record that was not a bound on the work.
+    /// </remarks>
+    private static string Flatten(string value, int max)
+    {
+        var oversized = value.Length > max;
+        var kept = oversized ? max : value.Length;
+        var flattened = string.Create(kept, value, static (span, source) =>
+        {
+            for (var i = 0; i < span.Length; i++)
+            {
+                span[i] = IsLineBreaking(source[i]) ? '_' : source[i];
+            }
+        });
+
+        return oversized ? flattened + TruncationMarker : flattened;
+    }
+
     private static bool IsLineBreaking(char c) =>
         char.IsControl(c)
         || char.GetUnicodeCategory(c)
             is System.Globalization.UnicodeCategory.LineSeparator
             or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
+    /// <summary>Longest a single record id may be in the message.</summary>
+    private const int MaxIdChars = 128;
+
+    /// <summary>
+    /// Renders the touched record ids safely for a line-oriented log.
+    /// </summary>
+    /// <remarks>
+    /// The ids are <b>not</b> purely server-side data. <c>AuditRecordIds.FromMutationUrl</c> decodes a
+    /// path segment the caller supplied, so a tool invoked with an id of <c>acc%0AVitally audit: …</c>
+    /// yields a real newline — the same forgery the client name and the argument values are already
+    /// sanitised against, reached through the one field that was not. Each id is flattened and
+    /// length-bounded before it reaches the message.
+    /// </remarks>
+    private static string SanitiseIds(IReadOnlyList<string> ids) =>
+        string.Join(",", ids.Select(id => Flatten(id, MaxIdChars)));
 
     private static string SanitiseClientName(string? name)
     {

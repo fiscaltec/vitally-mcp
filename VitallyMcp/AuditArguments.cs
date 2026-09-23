@@ -96,10 +96,10 @@ public static class AuditArguments
                     namesTruncated = true;
                 }
 
-                return (
+                return new Entry(
                     Key: key,
                     Text: text,
-                    a.Value,
+                    Value: a.Value,
                     Scoping: IsScopingIdentifier(key, text),
                     KeyCost: EscapedLength(key) + 6,
                     // What this value will actually COST once written. A string is escaped on the way
@@ -112,6 +112,31 @@ public static class AuditArguments
         if (entries.Count == 0)
         {
             return new AuditedArguments("{}", Truncated: false);
+        }
+
+        // Shortening names can make two DISTINCT arguments share one key — anything past the cap
+        // collapses to the same prefix — and a record with duplicate keys is read arbitrarily by a
+        // parser, so the reader cannot tell which value belonged to which argument. Same
+        // evidence-ambiguity failure as the omission property, reached through the fix for a
+        // different problem. Input keys are unique by construction, so only truncation causes this.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (seen.Add(entries[i].Key))
+            {
+                continue;
+            }
+
+            var suffix = 2;
+            string candidate;
+            do
+            {
+                candidate = entries[i].Key + "~" + suffix++;
+            }
+            while (!seen.Add(candidate));
+
+            entries[i] = entries[i] with { Key = candidate, KeyCost = EscapedLength(candidate) + 6 };
+            namesTruncated = true;
         }
 
         // A hard bound, which it was not before. Capping each name still let a caller choose how many
@@ -220,9 +245,10 @@ public static class AuditArguments
                 // otherwise produce a record with DUPLICATE keys, and a parser picks one arbitrarily.
                 // Audit evidence a caller can make ambiguous is not evidence.
                 var name = OmittedPropertyName;
-                while (entries.Where((_, i) => included[i]).Any(e => e.Key == name))
+                var written = entries.Where((_, i) => included[i]).Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
+                for (var attempt = 1; written.Contains(name); attempt++)
                 {
-                    name += "_";
+                    name = $"{OmittedPropertyName}~{attempt}";
                 }
 
                 writer.WriteNumber(name, omitted);
@@ -291,6 +317,15 @@ public static class AuditArguments
     /// </summary>
     private static int SafeCut(string text, int index) =>
         index > 0 && char.IsHighSurrogate(text[index - 1]) ? index - 1 : index;
+
+    /// <summary>One argument, as the allocator needs to see it.</summary>
+    private readonly record struct Entry(
+        string Key,
+        string Text,
+        JsonElement Value,
+        bool Scoping,
+        int KeyCost,
+        int Cost);
 
     private static string AsText(JsonElement value) =>
         value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();
