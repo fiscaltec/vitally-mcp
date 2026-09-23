@@ -151,4 +151,20 @@ public class ToolCallAuditContextTests
         taken.IdsRecorded.Should().Be(1);
         context.Summarise().Ids.Should().Equal(["org-1", "org-2"], "while a fresh one sees both");
     }
+
+    [Fact]
+    public void RecordResolvedTier_KeepsTheTierThatAdmittedTheCall_NotTheLastBackstopCheck()
+    {
+        // The authorizer runs more than once per tool call: the SDK's admission check, then the
+        // VitallyService backstop for every upstream request — and a composite tool issues several.
+        // If membership changes mid-call, or a later lookup is served stale, last-write-wins would
+        // report a tier that did NOT admit the call, contradicting the one invariant this field has.
+        var context = new ToolCallAuditContext();
+
+        context.RecordResolvedTier(new HashSet<string> { "vitally:read", "vitally:write" });
+        context.RecordResolvedTier(new HashSet<string> { "vitally:read" });
+
+        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write",
+            "the admission decision is the one the record documents");
+    }
 }

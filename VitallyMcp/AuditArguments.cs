@@ -32,6 +32,18 @@ public static class AuditArguments
     /// </summary>
     internal const int MaxTotalChars = 4096;
 
+    /// <summary>
+    /// Longest argument name a record will carry, in rendered characters.
+    /// </summary>
+    /// <remarks>
+    /// Names are caller-controlled, so leaving them unbounded made the set cap unenforceable — a
+    /// 50 KB name writes a 50 KB log line whatever the value budget says. They are <b>truncated</b>
+    /// rather than dropped: an argument that vanished would read as one the caller never sent, but
+    /// protecting against that misreading at the price of an unbounded write is the worse trade.
+    /// Real MCP parameter names are tens of characters.
+    /// </remarks>
+    internal const int MaxNameChars = 128;
+
     /// <summary>Longest value that may still claim scoping-identifier priority.</summary>
     internal const int MaxScopingIdentifierChars = 256;
 
@@ -69,21 +81,30 @@ public static class AuditArguments
             return new AuditedArguments("{}", Truncated: false);
         }
 
+        var namesTruncated = false;
         var entries = arguments
             .Select(a =>
             {
                 var text = AsText(a.Value);
                 var isString = a.Value.ValueKind == JsonValueKind.String;
+                var key = a.Key;
+                if (EscapedLength(key) > MaxNameChars)
+                {
+                    key = TakeWithinEscapedBudget(key, MaxNameChars - TruncationMarker.Length)
+                        + TruncationMarker;
+                    namesTruncated = true;
+                }
+
                 return (
-                    a.Key,
+                    Key: key,
                     Text: text,
                     a.Value,
-                    Scoping: IsScopingIdentifier(a.Key, text),
+                    Scoping: IsScopingIdentifier(key, text),
                     // Names are escaped on the way out too — `WritePropertyName` applies the same
                     // rules as a value — and they come from the MCP client, so a name full of quotes
                     // costs twice what its raw length suggests. Counting the raw length here handed
                     // the values a share computed against names that cost more than that.
-                    KeyCost: EscapedLength(a.Key),
+                    KeyCost: EscapedLength(key),
                     // What this value will actually COST once written. A string is escaped on the way
                     // out — a quote costs one character to hold and two to write — while any other
                     // element is emitted as its own raw JSON. Budgeting on the decoded length let a
@@ -109,7 +130,7 @@ public static class AuditArguments
         // squeezing out even the scoping identifiers. The floor keeps the record able to name a
         // customer in that case, which is the property the whole trail rests on.
         var budget = Math.Max(MinValueBudget, MaxTotalChars - 2 - overhead);
-        var truncated = false;
+        var truncated = namesTruncated;
 
         // Scoping identifiers go first and take what they need, because they are what names the
         // customer and a record that cannot say who was touched fails the whole point. But they take

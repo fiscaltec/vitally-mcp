@@ -156,4 +156,24 @@ public class AuditArgumentsTests
         result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
             "escaped names must be budgeted at what they cost to write, so the values shrink to fit");
     }
+
+    [Fact]
+    public void Format_BoundsTheRecord_EvenWhenTheArgumentNameItselfIsEnormous()
+    {
+        // Argument NAMES are caller-controlled, so "names are never dropped" — the rule this file
+        // documented until now — made the cap unenforceable: a 50 KB name writes a 50 KB log line
+        // whatever the value budget says. That protected against a record misreading as though the
+        // caller sent no argument, at the price of an unbounded write, which is the worse trade.
+        //
+        // The name is TRUNCATED rather than dropped, so the argument still appears and the record is
+        // still bounded.
+        var enormousName = new string('n', 50_000);
+
+        var result = AuditArguments.Format(Args((enormousName, "value")));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
+            "a caller-controlled name cannot be an unbounded path around the cap");
+        result.Truncated.Should().BeTrue("and the record says something was shortened");
+        result.Rendered.Should().Contain("nnnn", "the name is shortened, not dropped");
+    }
 }

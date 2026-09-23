@@ -41,6 +41,7 @@ public sealed class ToolCallAuditContext
     private bool _pagerTruncated;
     private int _callsWithoutIds;
     private string _permissionTier = "unresolved";
+    private bool _tierRecorded;
     private bool? _tierServedStale;
 
     public void RecordUpstream(AuditedRecords records)
@@ -112,6 +113,18 @@ public sealed class ToolCallAuditContext
     {
         lock (_gate)
         {
+            // First write wins. The authorizer runs several times per tool call — the SDK's admission
+            // check, then the VitallyService backstop for every upstream request, and a composite tool
+            // issues several. Last-write-wins would report whichever check ran last, so a membership
+            // change mid-call, or a later lookup served stale, would put a tier in the record that did
+            // not admit the call. The invariant is "the tier the decision was made against", and the
+            // decision is the first one.
+            if (_tierRecorded)
+            {
+                return;
+            }
+
+            _tierRecorded = true;
             _permissionTier = permissions.Count == 0
                 ? "none"
                 : string.Join(",", permissions.OrderBy(p => p, StringComparer.Ordinal));

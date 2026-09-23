@@ -14,9 +14,18 @@ namespace VitallyMcp;
 /// <para>
 /// <b>Four record shapes, not one</b>, because they are emitted at different points:
 /// <list type="bullet">
-///   <item><see cref="LogToolCall"/> — the <b>primary</b> record, one per tool call: identity, tool,
-///     arguments, the record ids touched, outcome, duration, correlation id, and the permission tier
-///     resolved at the time. This is the one that satisfies the acceptance criterion.</item>
+///   <item><see cref="LogToolCall"/> — the <b>primary</b> record, one per <i>executed</i> tool call:
+///     identity, tool, arguments, the record ids touched, outcome, duration, correlation id, and the
+///     permission tier resolved at the time. This is the one that satisfies the acceptance criterion.
+///     <para>
+///     ⚠️ <b>"Executed" is the exact word.</b> It is emitted from a call-tool filter, and the SDK's
+///     <c>[Authorize]</c> checkpoint rejects an out-of-tier call <i>outside</i> that pipeline — so a
+///     <b>tier-denied call produces no record of this shape</b>, only <see cref="LogToolCallDenied"/>.
+///     The trail is not blind there (that record names the caller, the tool and the permission
+///     required) but it carries no arguments, no correlation id and no touched records, so a denial
+///     cannot say what the caller was reaching for. That is a deliberate boundary of #147 rather than
+///     an oversight, and it is the same open question noted on
+///     <see cref="LogToolCallDenied"/>.</para></item>
 ///   <item><see cref="LogAction"/> — from <see cref="VitallyService.SendAsync"/> after each upstream
 ///     response: identity, verb, resource path (query string stripped), status, and the correlation
 ///     id of the tool call that caused it — without which the join the tool-call record promises
