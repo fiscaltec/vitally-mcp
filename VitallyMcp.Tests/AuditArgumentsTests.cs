@@ -115,4 +115,24 @@ public class AuditArgumentsTests
         result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
             "the cap governs what is written, not what was measured");
     }
+
+    [Fact]
+    public void Format_BoundsTheRecord_EvenWhenEveryArgumentClaimsTheScopingExemption()
+    {
+        // The exemption writes scoping identifiers in full and charges them against the budget —
+        // which bounds the FREE TEXT but not the record, because an exempt value is still written
+        // after the budget has gone negative. Each one is individually capped at 256, so a caller
+        // passing many of them can still blow the documented set cap.
+        var args = Enumerable.Range(0, 100)
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}Id", new string('e', 250)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        // Bounded against the ~26 KB this produced before the fix. The bound is on the VALUES: the
+        // documented contract is that argument names are never dropped, so a call naming a hundred
+        // arguments still pays for a hundred names.
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
+            "scoping identifiers take priority from the budget rather than bypassing it");
+    }
 }
