@@ -122,7 +122,7 @@ public class AuditLogger
             (long)call.Duration.TotalMilliseconds,
             call.CorrelationId,
             call.PermissionTier,
-            call.TierServedStale,
+            call.TierServedStale?.ToString() ?? "unknown",
             call.McpClient ?? "unknown");
     }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
@@ -144,6 +145,12 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddScoped<ToolAuthorizer>();
 builder.Services.AddScoped<AuditLogger>();
+
+// Scoped, and that is the whole contract: the tool's VitallyService writes what it touched into
+// this, and the call-tool filter below reads it back. Registered per-request so one caller's reads
+// can never appear in another's record — and so that, in stateless mode, each tools/call gets a
+// fresh one. A singleton here would merge every caller's activity into one running tally.
+builder.Services.AddScoped<ToolCallAuditContext>();
 builder.Services.AddTransient<VitallyRateLimitHandler>();
 
 builder.Services.AddHttpClient<VitallyService>()
@@ -330,6 +337,52 @@ mcpBuilder.WithRequestFilters(filters =>
         catch (Exception ex) when (ToolErrorResult.IsSurfaceable(ex))
         {
             return ToolErrorResult.Build(ex);
+        }
+    });
+
+    // The audit record for the call itself (#147). Registered after the error-surfacing filter so it
+    // still runs when that filter converts an exception into an error result — the record must exist
+    // for a failed call as much as a successful one, since an attempted deletion that errored is
+    // exactly the sort of event an access trail is kept for.
+    filters.AddCallToolFilter(next => async (context, cancellationToken) =>
+    {
+        var auditContext = context.Services?.GetService<ToolCallAuditContext>();
+        var audit = context.Services?.GetService<AuditLogger>();
+        if (auditContext is null || audit is null)
+        {
+            return await next(context, cancellationToken);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "ok";
+        try
+        {
+            var result = await next(context, cancellationToken);
+            if (result.IsError == true)
+            {
+                outcome = "error";
+            }
+
+            return result;
+        }
+        catch
+        {
+            outcome = "error";
+            throw;
+        }
+        finally
+        {
+            var summary = auditContext.Summarise();
+            audit.LogToolCall(new ToolCallAudit(
+                ToolName: context.Params?.Name ?? "unknown",
+                Arguments: AuditArguments.Format(context.Params?.Arguments),
+                Records: summary,
+                Outcome: outcome,
+                Duration: Stopwatch.GetElapsedTime(started),
+                CorrelationId: auditContext.CorrelationId,
+                PermissionTier: summary.PermissionTier,
+                TierServedStale: summary.TierServedStale,
+                McpClient: null));
         }
     });
 

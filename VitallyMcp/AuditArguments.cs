@@ -45,9 +45,15 @@ public static class AuditArguments
     /// <summary>Longest value that may still claim the scoping-identifier exemption.</summary>
     internal const int MaxScopingIdentifierChars = 256;
 
-    public static AuditedArguments Format(IReadOnlyDictionary<string, JsonElement>? arguments)
+    /// <remarks>
+    /// Takes a key/value sequence rather than a dictionary interface deliberately: the MCP SDK hands
+    /// the call's arguments over as <c>IDictionary</c>, which does <b>not</b> implement
+    /// <c>IReadOnlyDictionary</c>, so a narrower parameter would compile in the tests and fail at the
+    /// one call site that matters.
+    /// </remarks>
+    public static AuditedArguments Format(IEnumerable<KeyValuePair<string, JsonElement>>? arguments)
     {
-        if (arguments is null || arguments.Count == 0)
+        if (arguments is null)
         {
             return new AuditedArguments("{}", Truncated: false);
         }
@@ -59,6 +65,11 @@ public static class AuditArguments
                 return (a.Key, Text: text, a.Value, Scoping: IsScopingIdentifier(a.Key, text));
             })
             .ToList();
+
+        if (entries.Count == 0)
+        {
+            return new AuditedArguments("{}", Truncated: false);
+        }
 
         // Reserve the structural cost up front — quotes, colons, commas and the names themselves —
         // so the value budget is what is actually left rather than an optimistic figure the entries

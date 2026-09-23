@@ -19,6 +19,11 @@ namespace VitallyMcp;
 /// <c>true</c> when that tier came from <c>GraphGroupPermissionResolver</c>'s retained copy during a
 /// Graph outage rather than a fresh lookup. A stale tier is a weaker claim than a fresh one, and a
 /// record that cannot tell them apart overstates its own confidence.
+/// <para>
+/// <c>null</c> means <b>not known</b>, and that is what it holds today: the resolver serves stale
+/// internally and logs it, but does not report it back through <c>IGroupPermissionResolver</c>.
+/// Recording <c>false</c> would assert the tier was fresh when nothing checked.
+/// </para>
 /// </param>
 /// <param name="McpClient">
 /// Which client made the call. Read per call from the request's <c>_meta</c> — in stateless mode
@@ -33,5 +38,5 @@ public readonly record struct ToolCallAudit(
     TimeSpan Duration,
     string CorrelationId,
     string PermissionTier,
-    bool TierServedStale,
+    bool? TierServedStale,
     string? McpClient);
