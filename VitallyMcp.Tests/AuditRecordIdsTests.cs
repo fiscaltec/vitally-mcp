@@ -107,4 +107,27 @@ public class AuditRecordIdsTests
         act.Should().NotThrow();
         AuditRecordIds.Extract("<html>502 Bad Gateway</html>").IdsAvailable.Should().BeFalse();
     }
+
+    [Fact]
+    public void Extract_ReportsAGap_WhenTheArrayHasRecordsButNoneCarriesAnId()
+    {
+        // Distinct from an empty result set, which is a complete answer with nothing in it. A
+        // non-empty array whose elements have no `id` is a genuine gap: records were read and none
+        // can be named. Reporting it as available makes CallsWithoutIds say there was no gap.
+        var result = AuditRecordIds.Extract("""{"results":[{"name":"A"},{"name":"B"}]}""");
+
+        result.RecordsFetched.Should().Be(2, "two records really were read");
+        result.IdsAvailable.Should().BeFalse("none of them could be named");
+    }
+
+    [Fact]
+    public void Extract_TreatsAnEmptyResultSetAsAvailable_NotAsAGap()
+    {
+        // The counterpart. An empty list is a complete answer, not a failure to read ids, and
+        // flagging it would make every "no matches" search look like a broken audit record.
+        var result = AuditRecordIds.Extract("""{"results":[]}""");
+
+        result.RecordsFetched.Should().Be(0);
+        result.IdsAvailable.Should().BeTrue();
+    }
 }

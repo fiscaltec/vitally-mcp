@@ -99,6 +99,39 @@ public class ToolCallAuditCompositionTests
                 }));
         }
 
+        /// <summary>
+        /// A 2026-07-28 caller. That revision removed the <c>initialize</c> handshake, so in stateless
+        /// mode the client's identity arrives in per-request <c>_meta</c> and nowhere else — which is
+        /// why this shape exists rather than reusing the legacy path above. The server enforces the
+        /// full contract, so the header, the protocol version and the capabilities object are all
+        /// required together.
+        /// </summary>
+        public async Task<string> CallToolWithClientInfoAsync(string toolName, string clientName)
+        {
+            using var client = _factory.CreateClient();
+            var body =
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{"
+                + "\"name\":\"" + toolName + "\",\"arguments\":{},\"_meta\":{"
+                + "\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\","
+                + "\"io.modelcontextprotocol/clientCapabilities\":{},"
+                + "\"io.modelcontextprotocol/clientInfo\":{\"name\":\"" + clientName + "\",\"version\":\"0.0.1\"}"
+                + "}}}";
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", "2026-07-28");
+            request.Headers.TryAddWithoutValidation("Mcp-Method", "tools/call");
+            // A fourth requirement alongside the three CLAUDE.md lists, and undocumented there: for
+            // tools/call the SDK also demands the tool name in a header, rejecting its absence with
+            // -32020 "Missing required Mcp-Name header."
+            request.Headers.TryAddWithoutValidation("Mcp-Name", toolName);
+
+            using var response = await client.SendAsync(request);
+            return Unwrap(await response.Content.ReadAsStringAsync());
+        }
+
         public async Task<string> CallToolAsync(string toolName)
         {
             using var client = _factory.CreateClient();
@@ -111,14 +144,17 @@ public class ToolCallAuditCompositionTests
             request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
 
             using var response = await client.SendAsync(request);
-            var raw = await response.Content.ReadAsStringAsync();
-            return raw.Contains("data:", StringComparison.Ordinal)
+            return Unwrap(await response.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>Pulls the JSON payload out of an SSE frame when the server answers with one.</summary>
+        private static string Unwrap(string raw) =>
+            raw.Contains("data:", StringComparison.Ordinal)
                 ? raw.Split('\n')
                     .First(l => l.TrimStart().StartsWith("data:", StringComparison.Ordinal))
                     .Trim()["data:".Length..]
                     .Trim()
                 : raw;
-        }
 
         public void Dispose()
         {
@@ -153,27 +189,56 @@ public class ToolCallAuditCompositionTests
     /// Answers the per-group <c>transitiveMembers</c> query, reporting membership of one group only —
     /// so the caller resolves to exactly the reader tier.
     /// </summary>
-    private sealed class GraphHandler(string memberGroupId) : HttpMessageHandler
+    private sealed class GraphHandler(string memberGroupId) : RecordingHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override HttpResponseMessage Respond(HttpRequestMessage request)
         {
             var isMember = request.RequestUri!.ToString()
                 .Contains(memberGroupId, StringComparison.OrdinalIgnoreCase);
             var body = isMember ? "{\"value\":[{\"id\":\"" + UserOid + "\"}]}" : "{\"value\":[]}";
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 
-    private sealed class VitallyHandler(string body, HttpStatusCode status) : HttpMessageHandler
+    private sealed class VitallyHandler(string body, HttpStatusCode status) : RecordingHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(status)
+        protected override HttpResponseMessage Respond(HttpRequestMessage request) =>
+            new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+    }
+
+    /// <summary>
+    /// Keeps every response it hands out and disposes them with itself. A handler cannot dispose a
+    /// response it is returning, so without this each one leaks — which is what CodeQL flags, and the
+    /// same shape <see cref="StaleEntitlementCompositionTests"/> solves this way.
+    /// </summary>
+    private abstract class RecordingHandler : HttpMessageHandler
+    {
+        private readonly List<HttpResponseMessage> _issued = [];
+
+        protected abstract HttpResponseMessage Respond(HttpRequestMessage request);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = Respond(request);
+            _issued.Add(response);
+            return Task.FromResult(response);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
             {
-                Content = new StringContent(body, Encoding.UTF8, "application/json")
-            });
+                foreach (var response in _issued)
+                {
+                    response.Dispose();
+                }
+            }
+
+            base.Dispose(disposing);
+        }
     }
 
     [Fact]
@@ -195,5 +260,21 @@ public class ToolCallAuditCompositionTests
         record.Should().Contain(UserOid, "a failed call is still attributable");
         record.Should().NotContain("upstream exploded",
             "the upstream body never enters the audit record — it can carry customer data");
+    }
+
+    [Fact]
+    public async Task AToolCall_RecordsWhichMcpClientMadeIt()
+    {
+        // Stateless mode has no `initialize` handshake to read clientInfo from — 2026-07-28 removed
+        // it — so the client's identity arrives in per-request `_meta` and must be read per call.
+        // Without this the trail cannot tell Claude Desktop from VS Code from a script.
+        using var harness = new Harness(TwoOrganisations);
+
+        var response = await harness.CallToolWithClientInfoAsync("List_organizations", "smoke-client");
+        response.Should().NotContain("\"error\"", "the 2026-07-28 request shape must be accepted");
+
+        harness.AuditRecords.Should()
+            .ContainSingle(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
+            .Subject.Message.Should().Contain("client=smoke-client");
     }
 }

@@ -364,4 +364,21 @@ public class ToolAuthorizerTests
 
         context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
     }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheTier_OnTheClaimPathToo()
+    {
+        // The claim path is inert on every deployed target, but it is the supported local-dev mode
+        // and the record promises "the tier the caller resolved to". Leaving it "unresolved" there
+        // would make a developer reading their own audit output conclude the field is broken.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = false },
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(
+            UserWithPermissions("vitally:read", "vitally:write"), "vitally:read");
+
+        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
+    }
 }

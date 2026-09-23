@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -339,5 +340,26 @@ public class AuditLoggerTests
 
         logger.Entries.Should().ContainSingle().Subject.Message
             .Should().NotContain("fiscaltec.com", "the object id is the identifier, not the email");
+    }
+
+    [Fact]
+    public void LogToolCall_ReportsArgumentTruncation_SeparatelyFromPagerTruncation()
+    {
+        // Two different facts that must not share a field. `truncated` says the PAGER stopped early,
+        // so the matching total is unknown. Argument truncation says the recorded arguments are not
+        // the full ones the caller sent. A record showing only the former would present a shortened
+        // 2 KB filter as though it had been captured in full.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var oversized = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(new Dictionary<string, object?> { ["jsonBody"] = new string('x', 9000) }))!;
+
+        audit.LogToolCall(SampleCall() with { Arguments = AuditArguments.Format(oversized) });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("argsTruncated=True", "the recorded arguments are not the full ones");
+        message.Should().Contain("truncated=False", "the pager did not stop early — a different fact");
     }
 }

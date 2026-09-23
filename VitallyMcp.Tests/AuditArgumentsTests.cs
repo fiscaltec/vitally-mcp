@@ -13,9 +13,12 @@ namespace VitallyMcp.Tests;
 /// </summary>
 public class AuditArgumentsTests
 {
-    private static IReadOnlyDictionary<string, JsonElement> Args(params (string Name, object? Value)[] pairs)
+    private static IReadOnlyDictionary<string, JsonElement> Args(params (string Name, object? Value)[] pairs) =>
+        Args(pairs.Select(p => new KeyValuePair<string, object?>(p.Name, p.Value)).ToArray());
+
+    private static IReadOnlyDictionary<string, JsonElement> Args(params KeyValuePair<string, object?>[] pairs)
     {
-        var json = JsonSerializer.Serialize(pairs.ToDictionary(p => p.Name, p => p.Value));
+        var json = JsonSerializer.Serialize(pairs.ToDictionary(p => p.Key, p => p.Value));
         return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
     }
 
@@ -55,7 +58,7 @@ public class AuditArgumentsTests
         // The per-value cap alone does not bound a record — a caller passing many medium-sized
         // filters would otherwise write an unbounded line.
         var args = Enumerable.Range(0, 10)
-            .Select(i => ($"filter{i}", (object?)new string('b', 1000)))
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('b', 1000)))
             .ToArray();
 
         var result = AuditArguments.Format(Args(args));
@@ -72,8 +75,8 @@ public class AuditArgumentsTests
         // that may be cut — a record that proves a call happened but cannot say who it touched
         // fails the acceptance criterion outright.
         var args = Enumerable.Range(0, 400)
-            .Select(i => ($"filter{i}", (object?)new string('c', 50)))
-            .Append(("organizationId", (object?)"org-9f3c2b1a"))
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('c', 50)))
+            .Append(new KeyValuePair<string, object?>("organizationId", "org-9f3c2b1a"))
             .ToArray();
 
         var result = AuditArguments.Format(Args(args));
@@ -95,5 +98,21 @@ public class AuditArgumentsTests
         result.Truncated.Should().BeTrue();
         result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
             "an identifier-shaped name does not exempt free text from the budget");
+    }
+
+    [Fact]
+    public void Format_KeepsTheRecordWithinBudget_EvenWhenEveryCharacterEscapes()
+    {
+        // The allowance was measured on the DECODED value while the budget is spent on the RENDERED
+        // record. A quote costs one character to hold and two to write, so a set that fits its
+        // allowance can still serialise past the cap — and a `jsonBody` argument is mostly quotes.
+        var args = Enumerable.Range(0, 10)
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('"', 1000)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
+            "the cap governs what is written, not what was measured");
     }
 }

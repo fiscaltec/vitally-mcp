@@ -19,21 +19,11 @@ public readonly record struct AuditedArguments(string Rendered, bool Truncated);
 public static class AuditArguments
 {
     /// <summary>
-    /// Per-value cap. Matches <c>VitallyService</c>'s own <c>Truncate(body, 1024)</c> deliberately, so
-    /// one number governs how much free text this server puts into a log line.
+    /// Per-value cap, counted in <i>rendered</i> characters. Matches <c>VitallyService</c>'s own
+    /// <c>Truncate(body, 1024)</c> deliberately, so one number governs how much free text this server
+    /// puts into a log line.
     /// </summary>
     internal const int MaxValueChars = 1024;
-
-    // ASCII, and deliberately so. The writer escapes non-ASCII by default, so a one-character "…"
-    // renders as the six characters … — which silently overran the set budget by 5 per truncated
-    // value when this was first written. A marker that costs what it appears to cost keeps the
-    // arithmetic below honest.
-    private const string TruncationMarker = "...";
-
-    // Relaxed escaping for the same reason: the budget is counted in characters, and default escaping
-    // would inflate any non-ASCII argument value (an accented name, a unicode search term) well past
-    // it. This output is a log record, never HTML, so the relaxed encoder is the right one.
-    private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>
     /// Budget for the whole rendered set. Argument <i>names</i> are never dropped, so a call with a
@@ -45,6 +35,22 @@ public static class AuditArguments
     /// <summary>Longest value that may still claim the scoping-identifier exemption.</summary>
     internal const int MaxScopingIdentifierChars = 256;
 
+    // ASCII, and deliberately so. The writer escapes non-ASCII by default, so a one-character "…"
+    // renders as the six characters … — which silently overran the set budget by 5 per truncated
+    // value when this was first written. A marker that costs what it appears to cost keeps the
+    // arithmetic below honest.
+    private const string TruncationMarker = "...";
+
+    // Relaxed escaping so a non-ASCII argument value (an accented name, a unicode search term) is not
+    // inflated six-fold. This output is a log record, never HTML, so the relaxed encoder is correct.
+    private static readonly JavaScriptEncoder Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+
+    private static readonly JsonWriterOptions WriterOptions = new() { Encoder = Encoder };
+
+    /// <summary>
+    /// Renders the arguments as a bounded JSON object, shortening values as needed to stay inside
+    /// <see cref="MaxTotalChars"/>.
+    /// </summary>
     /// <remarks>
     /// Takes a key/value sequence rather than a dictionary interface deliberately: the MCP SDK hands
     /// the call's arguments over as <c>IDictionary</c>, which does <b>not</b> implement
@@ -62,7 +68,18 @@ public static class AuditArguments
             .Select(a =>
             {
                 var text = AsText(a.Value);
-                return (a.Key, Text: text, a.Value, Scoping: IsScopingIdentifier(a.Key, text));
+                var isString = a.Value.ValueKind == JsonValueKind.String;
+                return (
+                    a.Key,
+                    Text: text,
+                    a.Value,
+                    Scoping: IsScopingIdentifier(a.Key, text),
+                    // What this value will actually COST once written. A string is escaped on the way
+                    // out — a quote costs one character to hold and two to write — while any other
+                    // element is emitted as its own raw JSON. Budgeting on the decoded length let a
+                    // set of quote-heavy values (a `jsonBody` argument is mostly quotes) render to
+                    // roughly twice the cap.
+                    Cost: isString ? EscapedLength(text) : text.Length);
             })
             .ToList();
 
@@ -79,8 +96,8 @@ public static class AuditArguments
         // Scoping identifiers are written in full and charged against the budget rather than
         // competing for it, so the free text is what shrinks. They are what names the customer, and
         // a record that proves a call happened without saying who it touched fails the whole point.
-        var scopingLength = entries.Where(e => e.Scoping).Sum(e => e.Text.Length);
-        var valueBudget = MaxTotalChars - 2 - overhead - scopingLength;
+        var scopingCost = entries.Where(e => e.Scoping).Sum(e => e.Cost);
+        var valueBudget = MaxTotalChars - 2 - overhead - scopingCost;
         var remaining = entries.Count(e => !e.Scoping);
         var truncated = false;
 
@@ -103,20 +120,21 @@ public static class AuditArguments
                 var allowed = Math.Min(MaxValueChars, share);
                 remaining--;
 
-                if (entry.Text.Length <= allowed)
+                if (entry.Cost <= allowed)
                 {
                     // Write the original element so a number stays a number and an object stays an
                     // object — the record is evidence, and re-typing it loses fidelity for nothing.
                     writer.WritePropertyName(entry.Key);
                     entry.Value.WriteTo(writer);
-                    valueBudget -= entry.Text.Length;
+                    valueBudget -= entry.Cost;
                     continue;
                 }
 
                 // Shorten the value, never drop the argument: knowing a caller passed *some*
                 // oversized filter beats a record that reads as though none was given. The marker
-                // counts against the allowance rather than being added on top of it.
-                var kept = entry.Text[..Math.Max(0, allowed - TruncationMarker.Length)];
+                // counts against the allowance rather than being added on top of it, and the cut is
+                // made against the ESCAPED length, because that is what the allowance buys.
+                var kept = TakeWithinEscapedBudget(entry.Text, allowed - TruncationMarker.Length);
                 writer.WriteString(entry.Key, kept + TruncationMarker);
                 valueBudget -= allowed;
                 truncated = true;
@@ -145,7 +163,47 @@ public static class AuditArguments
             || name.EndsWith("Id", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith("Ids", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>How many characters <paramref name="text"/> occupies once written as a JSON string.</summary>
+    private static int EscapedLength(string text) =>
+        text.Length == 0 ? 0 : JsonEncodedText.Encode(text, Encoder).Value.Length;
+
+    /// <summary>
+    /// The longest prefix of <paramref name="text"/> that still fits <paramref name="budget"/> once
+    /// escaped. Found by bisection rather than arithmetic because the cost per character is not
+    /// uniform — a quote costs two, a control character six, most characters one.
+    /// </summary>
+    private static string TakeWithinEscapedBudget(string text, int budget)
+    {
+        if (budget <= 0)
+        {
+            return string.Empty;
+        }
+
+        var low = 0;
+        var high = Math.Min(text.Length, budget);
+        while (low < high)
+        {
+            var mid = (low + high + 1) / 2;
+            if (EscapedLength(text[..SafeCut(text, mid)]) <= budget)
+            {
+                low = mid;
+            }
+            else
+            {
+                high = mid - 1;
+            }
+        }
+
+        return text[..SafeCut(text, low)];
+    }
+
+    /// <summary>
+    /// Pulls a cut back off a surrogate pair. Slicing between the two halves of an astral character
+    /// leaves a lone surrogate, which is not valid text to encode.
+    /// </summary>
+    private static int SafeCut(string text, int index) =>
+        index > 0 && char.IsHighSurrogate(text[index - 1]) ? index - 1 : index;
+
     private static string AsText(JsonElement value) =>
         value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();
-
 }

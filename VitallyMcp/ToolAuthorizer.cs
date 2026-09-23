@@ -186,6 +186,11 @@ public class ToolAuthorizer
             return live.Contains(required);
         }
 
+        // The claim path is inert on every deployed target (#108/#156), but it is the supported
+        // local-dev mode and the audit record promises "the tier the caller resolved to" — leaving it
+        // unresolved here makes the field look broken to anyone reading their own dev output.
+        _auditContext?.RecordResolvedTier(ClaimedPermissions(user, _options.CustomPermissionsClaim));
+
         return HasPermission(user, required, _options.CustomPermissionsClaim);
     }
 
@@ -231,6 +236,32 @@ public class ToolAuthorizer
     /// that mode's entire resolution rather than a fallback beneath the live check. See the class
     /// remarks for why there is no longer a fall-through from the live path to here.
     /// </remarks>
+    /// <summary>
+    /// Every Vitally permission the principal's claims assert, for the audit record. Mirrors the
+    /// sources <see cref="HasPermission"/> consults, so the recorded tier cannot claim something the
+    /// decision would have refused.
+    /// </summary>
+    private static IReadOnlySet<string> ClaimedPermissions(ClaimsPrincipal user, string? customClaimType)
+    {
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+        claimed.UnionWith(user.FindAll("permissions").Select(c => c.Value));
+
+        if (!string.IsNullOrWhiteSpace(customClaimType))
+        {
+            claimed.UnionWith(user.FindAll(customClaimType).Select(c => c.Value));
+        }
+
+        var scope = user.FindFirst("scope")?.Value;
+        if (!string.IsNullOrEmpty(scope))
+        {
+            claimed.UnionWith(scope.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        // Only the permissions this server governs; an OIDC scope like `openid` is not a tier.
+        claimed.RemoveWhere(p => !p.StartsWith("vitally:", StringComparison.Ordinal));
+        return claimed;
+    }
+
     public static bool HasPermission(ClaimsPrincipal user, string required, string? customClaimType = null)
     {
         if (user.FindAll("permissions").Any(c => string.Equals(c.Value, required, StringComparison.Ordinal)))

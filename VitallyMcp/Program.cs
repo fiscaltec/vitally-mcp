@@ -382,7 +382,11 @@ mcpBuilder.WithRequestFilters(filters =>
                 CorrelationId: auditContext.CorrelationId,
                 PermissionTier: summary.PermissionTier,
                 TierServedStale: summary.TierServedStale,
-                McpClient: null));
+                // Read per call, not per session: 2026-07-28 removed the `initialize` handshake, so
+                // in stateless mode the client identifies itself in each request's `_meta` and there
+                // is no session state to have cached it in. A legacy-path caller sends none, and
+                // `unknown` is the honest answer there.
+                McpClient: context.JsonRpcRequest?.Context?.ClientInfo?.Name));
         }
     });
 

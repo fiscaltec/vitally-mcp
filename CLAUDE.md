@@ -74,6 +74,13 @@ error (verified against the running container):
 `Mcp-Method` must also equal the body's `method`; a mismatch is rejected with
 `"Header mismatch: Mcp-Method header value 'x' does not match body value 'y'."`
 
+⚠️ **A `tools/call` needs a fourth thing the list above does not mention: `Mcp-Name`, carrying the
+tool name.** Omit it and the request is rejected with
+`-32020 "Missing required Mcp-Name header."` — *before* the tool runs, so nothing is audited and the
+failure looks like the tool was never invoked. The three requirements above were verified against
+`tools/list`, which needs no `Mcp-Name`, which is why this went unrecorded until a `tools/call`
+integration test hit it (#147).
+
 ```powershell
 $meta = @{
   'io.modelcontextprotocol/protocolVersion'   = '2026-07-28'

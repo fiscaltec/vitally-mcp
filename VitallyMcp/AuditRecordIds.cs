@@ -47,6 +47,9 @@ public static class AuditRecordIds
 
     private static readonly AuditedRecords Unavailable = new([], 0, IdsAvailable: false);
 
+    /// <summary>The envelope properties Vitally wraps record arrays in.</summary>
+    private static readonly string[] EnvelopeProperties = ["results", "data"];
+
     public static AuditedRecords Extract(string rawJson)
     {
         // An audit component must never be the reason a tool call fails. Vitally can answer with a
@@ -84,7 +87,12 @@ public static class AuditRecordIds
             .Take(MaxIds)
             .ToList();
 
-        return new AuditedRecords(ids, records.GetArrayLength(), IdsAvailable: true);
+        // A non-empty array none of whose elements carries an `id` is a genuine gap: records were
+        // read and not one can be named. An EMPTY array is the opposite — a complete answer with
+        // nothing in it — and flagging that would make every "no matches" search look like a broken
+        // audit record.
+        var fetched = records.GetArrayLength();
+        return new AuditedRecords(ids, fetched, IdsAvailable: fetched == 0 || ids.Count > 0);
     }
 
     /// <summary>
@@ -103,7 +111,7 @@ public static class AuditRecordIds
 
         if (root.ValueKind == JsonValueKind.Object)
         {
-            foreach (var envelope in (ReadOnlySpan<string>)["results", "data"])
+            foreach (var envelope in EnvelopeProperties)
             {
                 if (root.TryGetProperty(envelope, out var candidate)
                     && candidate.ValueKind == JsonValueKind.Array)

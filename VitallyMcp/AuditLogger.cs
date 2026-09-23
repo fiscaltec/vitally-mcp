@@ -107,7 +107,8 @@ public class AuditLogger
         _logger.LogInformation(
             "Vitally audit: {AuditUserId} called {McpToolName} args={McpToolArguments} "
             + "records={AuditRecordIds} fetched={AuditRecordsFetched} ids={AuditIdsRecorded} "
-            + "truncated={AuditPagerTruncated} unreadable={AuditCallsWithoutIds} "
+            + "truncated={AuditPagerTruncated} argsTruncated={AuditArgumentsTruncated} "
+            + "unreadable={AuditCallsWithoutIds} "
             + "outcome={AuditOutcome} durationMs={AuditDurationMs} correlation={AuditCorrelationId} "
             + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName}",
             ResolveUserId(),
@@ -117,6 +118,9 @@ public class AuditLogger
             call.Records.RecordsFetched,
             call.Records.IdsRecorded,
             call.Records.Truncated,
+            // Separate from the pager flag above and must stay separate: one says the matching total
+            // is unknown, the other says the arguments recorded are not the ones the caller sent.
+            call.Arguments.Truncated,
             call.Records.CallsWithoutIds,
             call.Outcome,
             (long)call.Duration.TotalMilliseconds,
