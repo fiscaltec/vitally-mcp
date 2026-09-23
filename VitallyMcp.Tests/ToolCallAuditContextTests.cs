@@ -111,4 +111,23 @@ public class ToolCallAuditContextTests
             "GraphGroupPermissionResolver does not yet report whether it served a retained copy, and "
             + "recording false would assert the tier was fresh when nothing checked");
     }
+
+    [Fact]
+    public async Task RecordUpstream_IsSafeWhenOneToolFetchesConcurrently()
+    {
+        // Not hypothetical: `GetOrganizationSummaryAsync` starts its goals and product-feedback
+        // fetches before awaiting either, so two upstream responses enter this aggregation at once —
+        // on the SAME scoped context, because they belong to one tool call. An unsynchronised
+        // `List<T>` and `int++` lose records or throw, and the tool it breaks is the one whose record
+        // matters most.
+        var context = new ToolCallAuditContext();
+        var oneRecord = AuditRecordIds.Extract("""{"results":[{"id":"org-1"}]}""");
+
+        await Task.WhenAll(Enumerable.Range(0, 500)
+            .Select(_ => Task.Run(() => context.RecordUpstream(oneRecord))));
+
+        var summary = context.Summarise();
+        summary.RecordsFetched.Should().Be(500, "no increment may be lost");
+        summary.Ids.Count.Should().BeLessThanOrEqualTo(100, "the cap must hold under concurrency too");
+    }
 }

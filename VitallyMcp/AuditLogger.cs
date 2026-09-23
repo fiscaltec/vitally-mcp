@@ -84,9 +84,9 @@ public class AuditLogger
             return;
         }
 
-        _logger.LogInformation(
+        Emit(() => _logger.LogInformation(
             "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode}",
-            ResolveUserId(), method.Method, ResourcePath(url), statusCode);
+            ResolveUserId(), method.Method, ResourcePath(url), statusCode));
     }
 
     /// <summary>
@@ -104,7 +104,7 @@ public class AuditLogger
             return;
         }
 
-        _logger.LogInformation(
+        Emit(() => _logger.LogInformation(
             "Vitally audit: {AuditUserId} called {McpToolName} args={McpToolArguments} "
             + "records={AuditRecordIds} fetched={AuditRecordsFetched} ids={AuditIdsRecorded} "
             + "truncated={AuditPagerTruncated} argsTruncated={AuditArgumentsTruncated} "
@@ -127,7 +127,7 @@ public class AuditLogger
             call.CorrelationId,
             call.PermissionTier,
             call.TierServedStale?.ToString() ?? "unknown",
-            call.McpClient ?? "unknown");
+            call.McpClient ?? "unknown"));
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
@@ -138,9 +138,9 @@ public class AuditLogger
             return;
         }
 
-        _logger.LogWarning(
+        Emit(() => _logger.LogWarning(
             "Vitally audit: {AuditUserId} DENIED {HttpMethod} {VitallyResource}",
-            ResolveUserId(), method.Method, ResourcePath(url));
+            ResolveUserId(), method.Method, ResourcePath(url)));
     }
 
     /// <summary>
@@ -171,9 +171,38 @@ public class AuditLogger
             return;
         }
 
-        _logger.LogWarning(
+        Emit(() => _logger.LogWarning(
             "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission})",
-            ResolveUserId(user), toolName ?? "unknown", requiredPermission);
+            ResolveUserId(user), toolName ?? "unknown", requiredPermission));
+    }
+
+    /// <summary>
+    /// Writes one record, absorbing any failure.
+    /// </summary>
+    /// <remarks>
+    /// <b>An audit write must never be the reason a tool call fails.</b> These are invoked from
+    /// <see cref="VitallyService.SendAsync"/> and from a call-tool filter's <c>finally</c>, so an
+    /// exception escaping here does not merely lose a record — it replaces the caller's result with
+    /// <i>"An error occurred invoking 'X'"</i> for a call that in fact succeeded. A telemetry sink
+    /// refusing writes is exactly the sort of thing that happens during the incident the trail is
+    /// wanted for, and losing the user's call as well as the record is the worse half of that.
+    /// <para>
+    /// Swallowed rather than re-logged, because the logger <i>is</i> the sink that just failed.
+    /// Once the record routes through <c>TrackEvent</c>, the fallback the design calls for — degrade
+    /// to <see cref="ILogger"/> rather than disappear — becomes possible and belongs here.
+    /// </para>
+    /// </remarks>
+    private static void Emit(Action write)
+    {
+        try
+        {
+            write();
+        }
+        catch (Exception)
+        {
+            // Deliberately ignored, and deliberately every exception: there is no failure from a
+            // logging sink that is worth failing a customer's tool call over.
+        }
     }
 
     // Resolve the stable, attributable actor identity: the caller's Entra object id — a GUID that

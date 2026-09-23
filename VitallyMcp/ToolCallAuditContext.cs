@@ -23,6 +23,12 @@ public readonly record struct ToolCallAuditSummary(
 /// </summary>
 public sealed class ToolCallAuditContext
 {
+    // One tool call is not one upstream call, and its upstream calls are not necessarily sequential:
+    // GetOrganizationSummaryAsync starts its goals and product-feedback fetches before awaiting
+    // either, so two responses aggregate here at once on this same scoped instance. Measured without
+    // it, 500 concurrent records lost about five every run — silently, which is the worst way for an
+    // audit trail to be wrong.
+    private readonly Lock _gate = new();
     private readonly List<string> _ids = [];
 
     /// <summary>
@@ -39,28 +45,31 @@ public sealed class ToolCallAuditContext
 
     public void RecordUpstream(AuditedRecords records)
     {
-        // Cap the merged list as well as each response. Each response is already capped at 100, but
-        // the auto-pager can make ten calls, so without this a single record carries a thousand ids.
-        // Stop adding rather than trimming afterwards — the ids kept are then the first touched,
-        // which is the order a reader would reconstruct the read in.
-        foreach (var id in records.Ids)
+        lock (_gate)
         {
-            if (_ids.Count >= AuditRecordIds.MaxIds)
+            // Cap the merged list as well as each response. Each response is already capped at 100,
+            // but the auto-pager can make ten calls, so without this a single record carries a
+            // thousand ids. Stop adding rather than trimming afterwards — the ids kept are then the
+            // first touched, which is the order a reader would reconstruct the read in.
+            foreach (var id in records.Ids)
             {
-                break;
+                if (_ids.Count >= AuditRecordIds.MaxIds)
+                {
+                    break;
+                }
+
+                _ids.Add(id);
             }
 
-            _ids.Add(id);
-        }
+            _recordsFetched += records.RecordsFetched;
 
-        _recordsFetched += records.RecordsFetched;
-
-        // State the gap rather than absorbing it. A tool making four upstream calls of different
-        // shapes would otherwise produce a record that looks like a complete account of what was
-        // touched while silently missing one of them.
-        if (!records.IdsAvailable)
-        {
-            _callsWithoutIds++;
+            // State the gap rather than absorbing it. A tool making four upstream calls of different
+            // shapes would otherwise produce a record that looks like a complete account of what was
+            // touched while silently missing one of them.
+            if (!records.IdsAvailable)
+            {
+                _callsWithoutIds++;
+            }
         }
     }
 
@@ -69,7 +78,13 @@ public sealed class ToolCallAuditContext
     /// the id cap on purpose: one says the total is unknown, the other says the list was shortened
     /// while the count stayed true.
     /// </summary>
-    public void MarkPagerTruncated() => _pagerTruncated = true;
+    public void MarkPagerTruncated()
+    {
+        lock (_gate)
+        {
+            _pagerTruncated = true;
+        }
+    }
 
     /// <summary>
     /// Records the tier the authorizer actually resolved for this caller, at the moment of the call.
@@ -95,10 +110,13 @@ public sealed class ToolCallAuditContext
     /// </remarks>
     public void RecordResolvedTier(IReadOnlySet<string> permissions, bool? servedStale = null)
     {
-        _permissionTier = permissions.Count == 0
-            ? "none"
-            : string.Join(",", permissions.OrderBy(p => p, StringComparer.Ordinal));
-        _tierServedStale = servedStale;
+        lock (_gate)
+        {
+            _permissionTier = permissions.Count == 0
+                ? "none"
+                : string.Join(",", permissions.OrderBy(p => p, StringComparer.Ordinal));
+            _tierServedStale = servedStale;
+        }
     }
 
     public ToolCallAuditSummary Summarise() => new(_ids, _recordsFetched, _pagerTruncated, _callsWithoutIds, _permissionTier, _tierServedStale);

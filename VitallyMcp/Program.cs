@@ -372,21 +372,38 @@ mcpBuilder.WithRequestFilters(filters =>
         }
         finally
         {
-            var summary = auditContext.Summarise();
-            audit.LogToolCall(new ToolCallAudit(
-                ToolName: context.Params?.Name ?? "unknown",
-                Arguments: AuditArguments.Format(context.Params?.Arguments),
-                Records: summary,
-                Outcome: outcome,
-                Duration: Stopwatch.GetElapsedTime(started),
-                CorrelationId: auditContext.CorrelationId,
-                PermissionTier: summary.PermissionTier,
-                TierServedStale: summary.TierServedStale,
-                // Read per call, not per session: 2026-07-28 removed the `initialize` handshake, so
-                // in stateless mode the client identifies itself in each request's `_meta` and there
-                // is no session state to have cached it in. A legacy-path caller sends none, and
-                // `unknown` is the honest answer there.
-                McpClient: context.JsonRpcRequest?.Context?.ClientInfo?.Name));
+            // An audit write must never be the reason a call fails. This runs in a `finally`, so an
+            // exception escaping it would replace a perfectly good result with
+            // "An error occurred invoking 'X'" — and a telemetry sink refusing writes is exactly the
+            // sort of thing that happens during the incident the trail is wanted for. Losing the
+            // record is bad; losing the user's call as well is worse, and inexplicable client-side.
+            //
+            // Swallowed rather than re-logged, because in this configuration the logger IS the sink
+            // that just failed. Once the record routes through TrackEvent, the fallback the design
+            // calls for — degrade to ILogger rather than disappear — becomes possible and belongs
+            // here.
+            try
+            {
+                var summary = auditContext.Summarise();
+                audit.LogToolCall(new ToolCallAudit(
+                    ToolName: context.Params?.Name ?? "unknown",
+                    Arguments: AuditArguments.Format(context.Params?.Arguments),
+                    Records: summary,
+                    Outcome: outcome,
+                    Duration: Stopwatch.GetElapsedTime(started),
+                    CorrelationId: auditContext.CorrelationId,
+                    PermissionTier: summary.PermissionTier,
+                    TierServedStale: summary.TierServedStale,
+                    // Read per call, not per session: 2026-07-28 removed the `initialize` handshake,
+                    // so in stateless mode the client identifies itself in each request's `_meta` and
+                    // there is no session state to have cached it in. A legacy-path caller sends
+                    // none, and `unknown` is the honest answer there.
+                    McpClient: context.JsonRpcRequest?.Context?.ClientInfo?.Name));
+            }
+            catch (Exception auditFailure) when (auditFailure is not OperationCanceledException)
+            {
+                // Deliberately ignored. See above.
+            }
         }
     });
 

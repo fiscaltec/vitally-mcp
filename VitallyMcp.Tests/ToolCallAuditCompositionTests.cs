@@ -61,7 +61,10 @@ public class ToolCallAuditCompositionTests
 
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
 
-        public Harness(string vitallyBody, HttpStatusCode vitallyStatus = HttpStatusCode.OK)
+        public Harness(
+            string vitallyBody,
+            HttpStatusCode vitallyStatus = HttpStatusCode.OK,
+            bool sabotageAudit = false)
         {
             // Process-wide, and read by Program.cs at composition time before test configuration is
             // injected — hence the collection this class belongs to.
@@ -78,7 +81,14 @@ public class ToolCallAuditCompositionTests
 
             _baseFactory = new WebApplicationFactory<Program>();
             _factory = _baseFactory.WithWebHostBuilder(b => b
-                .ConfigureLogging(l => l.AddProvider(_audit))
+                .ConfigureLogging(l =>
+                {
+                    l.AddProvider(_audit);
+                    if (sabotageAudit)
+                    {
+                        l.AddProvider(new ThrowingLoggerProvider("VitallyMcp.AuditLogger"));
+                    }
+                })
                 .ConfigureServices(services =>
                 {
                     services.AddAuthentication(TestAuthHandler.SchemeName)
@@ -173,6 +183,30 @@ public class ToolCallAuditCompositionTests
             {
                 Environment.SetEnvironmentVariable(name, null);
             }
+        }
+    }
+
+    /// <summary>
+    /// A logger that throws for one category, standing in for a telemetry sink that is refusing
+    /// writes — the failure mode the audit trail must absorb rather than propagate.
+    /// </summary>
+    private sealed class ThrowingLoggerProvider(string categoryName) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string category) =>
+            category == categoryName
+                ? new ThrowingLogger()
+                : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+        public void Dispose() { }
+
+        private sealed class ThrowingLogger : ILogger
+        {
+            public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                throw new InvalidOperationException("audit sink unavailable");
         }
     }
 
@@ -276,5 +310,21 @@ public class ToolCallAuditCompositionTests
         harness.AuditRecords.Should()
             .ContainSingle(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
             .Subject.Message.Should().Contain("client=smoke-client");
+    }
+
+    [Fact]
+    public async Task AFailingAuditSink_DoesNotFailTheToolCall()
+    {
+        // #147's contract: an audit write must never be the reason a call fails. The record is
+        // emitted from a `finally`, so an exception there would replace a perfectly good result —
+        // and a telemetry sink refusing writes is exactly the sort of thing that happens during the
+        // incident you most want the trail for. Losing the record is bad; losing the user's call as
+        // well is worse, and inexplicable from the client side.
+        using var harness = new Harness(TwoOrganisations, sabotageAudit: true);
+
+        var result = await harness.CallToolAsync("List_organizations");
+
+        result.Should().NotContain("\"error\"", "the tool call survives an audit sink that throws");
+        result.Should().Contain("org-1", "and still returns its data");
     }
 }
