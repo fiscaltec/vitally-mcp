@@ -176,4 +176,86 @@ public class AuditArgumentsTests
         result.Truncated.Should().BeTrue("and the record says something was shortened");
         result.Rendered.Should().Contain("nnnn", "the name is shortened, not dropped");
     }
+
+    [Fact]
+    public void Format_IsAHardBound_HoweverManyArgumentsAreSupplied()
+    {
+        // The floor left the cap advertised but unenforceable: each NAME is capped, but a caller
+        // controls how many names there are, so overhead grew without limit and the floor still
+        // reserved value space on top. A log line whose size a caller chooses is a cost and
+        // availability problem, not only an untidy one.
+        var args = Enumerable.Range(0, 2000)
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('f', 100)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096, "the cap is a bound, not a target");
+        result.Truncated.Should().BeTrue();
+        result.Rendered.Should().Contain("omitted", "and the record says arguments were left out");
+    }
+
+    [Fact]
+    public void Format_NeverWritesAPartialScopingIdentifier()
+    {
+        // The two rules finally reconciled. A scoping identifier is either recorded COMPLETE or
+        // counted as omitted — never shortened. A half-written customer id is worse than a stated
+        // gap: it looks like a customer and resolves to nothing, so a reader cannot tell a truncated
+        // id from a real one.
+        var args = Enumerable.Range(0, 60)
+            .Select(i => new KeyValuePair<string, object?>($"customer{i}Id", new string('i', 250)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096);
+        result.Rendered.Should().NotContain("i...", "a scoping id is complete or absent, never cut");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(42)]
+    [InlineData(1337)]
+    [InlineData(90210)]
+    public void Format_NeverExceedsTheCap_AcrossRandomisedArgumentShapes(int seed)
+    {
+        // Every previous bound failure here was found by someone constructing one specific shape:
+        // escaped values, then the scoping exemption, then the unbudgeted marker, then the negative
+        // budget, then escaped names, then unbounded names, then argument count. Seven shapes, seven
+        // separate rounds. A per-bug example test cannot catch the eighth, so this fuzzes the shapes
+        // instead — seeded, so a failure is reproducible.
+        var random = new Random(seed);
+        // Deliberately includes the characters that escape to more than themselves — a quote and a
+        // backslash cost two, a newline and a tab cost two, and the non-ASCII ones exercise the
+        // relaxed encoder and the surrogate-safe cut.
+        var alphabet = new[] { 'a', '"', '\\', '\n', '\t', 'é', '本', ' ' };
+        string Noise(int length) =>
+            new(Enumerable.Range(0, length).Select(_ => alphabet[random.Next(alphabet.Length)]).ToArray());
+
+        var args = Enumerable.Range(0, random.Next(1, 300))
+            .Select(i =>
+            {
+                var name = random.Next(4) == 0
+                    ? Noise(random.Next(1, 400)) + i
+                    : (random.Next(3) == 0 ? $"thing{i}Id" : $"filter{i}");
+                object? value = random.Next(5) switch
+                {
+                    0 => random.Next(),
+                    1 => Noise(random.Next(0, 3000)),
+                    2 => new string('x', random.Next(0, 2000)),
+                    3 => null,
+                    _ => Noise(random.Next(0, 300)),
+                };
+                return new KeyValuePair<string, object?>(name, value);
+            })
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096,
+            $"seed {seed} produced a record over the cap");
+        var act = () => JsonDocument.Parse(result.Rendered);
+        act.Should().NotThrow($"seed {seed} produced malformed JSON");
+    }
 }

@@ -47,10 +47,11 @@ public static class AuditArguments
     /// <summary>Longest value that may still claim scoping-identifier priority.</summary>
     internal const int MaxScopingIdentifierChars = 256;
 
-    /// <summary>
-    /// Smallest value budget, however many arguments were named. See the floor's use below.
-    /// </summary>
-    private const int MinValueBudget = MaxTotalChars / 4;
+    /// <summary>Property naming how many arguments did not fit.</summary>
+    private const string OmittedPropertyName = "__omittedArguments";
+
+    /// <summary>Space held back so the omission count can always be written.</summary>
+    private const int OmissionReserve = 32;
 
     // ASCII, and deliberately so. The writer escapes non-ASCII by default, so a one-character "…"
     // renders as the six characters … — which silently overran the set budget by 5 per truncated
@@ -100,16 +101,10 @@ public static class AuditArguments
                     Text: text,
                     a.Value,
                     Scoping: IsScopingIdentifier(key, text),
-                    // Names are escaped on the way out too — `WritePropertyName` applies the same
-                    // rules as a value — and they come from the MCP client, so a name full of quotes
-                    // costs twice what its raw length suggests. Counting the raw length here handed
-                    // the values a share computed against names that cost more than that.
-                    KeyCost: EscapedLength(key),
+                    KeyCost: EscapedLength(key) + 6,
                     // What this value will actually COST once written. A string is escaped on the way
                     // out — a quote costs one character to hold and two to write — while any other
-                    // element is emitted as its own raw JSON. Budgeting on the decoded length let a
-                    // set of quote-heavy values (a `jsonBody` argument is mostly quotes) render to
-                    // roughly twice the cap.
+                    // element is emitted as its own raw JSON.
                     Cost: isString ? EscapedLength(text) : text.Length);
             })
             .ToList();
@@ -119,25 +114,18 @@ public static class AuditArguments
             return new AuditedArguments("{}", Truncated: false);
         }
 
-        // Reserve the structural cost up front — quotes, colons, commas and the names themselves —
-        // so the value budget is what is actually left rather than an optimistic figure the entries
-        // then overrun one by one.
-        var overhead = entries.Sum(e => e.KeyCost + 6);
-
-        // Floored, because the two rules collide at the extreme. Argument NAMES are never dropped —
-        // an argument that vanished would read as one the caller never sent — so a call with hundreds
-        // of them can exceed the cap on structure alone, driving the value budget negative and
-        // squeezing out even the scoping identifiers. The floor keeps the record able to name a
-        // customer in that case, which is the property the whole trail rests on.
-        var budget = Math.Max(MinValueBudget, MaxTotalChars - 2 - overhead);
-        var truncated = namesTruncated;
-
-        // Scoping identifiers go first and take what they need, because they are what names the
-        // customer and a record that cannot say who was touched fails the whole point. But they take
-        // it from the SAME budget as everything else — writing them in full regardless would make the
-        // exemption an unbounded path around the cap, since a caller controls both the names and how
-        // many of them there are. Priority, not exemption.
+        // A hard bound, which it was not before. Capping each name still let a caller choose how many
+        // names there were, so the line grew with the argument count — a cost and availability problem,
+        // not just an untidy one. Arguments that do not fit are OMITTED and counted, which is why the
+        // omission property's own cost is reserved up front.
+        var budget = MaxTotalChars - 2 - OmissionReserve;
         var allowances = new int[entries.Count];
+        var included = new bool[entries.Count];
+        var omitted = 0;
+
+        // Scoping identifiers are allocated first and only ever in FULL. A half-written customer id
+        // is worse than a stated gap: it still looks like an id and resolves to nothing, so a reader
+        // cannot tell it from a real one. Complete, or counted as omitted.
         for (var i = 0; i < entries.Count; i++)
         {
             if (!entries[i].Scoping)
@@ -145,11 +133,20 @@ public static class AuditArguments
                 continue;
             }
 
-            allowances[i] = Math.Min(entries[i].Cost, Math.Max(0, budget));
-            budget -= allowances[i];
+            var need = entries[i].KeyCost + entries[i].Cost;
+            if (need <= budget)
+            {
+                included[i] = true;
+                allowances[i] = entries[i].Cost;
+                budget -= need;
+            }
+            else
+            {
+                omitted++;
+            }
         }
 
-        // Whatever survives is shared between the free-text values.
+        // Free text shares whatever survives, each paying for its own name first.
         var freeRemaining = entries.Count(e => !e.Scoping);
         for (var i = 0; i < entries.Count; i++)
         {
@@ -158,18 +155,32 @@ public static class AuditArguments
                 continue;
             }
 
-            var share = freeRemaining > 0 ? Math.Max(0, budget / freeRemaining) : 0;
-            allowances[i] = Math.Min(MaxValueChars, share);
-            budget -= allowances[i];
             freeRemaining--;
+            if (budget < entries[i].KeyCost + TruncationMarker.Length)
+            {
+                omitted++;
+                continue;
+            }
+
+            budget -= entries[i].KeyCost;
+            var share = freeRemaining > 0 ? Math.Max(0, budget / (freeRemaining + 1)) : budget;
+            included[i] = true;
+            allowances[i] = Math.Min(MaxValueChars, Math.Min(share, entries[i].Cost));
+            budget -= allowances[i];
         }
 
+        var truncated = namesTruncated || omitted > 0;
         var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
         {
             writer.WriteStartObject();
             for (var i = 0; i < entries.Count; i++)
             {
+                if (!included[i])
+                {
+                    continue;
+                }
+
                 var entry = entries[i];
                 if (entry.Cost <= allowances[i])
                 {
@@ -181,10 +192,9 @@ public static class AuditArguments
                 }
 
                 // Once the allowance cannot even hold the marker, write an empty value rather than a
-                // bare marker. The marker is otherwise unbudgeted: a call with a hundred squeezed-out
-                // arguments paid three characters each for markers nobody budgeted, which is how this
-                // overran the cap by 266 when it was first measured. The key still appears, so the
-                // argument is not silently dropped, and `argsTruncated` says the values were cut.
+                // bare one. The marker is otherwise unbudgeted — this exact oversight put the record
+                // 645 characters over the cap when the allocator was rewritten, having already done
+                // it once before at 266.
                 if (allowances[i] < TruncationMarker.Length)
                 {
                     writer.WriteString(entry.Key, string.Empty);
@@ -192,13 +202,19 @@ public static class AuditArguments
                     continue;
                 }
 
-                // Shorten the value, never drop the argument: knowing a caller passed *some*
-                // oversized filter beats a record that reads as though none was given. The marker
-                // counts against the allowance rather than being added on top of it, and the cut is
-                // made against the ESCAPED length, because that is what the allowance buys.
+                // Shortened, never dropped: knowing a caller passed *some* oversized filter beats a
+                // record that reads as though none was given. The cut is made against the ESCAPED
+                // length, because that is what the allowance buys, and the marker counts against it.
                 var kept = TakeWithinEscapedBudget(entry.Text, allowances[i] - TruncationMarker.Length);
                 writer.WriteString(entry.Key, kept + TruncationMarker);
                 truncated = true;
+            }
+
+            if (omitted > 0)
+            {
+                // Stated, not silent. A record that simply stopped would read as a call made with
+                // fewer arguments than it was.
+                writer.WriteNumber(OmittedPropertyName, omitted);
             }
 
             writer.WriteEndObject();
