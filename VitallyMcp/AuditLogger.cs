@@ -18,7 +18,9 @@ namespace VitallyMcp;
 ///     arguments, the record ids touched, outcome, duration, correlation id, and the permission tier
 ///     resolved at the time. This is the one that satisfies the acceptance criterion.</item>
 ///   <item><see cref="LogAction"/> — from <see cref="VitallyService.SendAsync"/> after each upstream
-///     response: identity, verb, resource path (query string stripped), status. <b>Corroboration</b>
+///     response: identity, verb, resource path (query string stripped), status, and the correlation
+///     id of the tool call that caused it — without which the join the tool-call record promises
+///     does not exist. <b>Corroboration</b>
 ///     now rather than the mechanism: it shows what the server actually did, but names a customer
 ///     only where the path carries an id — which excludes unscoped list and search.</item>
 ///   <item><see cref="LogDenied"/> — from the same choke point on an RBAC refusal: identity, verb,
@@ -73,7 +75,7 @@ public class AuditLogger
     }
 
     /// <summary>Records a completed action (after the upstream response, success or failure).</summary>
-    public void LogAction(HttpMethod method, string url, int statusCode)
+    public void LogAction(HttpMethod method, string url, int statusCode, string? correlationId = null)
     {
         if (!_options.Enabled)
         {
@@ -85,8 +87,8 @@ public class AuditLogger
         }
 
         Emit(() => _logger.LogInformation(
-            "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode}",
-            ResolveUserId(), method.Method, ResourcePath(url), statusCode));
+            "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode} correlation={AuditCorrelationId}",
+            ResolveUserId(), method.Method, ResourcePath(url), statusCode, correlationId ?? "none"));
     }
 
     /// <summary>
@@ -127,11 +129,11 @@ public class AuditLogger
             call.CorrelationId,
             call.PermissionTier,
             call.TierServedStale?.ToString() ?? "unknown",
-            call.McpClient ?? "unknown"));
+            SanitiseClientName(call.McpClient)));
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
-    public void LogDenied(HttpMethod method, string url)
+    public void LogDenied(HttpMethod method, string url, string? correlationId = null)
     {
         if (!_options.Enabled)
         {
@@ -139,8 +141,8 @@ public class AuditLogger
         }
 
         Emit(() => _logger.LogWarning(
-            "Vitally audit: {AuditUserId} DENIED {HttpMethod} {VitallyResource}",
-            ResolveUserId(), method.Method, ResourcePath(url)));
+            "Vitally audit: {AuditUserId} DENIED {HttpMethod} {VitallyResource} correlation={AuditCorrelationId}",
+            ResolveUserId(), method.Method, ResourcePath(url), correlationId ?? "none"));
     }
 
     /// <summary>
@@ -174,6 +176,49 @@ public class AuditLogger
         Emit(() => _logger.LogWarning(
             "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission})",
             ResolveUserId(user), toolName ?? "unknown", requiredPermission));
+    }
+
+    /// <summary>
+    /// Longest client name a record will carry. Short because it names a product, not a value.
+    /// </summary>
+    private const int MaxClientNameChars = 64;
+
+    /// <summary>
+    /// Makes an untrusted client name safe to put in a line-oriented log.
+    /// </summary>
+    /// <remarks>
+    /// <b>This value is supplied by the caller</b>, in the per-request
+    /// <c>_meta/io.modelcontextprotocol/clientInfo</c>, so it is attacker-controlled in a way the
+    /// rest of the record is not. Two consequences, both handled here:
+    /// <list type="bullet">
+    ///   <item>A newline would let a client emit what looks like a <i>second</i> audit record —
+    ///     forging an action against another user's object id. Control characters are replaced, not
+    ///     stripped, so the attempt stays visible rather than being quietly cleaned away.</item>
+    ///   <item>An unbounded name inflates every record the client makes, on a path that is about to
+    ///     become billed telemetry. Tool arguments are explicitly bounded; this must be too.</item>
+    /// </list>
+    /// The same reasoning already governs <c>Program.cs</c>'s <c>OnAuthenticationFailed</c>, which
+    /// logs the exception <i>type</i> and never <c>Exception.Message</c>, because IdentityModel
+    /// builds that text from the token's own claims.
+    /// </remarks>
+    private static string SanitiseClientName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "unknown";
+        }
+
+        var flattened = string.Create(name.Length, name, static (span, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                span[i] = char.IsControl(source[i]) ? '_' : source[i];
+            }
+        });
+
+        return flattened.Length <= MaxClientNameChars
+            ? flattened
+            : flattened[..MaxClientNameChars] + "...";
     }
 
     /// <summary>

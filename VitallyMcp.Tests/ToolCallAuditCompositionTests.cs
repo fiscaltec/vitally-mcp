@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using Azure.Core;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
@@ -326,5 +327,28 @@ public class ToolCallAuditCompositionTests
 
         result.Should().NotContain("\"error\"", "the tool call survives an audit sink that throws");
         result.Should().Contain("org-1", "and still returns its data");
+    }
+
+    [Fact]
+    public async Task TheUpstreamRecordsCarryTheSameCorrelationIdAsTheToolCall()
+    {
+        // The tool-call record is the primary evidence and the upstream records corroborate it — but
+        // only if they can be joined. A composite tool makes four upstream calls and the pager up to
+        // ten, so without a shared id there is no telling which upstream calls belonged to which
+        // tool call, and the corroboration is worthless.
+        using var harness = new Harness(TwoOrganisations);
+
+        await harness.CallToolAsync("List_organizations");
+
+        var toolCall = harness.AuditRecords
+            .Single(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal)).Message;
+        var correlation = Regex.Match(toolCall, @"correlation=([0-9a-f]{32})").Groups[1].Value;
+        correlation.Should().NotBeEmpty("the tool-call record carries a correlation id");
+
+        harness.AuditRecords
+            .Where(e => e.Message.Contains(" GET ", StringComparison.Ordinal))
+            .Should().NotBeEmpty("the upstream call is recorded too")
+            .And.OnlyContain(e => e.Message.Contains("correlation=" + correlation, StringComparison.Ordinal),
+                "every upstream record joins to the tool call that caused it");
     }
 }

@@ -362,4 +362,61 @@ public class AuditLoggerTests
         message.Should().Contain("argsTruncated=True", "the recorded arguments are not the full ones");
         message.Should().Contain("truncated=False", "the pager did not stop early — a different fact");
     }
+
+    [Fact]
+    public void LogToolCall_NeutralisesAClientNameThatTriesToForgeAuditLines()
+    {
+        // `ClientInfo.Name` arrives in the caller's own per-request `_meta` — it is attacker
+        // controlled, and it lands in a line-oriented log. A newline lets a client write what looks
+        // like a second audit record, attributing an action to someone else entirely. This repo
+        // already knows the pattern: `Program.cs` logs the authentication exception TYPE only, never
+        // `Exception.Message`, because IdentityModel builds that from caller-controlled claims.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var forged = "evil\r\nVitally audit: 00000000-0000-0000-0000-000000000000 called Delete_account";
+
+        audit.LogToolCall(SampleCall() with { McpClient = forged });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain("\n", "a client cannot start a new log line");
+        message.Should().NotContain("\r", "nor a carriage return, which some readers treat the same way");
+        message.Should().Contain("evil",
+            "the name is recorded, defanged rather than dropped — hiding the attempt hides the attacker");
+        message.Split('\n').Should().ContainSingle("the whole record stays one line");
+    }
+
+    [Fact]
+    public void LogToolCall_CapsAnOverlongClientName()
+    {
+        // Tool arguments are explicitly bounded; this field had no bound at all, so a client could
+        // inflate every record it made — on a stdout path that is about to become a billed telemetry
+        // path.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with { McpClient = new string('z', 5000) });
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Length
+            .Should().BeLessThan(1000, "an unbounded client name must not inflate the record");
+    }
+
+    [Fact]
+    public void LogAction_CarriesTheCorrelationId_SoTheUpstreamRecordsJoinToTheToolCall()
+    {
+        // The tool-call record is documented as carrying a correlation id that "ties the upstream
+        // records to this one". That join only exists if the upstream records carry it too — and a
+        // composite tool makes four of them, a paged one up to ten, so without this there is no way
+        // to tell which upstream calls belonged to which tool call.
+        var (audit, logger) = Build(includeReads: true, user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/organizations", 200, "corr-abc");
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().Contain("correlation=corr-abc");
+    }
 }

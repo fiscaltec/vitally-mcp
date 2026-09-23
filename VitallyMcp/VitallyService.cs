@@ -66,7 +66,7 @@ public class VitallyService
         }
         catch (UnauthorizedAccessException)
         {
-            _audit.LogDenied(method, url);
+            _audit.LogDenied(method, url, _auditContext?.CorrelationId);
             throw;
         }
 
@@ -86,7 +86,7 @@ public class VitallyService
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        _audit.LogAction(method, url, (int)response.StatusCode);
+        _audit.LogAction(method, url, (int)response.StatusCode, _auditContext?.CorrelationId);
 
         if (!response.IsSuccessStatusCode)
         {
