@@ -3,6 +3,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using VitallyMcp;
+using OpenTelemetry.Logs;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Console;
 
 namespace VitallyMcp.Tests;
 
@@ -506,5 +510,54 @@ public class LoggingFilterTests
         // still the category the logger actually uses.
         typeof(AuditLogger).FullName.Should().Be("VitallyMcp.AuditLogger",
             "Program.cs filters this exact category off the console provider");
+    }
+
+    [Fact]
+    public void WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp()
+    {
+        // Everything else about the exporter is tested against a hand-built AuditLogger or a host
+        // with no connection string, so a broken or missing UseAzureMonitor registration, a filter
+        // aimed at the wrong provider, or a PostConfigure that never ran would all leave the suite
+        // green. This composes the host the way production will have it and asserts the three things
+        // that must switch on together.
+        var previous = SnapshotAndClearConfiguration();
+        foreach (var (key, value) in RequiredSettings)
+        {
+            Environment.SetEnvironmentVariable(key, value);
+        }
+
+        // Well-formed but pointing nowhere. Export is asynchronous and batched, so nothing is
+        // contacted while the host is merely built.
+        Environment.SetEnvironmentVariable(
+            "ApplicationInsights__ConnectionString",
+            "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://localhost/");
+
+        try
+        {
+            using var factory = new WebApplicationFactory<Program>();
+            var services = factory.Services;
+
+            services.GetRequiredService<IOptions<AuditOptions>>().Value.EmitBreadcrumb
+                .Should().BeTrue("the breadcrumb switches on with the exporter, not with DI");
+
+            var rules = services.GetRequiredService<IOptions<LoggerFilterOptions>>().Value.Rules;
+
+            rules.Should().Contain(
+                r => r.ProviderName == typeof(ConsoleLoggerProvider).FullName
+                    && r.CategoryName == "VitallyMcp.AuditLogger"
+                    && r.LogLevel == LogLevel.None,
+                "the full records come off stdout once they have somewhere else to go");
+
+            rules.Should().Contain(
+                r => r.ProviderName == typeof(OpenTelemetryLoggerProvider).FullName
+                    && r.CategoryName == AuditLogger.BreadcrumbCategory
+                    && r.LogLevel == LogLevel.None,
+                "and the breadcrumb does not also become AppTraces noise");
+        }
+        finally
+        {
+            RestoreConfiguration(previous);
+            Environment.SetEnvironmentVariable("ApplicationInsights__ConnectionString", null);
+        }
     }
 }

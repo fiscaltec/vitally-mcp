@@ -616,4 +616,40 @@ public class AuditLoggerTests
 
         factory.Loggers.Should().BeEmpty("no breadcrumb logger is created when nothing suppresses the console");
     }
+
+    public static TheoryData<string, Action<AuditLogger>> EveryAuditEmission() => new()
+    {
+        { "VitallyUpstreamCall", a => a.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200) },
+        { "VitallyUpstreamDenied", a => a.LogDenied(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1") },
+        { "VitallyToolCallDenied", a => a.LogToolCallDenied(null, "Delete_account", "vitally:delete") },
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryAuditEmission))]
+    public void EveryAuditRecord_CarriesTheCustomEventAttribute(string expectedEventName, Action<AuditLogger> emit)
+    {
+        // Program.cs suppresses the WHOLE VitallyMcp.AuditLogger category from stdout once the
+        // exporter is configured — but only a record carrying microsoft.custom_event.name reaches
+        // AppEvents. A record without it goes to AppTraces instead, so these three would have been
+        // taken off the console AND kept out of the audit table: removed from the one place they were
+        // visible, and landed in the shared diagnostics table with its own retention and access.
+        //
+        // LogAction is the sharpest case, because its resource path names the customer.
+        var logger = new StateCapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, IncludeReads = true }), logger, accessor);
+
+        emit(audit);
+
+        var state = logger.States.Should().ContainSingle().Subject;
+        state.Single(kv => kv.Key == "microsoft.custom_event.name").Value
+            .Should().Be(expectedEventName, "every audit record belongs in AppEvents, not AppTraces");
+    }
 }

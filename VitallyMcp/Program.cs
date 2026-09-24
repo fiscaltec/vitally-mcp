@@ -430,9 +430,10 @@ mcpBuilder.WithRequestFilters(filters =>
             // record is bad; losing the user's call as well is worse, and inexplicable client-side.
             //
             // Swallowed rather than re-logged, because in this configuration the logger IS the sink
-            // that just failed. Once the record routes through TrackEvent, the fallback the design
-            // calls for — degrade to ILogger rather than disappear — becomes possible and belongs
-            // here.
+            // that just failed. Note this catches only a SYNCHRONOUS failure: the Azure Monitor
+            // exporter is asynchronous, so a lost export never reaches here — the breadcrumb on
+            // AuditLogger.BreadcrumbCategory is what covers that, emitted unconditionally because
+            // there is no failure signal to react to.
             try
             {
                 var summary = auditContext.Summarise();

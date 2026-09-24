@@ -6,11 +6,23 @@ namespace VitallyMcp;
 /// structured audit record (authenticated user + verb + resource + outcome) at the single point
 /// every Vitally call funnels through.
 /// <para>
-/// ⚠️ <b>These records do not reach Application Insights or Log Analytics, and never have</b> — an
-/// earlier version of this comment said they did. Verified 2026-09-17: the workspace has local
-/// (shared-key) authentication disabled, and the Container Apps log shipper authenticates with a
-/// shared key, so it is refused. The records are written to stdout and retained nowhere. Tracked in
-/// issue #142; design in <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>.
+/// ⚠️ <b>Where these records go depends on one setting.</b>
+/// <list type="bullet">
+///   <item><b>With <c>ApplicationInsights__ConnectionString</c> set</b> — the Azure Monitor exporter
+///     is registered and every record carries <c>microsoft.custom_event.name</c>, so they land in
+///     <b><c>AppEvents</c></b>, where per-table retention and access apply. The whole
+///     <c>VitallyMcp.AuditLogger</c> category is then suppressed from the console, and a
+///     customer-data-free breadcrumb takes its place there (see
+///     <see cref="EmitBreadcrumb"/>).</item>
+///   <item><b>Without it</b> — no exporter, no suppression: the records go to stdout and are
+///     <b>retained nowhere</b>, which is how it was for this server's entire prior lifetime. Verified
+///     2026-09-17: the workspace has shared-key authentication disabled and the Container Apps log
+///     shipper authenticates with a shared key, so that path was refused from the day the workspace
+///     was created.</item>
+/// </list>
+/// Neither deployed target has that setting yet, so the second row is the live state. Design in
+/// <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>; the console-log export
+/// it ungates is #142.
 /// </para>
 /// </summary>
 public class AuditOptions
