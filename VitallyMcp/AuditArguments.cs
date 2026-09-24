@@ -181,7 +181,11 @@ public static class AuditArguments
             }
 
             freeRemaining--;
-            if (budget < entries[i].KeyCost + TruncationMarker.Length)
+            // Omit only when even the NAME will not fit. #147 says overflow truncates the value and
+            // marks the record rather than dropping the argument, because an argument that vanished
+            // reads as one the caller never sent — so a key with an empty value is strictly better
+            // evidence than an omission, and costs nothing beyond the key itself.
+            if (budget < entries[i].KeyCost)
             {
                 omitted++;
                 continue;
@@ -278,8 +282,26 @@ public static class AuditArguments
             || name.EndsWith("Ids", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>How many characters <paramref name="text"/> occupies once written as a JSON string.</summary>
-    private static int EscapedLength(string text) =>
-        text.Length == 0 ? 0 : JsonEncodedText.Encode(text, Encoder).Value.Length;
+    private static int EscapedLength(string text)
+    {
+        if (text.Length == 0)
+        {
+            return 0;
+        }
+
+        // Bound the WORK as well as the output. Encoding a caller's whole value just to learn it is
+        // too big made the cost proportional to the input on every call — a 10 MB jsonBody meant
+        // 10 MB of encoding for a record that was always going to be 4 KB, and concurrent calls
+        // amplify that. Escaping never shrinks a string, so once the raw length is past the largest
+        // allowance any value could receive, the raw length is already a sufficient answer: it is a
+        // lower bound, and every comparison this feeds is "is this over the allowance?".
+        if (text.Length > MaxValueChars)
+        {
+            return text.Length;
+        }
+
+        return JsonEncodedText.Encode(text, Encoder).Value.Length;
+    }
 
     /// <summary>
     /// The longest prefix of <paramref name="text"/> that still fits <paramref name="budget"/> once

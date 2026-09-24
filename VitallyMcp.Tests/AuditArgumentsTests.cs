@@ -324,4 +324,27 @@ public class AuditArgumentsTests
         names.Should().HaveCount(2).And.OnlyHaveUniqueItems(
             "two distinct arguments must stay distinguishable after their names are shortened");
     }
+
+    [Fact]
+    public void Format_KeepsEveryArgumentVisible_WhenOnlyTheValuesCannotFit()
+    {
+        // #147 says overflow truncates the VALUE and marks the record, never drops the argument —
+        // because an argument that vanished reads as one the caller never sent. The hard bound added
+        // later started omitting whole arguments as soon as the budget ran out, which is stricter
+        // than it needs to be: a key with an empty value still shows the caller passed it.
+        //
+        // Omission remains the last resort, for when even the NAME will not fit — see the sibling
+        // test with 2,000 arguments, where the names alone exceed the cap.
+        var args = Enumerable.Range(0, 40)
+            .Select(i => new KeyValuePair<string, object?>($"filter{i}", new string('h', 400)))
+            .ToArray();
+
+        var result = AuditArguments.Format(Args(args));
+
+        using var parsed = JsonDocument.Parse(result.Rendered);
+        var names = parsed.RootElement.EnumerateObject().Select(p => p.Name).ToList();
+        names.Should().Contain("filter39", "the last argument is still shown to have been passed");
+        names.Should().HaveCount(40, "every argument is visible; only the values were squeezed");
+        result.Rendered.Length.Should().BeLessThanOrEqualTo(4096);
+    }
 }

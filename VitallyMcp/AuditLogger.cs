@@ -267,25 +267,8 @@ public class AuditLogger
     private static string SanitiseIds(IReadOnlyList<string> ids) =>
         string.Join(",", ids.Select(id => Flatten(id, MaxIdChars)));
 
-    private static string SanitiseClientName(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "unknown";
-        }
-
-        var flattened = string.Create(name.Length, name, static (span, source) =>
-        {
-            for (var i = 0; i < source.Length; i++)
-            {
-                span[i] = IsLineBreaking(source[i]) ? '_' : source[i];
-            }
-        });
-
-        return flattened.Length <= MaxClientNameChars
-            ? flattened
-            : flattened[..MaxClientNameChars] + "...";
-    }
+    private static string SanitiseClientName(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "unknown" : Flatten(name, MaxClientNameChars);
 
     /// <summary>
     /// Writes one record, absorbing any failure.
