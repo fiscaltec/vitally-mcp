@@ -219,6 +219,23 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       `requested_reviewers` reading empty seconds later is **not** failure (see the warning above);
       check the timeline (`.event == "review_requested"`) if in doubt. Reply-only rounds need no
       re-request.
+
+      ⚠️ **That timeline check paginates, and page one goes stale exactly when you need it.**
+      `gh api …/issues/N/timeline` returns **30 events** by default, so on a PR with several review
+      rounds the newest `review_requested` is not on the first page — `.[-1]` then reports an old
+      timestamp and the re-request looks as though it never registered. Always `--paginate`:
+
+      ```bash
+      gh api --paginate repos/fiscaltec/vitally-mcp/issues/$n/timeline \
+        --jq '.[] | select(.event=="review_requested") | .created_at' | tail -1
+      ```
+
+      Measured on #162 on 2026-09-23: the unpaginated read reported the last request at `14:58:23Z`
+      while two further requests had in fact landed at `16:43:14Z` and `16:53:25Z`. The conclusion
+      drawn was "the re-request is not working", which is the opposite of the truth — and the check
+      this paragraph sends you to is the *authoritative* one, so getting it wrong has nowhere to fall
+      back to. Note also that the API reports **UTC** while the local clock here is BST, which makes
+      a fresh timestamp look an hour stale on top.
 3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
    branch current, Copilot's latest review on the current head, zero unresolved threads.
 
