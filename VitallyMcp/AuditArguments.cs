@@ -15,6 +15,15 @@ public readonly record struct AuditedArguments(string Rendered, bool Truncated);
 /// 2026-09-17: without them the trail cannot say which customer was accessed on an unscoped list or
 /// search, where the identities exist only in the response body. Response bodies remain excluded —
 /// that boundary is unchanged.
+/// <para>
+/// ⚠️ <b>Known limitation, accepted rather than overlooked.</b> When a value is squeezed to nothing
+/// the argument is written with an <i>empty</i> value, which a caller could also have sent —
+/// <c>"filter": ""</c> does not distinguish "the caller passed an empty filter" from "we had no room
+/// for the value". The record-level <c>Truncated</c> flag says values were cut, so the record is
+/// honest as a whole, but per-argument the two read alike. Making them distinguishable costs a
+/// budgeted marker per squeezed argument, which is what previously overran the cap twice; it is not
+/// worth reintroducing that for a case that needs hundreds of arguments to reach.
+/// </para>
 /// </remarks>
 public static class AuditArguments
 {

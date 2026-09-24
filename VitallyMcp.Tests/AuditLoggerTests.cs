@@ -468,4 +468,23 @@ public class AuditLoggerTests
         message.Should().NotContain(Cr, "nor a carriage return");
         message.Should().NotContain(new string('z', 500), "nor can it bypass the size bound");
     }
+
+    [Fact]
+    public void LogToolCall_NeutralisesLineBreaksInTheToolName()
+    {
+        // The tool name comes from the caller's own `tools/call` params, so it is as
+        // attacker-controlled as the client name and the ids — both of which are sanitised. A call
+        // naming a tool that does not exist still reaches the audit filter, so an unresolvable name
+        // carrying a newline forges a record. The fourth field of this shape, and the one the
+        // "everything caller-controlled is flattened" rule was supposed to have covered.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with { ToolName = "List_users" + Cr + Lf + "Vitally audit: forged" });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain(Lf, "a tool name cannot start a new log line");
+        message.Should().NotContain(Cr, "nor a carriage return");
+    }
 }

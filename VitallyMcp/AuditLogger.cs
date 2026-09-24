@@ -123,7 +123,7 @@ public class AuditLogger
             + "outcome={AuditOutcome} durationMs={AuditDurationMs} correlation={AuditCorrelationId} "
             + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName}",
             ResolveUserId(),
-            call.ToolName,
+            Flatten(call.ToolName, MaxToolNameChars),
             call.Arguments.Rendered,
             SanitiseIds(call.Records.Ids),
             call.Records.RecordsFetched,
@@ -184,7 +184,7 @@ public class AuditLogger
 
         Emit(() => _logger.LogWarning(
             "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission})",
-            ResolveUserId(user), toolName ?? "unknown", requiredPermission));
+            ResolveUserId(user), Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission));
     }
 
     /// <summary>
@@ -250,6 +250,18 @@ public class AuditLogger
         || char.GetUnicodeCategory(c)
             is System.Globalization.UnicodeCategory.LineSeparator
             or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
+    /// <summary>
+    /// Longest a tool name may be in the message.
+    /// </summary>
+    /// <remarks>
+    /// The tool name arrives in the caller's own <c>tools/call</c> params, so it is as
+    /// attacker-controlled as the client name and the record ids. A call naming a tool that does not
+    /// exist still reaches the audit filter, so an unresolvable name carrying a newline would forge a
+    /// record — the fourth field of this shape in this change, and one the "everything
+    /// caller-controlled reaching this line is flattened" rule should already have covered.
+    /// </remarks>
+    private const int MaxToolNameChars = 128;
 
     /// <summary>Longest a single record id may be in the message.</summary>
     private const int MaxIdChars = 128;
