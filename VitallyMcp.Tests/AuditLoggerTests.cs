@@ -557,7 +557,8 @@ public class AuditLoggerTests
             }
         };
         var audit = new AuditLogger(
-            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }), logger, accessor, factory);
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }), logger, accessor, factory,
+            new KnownToolNames(["Search_users"]));
 
         var context = new ToolCallAuditContext();
         context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-secret-1"}]}"""));
@@ -692,6 +693,8 @@ public class AuditLoggerTests
     [InlineData("alice@example.com")]
     [InlineData("acc-9f3c2b1a")]
     [InlineData("Get_account?query=bob@example.com")]
+    [InlineData("Acme_123")]
+    [InlineData("alice")]
     public void Breadcrumb_DoesNotCarryACallerInventedToolName(string hostileName)
     {
         // The tool name arrives in the caller's own tools/call params and the filter runs even for a
@@ -712,7 +715,8 @@ public class AuditLoggerTests
         };
         var audit = new AuditLogger(
             Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
-            new CapturingLogger<AuditLogger>(), accessor, factory);
+            new CapturingLogger<AuditLogger>(), accessor, factory,
+            new KnownToolNames(["List_organizations", "Get_account"]));
 
         audit.LogToolCall(SampleCall() with { ToolName = hostileName });
         audit.LogToolCallDenied(null, hostileName, "vitally:delete");
@@ -720,7 +724,8 @@ public class AuditLoggerTests
         foreach (var entry in factory.Loggers[AuditLogger.BreadcrumbCategory].Entries)
         {
             entry.Message.Should().NotContain(hostileName,
-                "a caller must not be able to write arbitrary text to the customer-data-free stream");
+                "only a REGISTERED tool name reaches the customer-data-free stream — a shape check "
+                + "would pass Acme_123 and alice, which are exactly the identifiers at issue");
         }
     }
 
@@ -739,7 +744,8 @@ public class AuditLoggerTests
         };
         var audit = new AuditLogger(
             Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
-            new CapturingLogger<AuditLogger>(), accessor, factory);
+            new CapturingLogger<AuditLogger>(), accessor, factory,
+            new KnownToolNames(["List_organizations", "Get_account"]));
 
         audit.LogToolCall(SampleCall() with { ToolName = "List_organizations" });
 

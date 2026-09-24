@@ -76,6 +76,7 @@ public class AuditLogger
     private readonly ILogger<AuditLogger> _logger;
     private readonly IHttpContextAccessor? _httpContextAccessor;
     private readonly ILogger? _fallback;
+    private readonly KnownToolNames? _knownTools;
 
     /// <summary>
     /// Category for the breadcrumb that stays on the console when the full record does not.
@@ -98,8 +99,10 @@ public class AuditLogger
         IOptions<AuditOptions> options,
         ILogger<AuditLogger> logger,
         IHttpContextAccessor? httpContextAccessor = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        KnownToolNames? knownTools = null)
     {
+        _knownTools = knownTools;
         _options = options.Value;
         _logger = logger;
         _httpContextAccessor = httpContextAccessor;
@@ -427,28 +430,25 @@ public class AuditLogger
     /// <remarks>
     /// <b>The tool name is caller-supplied.</b> It arrives in the caller's own <c>tools/call</c>
     /// params and the audit filter runs even for a tool that does not exist, so a client can name one
-    /// anything — including a customer's email or record id. <see cref="Flatten"/> stops it breaking
-    /// the line and does nothing about the content, so the breadcrumb would have carried whatever was
-    /// sent onto the console stream: the one the data map declares customer-data-free, and the one
-    /// #142's export is gated on.
+    /// anything — including a customer's name or record id. The console stream is the one the data map
+    /// declares customer-data-free and #142's export is gated on, so the console copy is restricted to
+    /// names this server actually registered.
     /// <para>
-    /// So the console copy is restricted to names shaped like this server's tools —
-    /// <c>List_organizations</c>, <c>Get_account</c> — which excludes an email (<c>@</c>, <c>.</c>)
-    /// and a record id (<c>-</c>). An allowlist rather than a denylist, because the question is not
-    /// "what might a customer identifier look like" but "what does one of our tool names look like",
-    /// and only the second has a bounded answer.
+    /// ⚠️ <b>Checked against the registered set, not a shape.</b> An earlier version matched
+    /// <c>^[A-Za-z][A-Za-z0-9_]{0,63}$</c>, which does exclude an email and a hyphenated id — but
+    /// <c>Acme_123</c> and <c>alice</c> pass it, and a customer's name is exactly the identifier that
+    /// must not reach this stream. Membership is the only test that answers the actual question.
     /// </para>
     /// <para>
-    /// The <b>full</b> record keeps the name verbatim: <c>AppEvents</c> is where customer data is
-    /// permitted and access-controlled, and an audit trail that silently renamed what the caller
-    /// invoked would be worse than useless. Only the console copy is restricted.
+    /// With no <see cref="KnownToolNames"/> injected there is nothing to check against, so everything
+    /// reads <c>unrecognised</c> — fail closed, because the cost of being wrong here is customer data
+    /// on the broadest-access stream. The <b>full</b> record keeps the name verbatim regardless:
+    /// <c>AppEvents</c> is where customer data is permitted and access-controlled, and a trail that
+    /// silently renamed what the caller invoked would be worse than useless.
     /// </para>
     /// </remarks>
-    private static string ToolNameForConsole(string? toolName) =>
-        !string.IsNullOrEmpty(toolName) && ToolNameShape.IsMatch(toolName) ? toolName : "unrecognised";
-
-    private static readonly System.Text.RegularExpressions.Regex ToolNameShape =
-        new("^[A-Za-z][A-Za-z0-9_]{0,63}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private string ToolNameForConsole(string? toolName) =>
+        _knownTools?.IsRegistered(toolName) == true ? toolName! : "unrecognised";
 
     private static void Emit(Action write)
     {

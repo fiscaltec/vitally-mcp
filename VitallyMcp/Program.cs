@@ -130,7 +130,15 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureC
 // omitting it leaves the exporter with nowhere to send. The credential replaces the authentication,
 // not the address.
 var appInsightsConnection = builder.Configuration["ApplicationInsights:ConnectionString"];
-if (!string.IsNullOrWhiteSpace(appInsightsConnection))
+var exporterConfigured = !string.IsNullOrWhiteSpace(appInsightsConnection);
+
+// Forced either way, and deliberately OUTSIDE the branch. AuditOptions binds from the Audit: section,
+// so `Audit__EmitBreadcrumb=true` would otherwise switch the breadcrumb on with no exporter — and
+// with no exporter the console suppression is not registered either, so every call would emit the
+// full record AND the breadcrumb. It is a derived fact about the wiring, not an operator's choice.
+builder.Services.PostConfigure<AuditOptions>(o => o.EmitBreadcrumb = exporterConfigured);
+
+if (exporterConfigured)
 {
     builder.Services.AddOpenTelemetry().UseAzureMonitor(options =>
     {
@@ -162,10 +170,7 @@ if (!string.IsNullOrWhiteSpace(appInsightsConnection))
     // breadcrumb would also land in AppTraces as noise.
     builder.Logging.AddFilter<OpenTelemetryLoggerProvider>(AuditLogger.BreadcrumbCategory, LogLevel.None);
 
-    // The breadcrumb only exists to survive a silent export failure, so it is switched on with the
-    // exporter rather than whenever an ILoggerFactory happens to be available — which is every host,
-    // and would give local runs two records per call while the console suppression is not in force.
-    builder.Services.PostConfigure<AuditOptions>(o => o.EmitBreadcrumb = true);
+
 }
 
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
@@ -195,6 +200,12 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 
 builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddScoped<ToolAuthorizer>();
+// The names this server actually registered, so the audit breadcrumb can tell a real tool from one
+// a caller invented — the audit filter runs for unknown names too, and the console stream is the one
+// that must stay customer-data-free.
+builder.Services.AddSingleton(sp => new KnownToolNames(
+    sp.GetServices<ModelContextProtocol.Server.McpServerTool>().Select(t => t.ProtocolTool.Name)));
+
 builder.Services.AddScoped<AuditLogger>();
 
 // Scoped, and that is the whole contract: the tool's VitallyService writes what it touched into
