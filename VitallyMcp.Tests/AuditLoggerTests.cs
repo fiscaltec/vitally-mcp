@@ -487,4 +487,31 @@ public class AuditLoggerTests
         message.Should().NotContain(Lf, "a tool name cannot start a new log line");
         message.Should().NotContain(Cr, "nor a carriage return");
     }
+
+    [Fact]
+    public void LogToolCall_CarriesTheCustomEventAttribute_SoTheRecordLandsInAppEventsNotAppTraces()
+    {
+        // The Azure Monitor exporter chooses the destination table by looking for ONE exact,
+        // case-sensitive attribute key in the log state. Miss it or misspell it and the record is
+        // written to AppTraces instead — silently, with no error and no warning — where it shares a
+        // table with ordinary diagnostics and loses the per-table retention and access the audit
+        // trail is being routed for. This test is the only thing that catches that before Azure does.
+        var logger = new StateCapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(Options.Create(new AuditOptions { Enabled = true }), logger, accessor);
+
+        audit.LogToolCall(SampleCall());
+
+        var state = logger.States.Should().ContainSingle().Subject;
+        state.Should().Contain(kv => kv.Key == "microsoft.custom_event.name",
+            "this exact key is what routes the record to AppEvents");
+        state.Single(kv => kv.Key == "microsoft.custom_event.name").Value.Should()
+            .Be("VitallyToolCall", "the event name groups these records in the table");
+    }
 }

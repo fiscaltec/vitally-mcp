@@ -492,4 +492,19 @@ public class LoggingFilterTests
             RestoreConfiguration(previous);
         }
     }
+
+    [Fact]
+    public void AuditLoggerCategoryName_MatchesTheFilterThatKeepsRecordsOffStdout()
+    {
+        // Program.cs suppresses "VitallyMcp.AuditLogger" from the ConsoleLoggerProvider once the
+        // Azure Monitor exporter is configured, which is what #142's ContainerAppConsoleLogs export
+        // is gated on. That filter is a STRING: rename the class or move its namespace and the
+        // suppression stops matching, silently, and customer identifiers go back to the console
+        // stream — the table with the shortest retention and the broadest access.
+        //
+        // Nothing else would fail if that happened, so this asserts the category the filter names is
+        // still the category the logger actually uses.
+        typeof(AuditLogger).FullName.Should().Be("VitallyMcp.AuditLogger",
+            "Program.cs filters this exact category off the console provider");
+    }
 }

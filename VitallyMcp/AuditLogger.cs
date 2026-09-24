@@ -121,7 +121,8 @@ public class AuditLogger
             + "truncated={AuditPagerTruncated} argsTruncated={AuditArgumentsTruncated} "
             + "unreadable={AuditCallsWithoutIds} "
             + "outcome={AuditOutcome} durationMs={AuditDurationMs} correlation={AuditCorrelationId} "
-            + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName}",
+            + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName} "
+            + "event={microsoft.custom_event.name}",
             ResolveUserId(),
             Flatten(call.ToolName, MaxToolNameChars),
             call.Arguments.Rendered,
@@ -138,7 +139,8 @@ public class AuditLogger
             call.CorrelationId,
             call.PermissionTier,
             call.TierServedStale?.ToString() ?? "unknown",
-            SanitiseClientName(call.McpClient)));
+            SanitiseClientName(call.McpClient),
+            ToolCallEventName));
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
@@ -250,6 +252,25 @@ public class AuditLogger
         || char.GetUnicodeCategory(c)
             is System.Globalization.UnicodeCategory.LineSeparator
             or System.Globalization.UnicodeCategory.ParagraphSeparator;
+
+    /// <summary>
+    /// Groups the tool-call records in the destination table.
+    /// </summary>
+    /// <remarks>
+    /// <b>The placeholder carrying this is what decides which table the record lands in.</b> The
+    /// Azure Monitor exporter looks for the attribute key <c>microsoft.custom_event.name</c> —
+    /// exactly, case-sensitively — in the log state, and writes an <c>AppEvents</c> row when it finds
+    /// one. Without it, or with it misspelled, the record becomes an <c>AppTraces</c> row instead:
+    /// <b>silently</b>, with no error and no warning, sharing a table with ordinary diagnostics and
+    /// losing the per-table retention and access control this routing exists to obtain.
+    /// <para>
+    /// So the odd-looking placeholder name in the template below is load-bearing rather than
+    /// decorative, and <c>AuditLoggerTests</c> asserts its exact spelling. Note also that a record
+    /// carrying an <b>exception</b> is emitted as <c>AppExceptions</c> regardless of this attribute —
+    /// which is why <see cref="Emit"/> never passes one.
+    /// </para>
+    /// </remarks>
+    private const string ToolCallEventName = "VitallyToolCall";
 
     /// <summary>
     /// Longest a tool name may be in the message.

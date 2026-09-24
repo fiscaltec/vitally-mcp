@@ -41,3 +41,36 @@ public sealed class CapturingLoggerProvider(string categoryName) : ILoggerProvid
 
     public void Dispose() { }
 }
+
+/// <summary>
+/// Captures the structured <b>state</b> of each record, not just its rendered message.
+/// </summary>
+/// <remarks>
+/// Needed because the Azure Monitor exporter decides an audit record's destination table by looking
+/// for one exact attribute key in the log state. A record missing it, or carrying a misspelling, is
+/// written to <c>AppTraces</c> silently — no error, no warning — so the only way to catch that before
+/// it reaches Azure is to assert on the state the logger was handed.
+/// </remarks>
+public sealed class StateCapturingLogger<T> : ILogger<T>
+{
+    public List<IReadOnlyList<KeyValuePair<string, object?>>> States { get; } = new();
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (state is IReadOnlyList<KeyValuePair<string, object?>> fields)
+        {
+            States.Add(fields);
+        }
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static readonly NullScope Instance = new();
+        public void Dispose() { }
+    }
+}

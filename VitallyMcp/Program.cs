@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using VitallyMcp;
@@ -116,6 +118,39 @@ builder.Services.AddHttpContextAccessor();
 // Shared managed-identity credential (managed identity in prod, az login locally) used for both
 // Key Vault and the Microsoft Graph group-membership lookup.
 builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureCredential());
+
+// Route telemetry to Application Insights, and with it the audit records (#147). Registered only
+// when a connection string is configured, so local development and the test hosts are untouched —
+// the same conditional shape as the Key Vault client above.
+//
+// ⚠️ The connection string is still REQUIRED despite `DisableLocalAuth = true` on the component, and
+// #147 implied otherwise. What that setting refuses is the instrumentation key inside it being used
+// as a *credential*; the string itself still names the component and its ingestion endpoint, so
+// omitting it leaves the exporter with nowhere to send. The credential replaces the authentication,
+// not the address.
+var appInsightsConnection = builder.Configuration["ApplicationInsights:ConnectionString"];
+if (!string.IsNullOrWhiteSpace(appInsightsConnection))
+{
+    builder.Services.AddOpenTelemetry().UseAzureMonitor(options =>
+    {
+        options.ConnectionString = appInsightsConnection;
+
+        // The same DefaultAzureCredential the Key Vault client uses, which already resolves this
+        // Container App's user-assigned identity — so there is one credential path rather than two,
+        // and a managed-identity misconfiguration fails the same way for both.
+        options.Credential = new DefaultAzureCredential();
+    });
+
+    // Take the audit records OFF stdout, now that they have somewhere else to go. This is what
+    // #142's ContainerAppConsoleLogs export is gated on: the console stream is the table with the
+    // shortest retention and the broadest access, and these records carry customer identifiers and
+    // search terms.
+    //
+    // Provider-specific, and deliberately inside this branch: with no exporter configured there is
+    // nowhere else for a record to go, so suppressing the console locally would discard the audit
+    // trail rather than move it.
+    builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLevel.None);
+}
 
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
 // Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
