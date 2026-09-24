@@ -187,6 +187,13 @@ import {
   to = azurerm_role_assignment.mi_ca_contributor
   id = "${local.rg_id}/providers/Microsoft.App/containerApps/vitally-prod-ca-uksouth/providers/Microsoft.Authorization/roleAssignments/ca439f5e-c348-48de-b515-8b5ced858f00"
 }
+# Granted 2026-09-24 with #164's audit routing. Without this import an adoption run would try to
+# CREATE a grant that already exists, so the assignment must be captured here as well as declared in
+# identity.tf — the resource alone is only half of the adopt-by-import convention.
+import {
+  to = azurerm_role_assignment.mi_monitoring_metrics_publisher
+  id = "${local.rg_id}/providers/Microsoft.Insights/components/vitally-prod-appi-uksouth/providers/Microsoft.Authorization/roleAssignments/21b34521-171a-47d9-ade6-e12b5cc37b83"
+}
 
 # ---- Need a looked-up ID first (uncomment + fill in, then plan) ----
 # Diagnostic settings:  import id = "<target-resource-id>|to-law"
