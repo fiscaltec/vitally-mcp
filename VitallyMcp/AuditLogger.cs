@@ -397,7 +397,15 @@ public class AuditLogger
         // from the accessor there gave "anonymous" on the breadcrumb while the full record named the
         // caller, so the degraded copy could not be joined to the record it degrades from, which is
         // its only job.
-        args[0] = user is null ? ResolveUserId() : ResolveUserId(user);
+        //
+        // ⚠️ The OBJECT ID only, never ResolveUserId's fallback chain. That chain deliberately falls
+        // back to the raw `sub` and then NameIdentifier, because a consistent-but-opaque key beats
+        // none in the full record — but both are token-supplied strings, so an unexpected token shape
+        // could put an email, or a line break, on the console stream. An oid is a GUID by
+        // construction and can carry neither. Every other caller-controlled field on this line is
+        // sanitised; the identity was the one that was not.
+        args[0] = CallerIdentity.TryGetObjectId(user ?? _httpContextAccessor?.HttpContext?.User)
+            ?? "unresolved";
         detail.CopyTo(args, 1);
 
         Emit(() => _fallback.LogInformation("Vitally audit breadcrumb: {AuditUserId} " + detailTemplate, args));

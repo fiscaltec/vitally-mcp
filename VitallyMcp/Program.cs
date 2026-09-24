@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -149,6 +150,20 @@ if (exporterConfigured)
         // and a managed-identity misconfiguration fails the same way for both.
         options.Credential = new DefaultAzureCredential();
     });
+
+    // UseAzureMonitor turns on automatic HttpClient dependency collection, and this server puts
+    // free-text search terms into Vitally query strings — Search_users passes its term as
+    // ?query=<value>, routinely a customer email. Those spans become AppDependencies rows, a
+    // different table from the audit records with its own retention, which AuditLogger's
+    // ResourcePath stripping does nothing for.
+    //
+    // Defence in depth rather than a fix for a live leak: on .NET 9+ the runtime redacts url.full
+    // itself. But that redaction is switchable process-wide (System.Net.Http.DisableUriRedaction),
+    // so this makes the guarantee local to this repository rather than inherited from a default
+    // nothing here controls. See QueryStringRedactingProcessor.
+    builder.Services.AddOpenTelemetry()
+        .WithTracing(tracing => tracing.AddProcessor<QueryStringRedactingProcessor>());
+    builder.Services.AddSingleton<QueryStringRedactingProcessor>();
 
     // Take the audit records OFF stdout, now that they have somewhere else to go. This is what
     // #142's ContainerAppConsoleLogs export is gated on: the console stream is the table with the

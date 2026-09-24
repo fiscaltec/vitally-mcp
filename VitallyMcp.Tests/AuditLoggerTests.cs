@@ -777,4 +777,36 @@ public class AuditLoggerTests
             .Subject.Message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba",
                 "the breadcrumb must name whoever the full record names");
     }
+
+    [Fact]
+    public void Breadcrumb_UsesTheObjectIdOnly_NeverTheSubjectFallbacks()
+    {
+        // ResolveUserId falls back to the raw `sub` and then NameIdentifier when `oid` is absent —
+        // deliberately, because a consistent-but-opaque key beats none in the FULL record. But those
+        // are token-supplied strings: an unexpected token shape can carry an email, or a line break,
+        // straight onto the console stream that is supposed to be customer-data-free and
+        // injection-free. Every other caller-controlled field on that line is sanitised; the identity
+        // was not.
+        //
+        // The breadcrumb takes the oid or nothing. An oid is a GUID by construction, so it cannot
+        // carry either problem.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    new[] { new Claim("sub", "alice@example.com") }, authenticationType: "Test"))
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true, IncludeReads = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/organizations", 200);
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().NotContain("alice@example.com",
+                "a token subject can be an email, and the console stream must not carry one");
+    }
 }
