@@ -437,16 +437,37 @@ Two things have to be specified, not one:
 | **`TelemetryClient.TrackEvent`** | **`AppEvents`** | **chosen** |
 | `ILogger` + App Insights provider | `AppTraces` | rejected |
 
-**`TrackEvent` is authoritative**, and this is a decision rather than an option, because phases 4 and
-7 apply retention and access controls to a named table and cannot do that against an unresolved
+⚠️ **Superseded 2026-09-24 (#164). The destination is unchanged — `AppEvents` — but the mechanism is
+the Azure Monitor OpenTelemetry exporter, not `TelemetryClient`.** The table above set up a choice
+between `TrackEvent` and "`ILogger` + App Insights provider", and missed a third option that gets the
+same table: `ILogger` **plus the `microsoft.custom_event.name` attribute**, which the OTel exporter
+reads to write an `AppEvents` row. Why the change:
+
+- Microsoft's stated position is *"for new applications, use the Azure Monitor OpenTelemetry
+  Distro"*. The classic 2.x SDK is deprecated with retirement on **2027-03-01**, and 3.x is a
+  migration bridge documented as **not** to be run alongside the distro.
+- Classic 3.x implements `TrackEvent` **by setting that same attribute** on an OTel log record. It is
+  a shim over the same exporter, so choosing it would buy a friendlier call and an extra deprecation
+  cycle for an identical wire format.
+- The stated cost below — `AuditLogger` taking a `TelemetryClient` dependency — is therefore avoided
+  entirely; it keeps only its `ILogger`.
+
+⚠️ **The new failure mode, which the old one did not have:** routing is decided by an exact,
+case-sensitive attribute match. Miss it and the record becomes an `AppTraces` row **silently** — no
+error, no warning — which is the very outcome the row below rejects. A test asserts the exact key on
+every emission for that reason.
+
+**The destination is authoritative**, and this is a decision rather than an option, because phases 4
+and 7 apply retention and access controls to a named table and cannot do that against an unresolved
 choice. Reasons: `AppEvents` is a dedicated table, so per-table retention and table-level RBAC apply
 to the audit trail *and nothing else*; typed properties survive as queryable dimensions rather than
 being formatted into a message; and it does not share a table with ordinary trace output, which
 `AppTraces` would — putting the PII-bearing records back in with general diagnostics, which is the
 separation this design exists to create.
 
-Cost, stated so it is not a surprise: `AuditLogger` takes a `TelemetryClient` dependency alongside
-its `ILogger`. That is the trade for the table boundary.
+~~Cost, stated so it is not a surprise: `AuditLogger` takes a `TelemetryClient` dependency alongside
+its `ILogger`. That is the trade for the table boundary.~~ **No longer applies** — see the supersession
+above. `AuditLogger` keeps only its `ILogger`; the attribute does the routing.
 
 **2. Suppression from the console provider**, which is the part that actually protects the table:
 

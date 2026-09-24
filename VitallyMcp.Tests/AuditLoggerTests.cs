@@ -746,4 +746,29 @@ public class AuditLoggerTests
         factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
             .Subject.Message.Should().Contain("List_organizations");
     }
+
+    [Fact]
+    public void DenialBreadcrumb_AttributesToTheExplicitPrincipal_NotTheAmbientContext()
+    {
+        // LogToolCallDenied takes the principal deliberately: the SDK authorisation checkpoint hands
+        // the policy's own principal, which is the authoritative identity and can exist with NO
+        // ambient HttpContext. The breadcrumb resolved the actor from the accessor instead, so the
+        // AppEvents record would name the caller while its degraded copy said "anonymous" — and the
+        // two could not be joined, which is the one job the breadcrumb has when an export is lost.
+        var factory = new CapturingFactory();
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(),
+            httpContextAccessor: null,
+            loggerFactory: factory);
+
+        audit.LogToolCallDenied(
+            EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise"),
+            "Delete_account",
+            "vitally:delete");
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+                "the breadcrumb must name whoever the full record names");
+    }
 }

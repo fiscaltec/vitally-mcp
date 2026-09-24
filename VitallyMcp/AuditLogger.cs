@@ -126,7 +126,7 @@ public class AuditLogger
             UpstreamCallEventName));
 
         // No resource path here: that is the field carrying the customer's record id.
-        Breadcrumb("{HttpMethod} -> {StatusCode} correlation={AuditCorrelationId}",
+        Breadcrumb(null, "{HttpMethod} -> {StatusCode} correlation={AuditCorrelationId}",
             method.Method, statusCode, correlationId ?? "none");
     }
 
@@ -172,7 +172,7 @@ public class AuditLogger
             SanitiseClientName(call.McpClient),
             ToolCallEventName));
 
-        Breadcrumb("called {McpToolName} outcome={AuditOutcome} correlation={AuditCorrelationId}",
+        Breadcrumb(null, "called {McpToolName} outcome={AuditOutcome} correlation={AuditCorrelationId}",
             ToolNameForConsole(call.ToolName), call.Outcome, call.CorrelationId);
     }
 
@@ -190,7 +190,7 @@ public class AuditLogger
             ResolveUserId(), method.Method, ResourcePath(url), correlationId ?? "none",
             UpstreamDeniedEventName));
 
-        Breadcrumb("DENIED {HttpMethod} correlation={AuditCorrelationId}",
+        Breadcrumb(null, "DENIED {HttpMethod} correlation={AuditCorrelationId}",
             method.Method, correlationId ?? "none");
     }
 
@@ -228,7 +228,7 @@ public class AuditLogger
             ResolveUserId(user), Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission,
             ToolCallDeniedEventName));
 
-        Breadcrumb("DENIED tools/call {McpToolName} (requires {RequiredPermission})",
+        Breadcrumb(user, "DENIED tools/call {McpToolName} (requires {RequiredPermission})",
             ToolNameForConsole(toolName), requiredPermission);
     }
 
@@ -374,6 +374,7 @@ public class AuditLogger
     /// <para>
     /// Swallowed rather than re-logged: this catches a <i>synchronous</i> failure, and the logger is
     /// the transport, so there is nowhere to re-log to.
+    /// </para>
     /// <para>
     /// ⚠️ <b>This does not catch an export failure, and cannot.</b> The Azure Monitor exporter is
     /// asynchronous and batched, so an ingestion outage never surfaces here. The degradation the
@@ -399,7 +400,7 @@ public class AuditLogger
     /// breadcrumb proves a call happened and joins it to the full record, and stops there.
     /// </para>
     /// </remarks>
-    private void Breadcrumb(string detailTemplate, params object?[] detail)
+    private void Breadcrumb(ClaimsPrincipal? user, string detailTemplate, params object?[] detail)
     {
         if (_fallback is null)
         {
@@ -407,7 +408,14 @@ public class AuditLogger
         }
 
         var args = new object?[detail.Length + 1];
-        args[0] = ResolveUserId();
+
+        // The principal is passed in rather than read from the ambient context, because
+        // LogToolCallDenied is called from the SDK authorisation checkpoint with the POLICY's own
+        // principal — authoritative, and able to exist with no ambient HttpContext at all. Resolving
+        // from the accessor there gave "anonymous" on the breadcrumb while the full record named the
+        // caller, so the degraded copy could not be joined to the record it degrades from, which is
+        // its only job.
+        args[0] = user is null ? ResolveUserId() : ResolveUserId(user);
         detail.CopyTo(args, 1);
 
         Emit(() => _fallback.LogInformation("Vitally audit breadcrumb: {AuditUserId} " + detailTemplate, args));
