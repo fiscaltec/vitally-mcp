@@ -29,7 +29,8 @@ public class ToolAuthorizerTests
         ClaimsPrincipal? user = null,
         ToolAuthorizationOptions? options = null,
         IGroupPermissionResolver? resolver = null,
-        ILogger<ToolAuthorizer>? logger = null)
+        ILogger<ToolAuthorizer>? logger = null,
+        ToolCallAuditContext? auditContext = null)
     {
         var accessor = new HttpContextAccessor
         {
@@ -40,7 +41,8 @@ public class ToolAuthorizerTests
             Options.Create(new OAuthOptions { NoAuth = noAuth }),
             accessor,
             resolver,
-            logger);
+            logger,
+            auditContext);
     }
 
     private static ClaimsPrincipal UserWithPermissions(params string[] permissions) =>
@@ -342,5 +344,68 @@ public class ToolAuthorizerTests
         var authorizer = Build(enabled: !disabled, noAuth: noAuth);
 
         (await authorizer.IsAuthorizationBypassedAsync()).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheResolvedTier_IntoTheAuditContext()
+    {
+        // The audit record's tier must be the one the DECISION was made against. Re-deriving it in
+        // the filter would mean a second Graph lookup that could answer differently, producing a
+        // record that disagrees with the decision it claims to document — and, because entitlement
+        // is resolved live, nothing could later tell which was right.
+        var resolver = new StubResolver(new HashSet<string> { "vitally:read", "vitally:write" });
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = true },
+            resolver: resolver,
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(UserWithOid("675ebdda-7590-4d79-8ec3-a2d17ab029ba"), "vitally:read");
+
+        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheTier_OnTheClaimPathToo()
+    {
+        // The claim path is inert on every deployed target, but it is the supported local-dev mode
+        // and the record promises "the tier the caller resolved to". Leaving it "unresolved" there
+        // would make a developer reading their own audit output conclude the field is broken.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = false },
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(
+            UserWithPermissions("vitally:read", "vitally:write"), "vitally:read");
+
+        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_RecordsTheTier_WhenThePermissionNamesAreConfigured()
+    {
+        // ToolAuthorizationOptions lets the three permission names be configured, and only validates
+        // that they are non-empty — so a deployment may legitimately use names with no `vitally:`
+        // prefix. Filtering the recorded tier on that prefix meant HasPermission would authorise the
+        // call while the audit record claimed the caller held nothing.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions
+            {
+                Enabled = true,
+                LiveGroupCheck = false,
+                ReadPermission = "read",
+                WritePermission = "write",
+                DeletePermission = "delete",
+            },
+            auditContext: context);
+
+        var allowed = await authorizer.HasEffectivePermissionAsync(
+            UserWithPermissions("read", "write"), "read");
+
+        allowed.Should().BeTrue("the configured name is what authorises");
+        context.Summarise().PermissionTier.Should().Be("read,write",
+            "and the record must say what authorised it, not 'none'");
     }
 }

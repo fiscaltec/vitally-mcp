@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
@@ -144,6 +145,12 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddScoped<ToolAuthorizer>();
 builder.Services.AddScoped<AuditLogger>();
+
+// Scoped, and that is the whole contract: the tool's VitallyService writes what it touched into
+// this, and the call-tool filter below reads it back. Registered per-request so one caller's reads
+// can never appear in another's record — and so that, in stateless mode, each tools/call gets a
+// fresh one. A singleton here would merge every caller's activity into one running tally.
+builder.Services.AddScoped<ToolCallAuditContext>();
 builder.Services.AddTransient<VitallyRateLimitHandler>();
 
 builder.Services.AddHttpClient<VitallyService>()
@@ -330,6 +337,73 @@ mcpBuilder.WithRequestFilters(filters =>
         catch (Exception ex) when (ToolErrorResult.IsSurfaceable(ex))
         {
             return ToolErrorResult.Build(ex);
+        }
+    });
+
+    // The audit record for the call itself (#147). Registered after the error-surfacing filter so it
+    // still runs when that filter converts an exception into an error result — the record must exist
+    // for a failed call as much as a successful one, since an attempted deletion that errored is
+    // exactly the sort of event an access trail is kept for.
+    filters.AddCallToolFilter(next => async (context, cancellationToken) =>
+    {
+        var auditContext = context.Services?.GetService<ToolCallAuditContext>();
+        var audit = context.Services?.GetService<AuditLogger>();
+        if (auditContext is null || audit is null)
+        {
+            return await next(context, cancellationToken);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "ok";
+        try
+        {
+            var result = await next(context, cancellationToken);
+            if (result.IsError == true)
+            {
+                outcome = "error";
+            }
+
+            return result;
+        }
+        catch
+        {
+            outcome = "error";
+            throw;
+        }
+        finally
+        {
+            // An audit write must never be the reason a call fails. This runs in a `finally`, so an
+            // exception escaping it would replace a perfectly good result with
+            // "An error occurred invoking 'X'" — and a telemetry sink refusing writes is exactly the
+            // sort of thing that happens during the incident the trail is wanted for. Losing the
+            // record is bad; losing the user's call as well is worse, and inexplicable client-side.
+            //
+            // Swallowed rather than re-logged, because in this configuration the logger IS the sink
+            // that just failed. Once the record routes through TrackEvent, the fallback the design
+            // calls for — degrade to ILogger rather than disappear — becomes possible and belongs
+            // here.
+            try
+            {
+                var summary = auditContext.Summarise();
+                audit.LogToolCall(new ToolCallAudit(
+                    ToolName: context.Params?.Name ?? "unknown",
+                    Arguments: AuditArguments.Format(context.Params?.Arguments),
+                    Records: summary,
+                    Outcome: outcome,
+                    Duration: Stopwatch.GetElapsedTime(started),
+                    CorrelationId: auditContext.CorrelationId,
+                    PermissionTier: summary.PermissionTier,
+                    TierServedStale: summary.TierServedStale,
+                    // Read per call, not per session: 2026-07-28 removed the `initialize` handshake,
+                    // so in stateless mode the client identifies itself in each request's `_meta` and
+                    // there is no session state to have cached it in. A legacy-path caller sends
+                    // none, and `unknown` is the honest answer there.
+                    McpClient: context.JsonRpcRequest?.Context?.ClientInfo?.Name));
+            }
+            catch (Exception auditFailure) when (auditFailure is not OperationCanceledException)
+            {
+                // Deliberately ignored. See above.
+            }
         }
     });
 

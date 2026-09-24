@@ -52,19 +52,22 @@ public class ToolAuthorizer
     private bool _loggedNoResolver;
     private bool _loggedNoObjectId;
     private bool _loggedUnresolvable;
+    private readonly ToolCallAuditContext? _auditContext;
 
     public ToolAuthorizer(
         IOptions<ToolAuthorizationOptions> options,
         IOptions<OAuthOptions> oauth,
         IHttpContextAccessor? httpContextAccessor = null,
         IGroupPermissionResolver? groupResolver = null,
-        ILogger<ToolAuthorizer>? logger = null)
+        ILogger<ToolAuthorizer>? logger = null,
+        ToolCallAuditContext? auditContext = null)
     {
         _options = options.Value;
         _noAuth = oauth.Value.NoAuth;
         _httpContextAccessor = httpContextAccessor;
         _groupResolver = groupResolver;
         _logger = logger;
+        _auditContext = auditContext;
     }
 
     /// <summary>
@@ -168,9 +171,25 @@ public class ToolAuthorizer
                 return false;
             }
 
+            // Hand the audit record the tier THIS decision was made against. Re-deriving it later
+            // would mean a second Graph lookup that could answer differently, leaving a record that
+            // disagrees with the decision it documents — and, because entitlement is resolved live,
+            // nothing could afterwards say which was right.
+            //
+            // Staleness is deliberately not passed: GraphGroupPermissionResolver serves a retained
+            // copy internally and logs it, but does not report it back through
+            // IGroupPermissionResolver, so nothing here knows. Passing `false` would assert the tier
+            // was fresh when nothing checked.
+            _auditContext?.RecordResolvedTier(live);
+
             // Authoritative when the live lookup succeeds (empty set => deny).
             return live.Contains(required);
         }
+
+        // The claim path is inert on every deployed target (#108/#156), but it is the supported
+        // local-dev mode and the audit record promises "the tier the caller resolved to" — leaving it
+        // unresolved here makes the field look broken to anyone reading their own dev output.
+        _auditContext?.RecordResolvedTier(ClaimedPermissions(user, _options.CustomPermissionsClaim));
 
         return HasPermission(user, required, _options.CustomPermissionsClaim);
     }
@@ -234,5 +253,38 @@ public class ToolAuthorizer
         return !string.IsNullOrEmpty(scope)
             && scope.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                 .Any(s => string.Equals(s, required, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Every Vitally permission the principal's claims assert, for the audit record. Mirrors the
+    /// sources <see cref="HasPermission"/> consults, so the recorded tier cannot claim something the
+    /// decision would have refused.
+    /// </summary>
+    private IReadOnlySet<string> ClaimedPermissions(ClaimsPrincipal user, string? customClaimType)
+    {
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+        claimed.UnionWith(user.FindAll("permissions").Select(c => c.Value));
+
+        if (!string.IsNullOrWhiteSpace(customClaimType))
+        {
+            claimed.UnionWith(user.FindAll(customClaimType).Select(c => c.Value));
+        }
+
+        var scope = user.FindFirst("scope")?.Value;
+        if (!string.IsNullOrEmpty(scope))
+        {
+            claimed.UnionWith(scope.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        // Keep only the permissions this server governs, so an OIDC scope like `openid` is not
+        // recorded as a tier. Compared against the CONFIGURED names rather than a `vitally:` prefix:
+        // the three are settable and only validated as non-empty, so a deployment may legitimately
+        // use unprefixed names — and filtering on the prefix would let `HasPermission` authorise a
+        // call while the record claimed the caller held nothing.
+        var governed = new HashSet<string>(
+            [_options.ReadPermission, _options.WritePermission, _options.DeletePermission],
+            StringComparer.Ordinal);
+        claimed.IntersectWith(governed);
+        return claimed;
     }
 }

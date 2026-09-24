@@ -13,6 +13,7 @@ public class VitallyService
     private readonly VitallyApiKeyProvider _apiKeyProvider;
     private readonly ToolAuthorizer _authorizer;
     private readonly AuditLogger _audit;
+    private readonly ToolCallAuditContext? _auditContext;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -43,13 +44,14 @@ public class VitallyService
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _apiKeyProvider = apiKeyProvider;
         _authorizer = authorizer;
         _audit = audit;
+        _auditContext = auditContext;
         _baseUrl = _options.BaseUrl;
     }
 
@@ -64,7 +66,7 @@ public class VitallyService
         }
         catch (UnauthorizedAccessException)
         {
-            _audit.LogDenied(method, url);
+            _audit.LogDenied(method, url, _auditContext?.CorrelationId);
             throw;
         }
 
@@ -84,7 +86,7 @@ public class VitallyService
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        _audit.LogAction(method, url, (int)response.StatusCode);
+        _audit.LogAction(method, url, (int)response.StatusCode, _auditContext?.CorrelationId);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -98,6 +100,35 @@ public class VitallyService
                 inner: null,
                 statusCode: response.StatusCode);
         }
+
+        // Capture the records touched HERE, from the raw body, because this is the last point at
+        // which they exist. GetResourcesAsync applies FilterJsonFields afterwards, so a caller
+        // passing `fields=name` receives results carrying no `id` at all — capturing downstream
+        // would name nobody on exactly the calls a narrow projection was used for. Only on success:
+        // a failure body is an error message, not records.
+        try
+        {
+            var touched = AuditRecordIds.Extract(body);
+            if (touched.IdsRecorded == 0)
+            {
+                // Keyed on "no id was captured", NOT on "the shape was unreadable". An EMPTY result
+                // set is deliberately marked available — that rule stops a "no matches" search
+                // looking like a broken record — but a mutation answering `{results:[]}` is an
+                // acknowledgement rather than an empty search, and gating on availability skipped the
+                // fallback and lost the customer again by a second route. A GET is unaffected:
+                // FromMutationUrl only answers for the methods whose URL ends in a record id.
+                touched = AuditRecordIds.FromMutationUrl(method, url);
+            }
+
+            _auditContext?.RecordUpstream(touched);
+        }
+        catch (Exception)
+        {
+            // The audit sidecar must never be the reason a call fails. `AuditRecordIds.Extract`
+            // guards the shapes it knows about, but it parses whatever an upstream returns, so the
+            // guarantee is made here rather than resting on that being exhaustive.
+        }
+
         return body;
     }
 
@@ -181,7 +212,15 @@ public class VitallyService
             }
 
             if (stopped || string.IsNullOrEmpty(from)) break;     // early-stop or exhausted
-            if (pagesFetched >= maxPages) { truncated = true; break; }   // cap hit
+            if (pagesFetched >= maxPages)
+            {
+                truncated = true;
+                // Tell the audit record the total is UNKNOWN, not equal to what was fetched. Vitally's
+                // envelope exposes only `next`, so once the cap is hit the matching total cannot be
+                // known without the unbounded paging the cap exists to prevent.
+                _auditContext?.MarkPagerTruncated();
+                break;
+            }
         }
 
         var requestedFields = ResolveFields(fields, defaultsKey);

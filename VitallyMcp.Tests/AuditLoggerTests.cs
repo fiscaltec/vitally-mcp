@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -239,5 +240,251 @@ public class AuditLoggerTests
         audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/accounts", 200);
         logger.Entries.Should().ContainSingle();
         logger.Entries[0].Message.Should().Contain("anonymous");
+    }
+
+    [Fact]
+    public void LogToolCall_ShowsThisUserCalledThisTool_AndWhichCustomersItTouched()
+    {
+        // The acceptance criterion for #147, stated as an outcome rather than a field list:
+        // "the audit trail must show that THIS USER called THIS TOOL and accessed, modified or
+        // deleted data for THESE CUSTOMERS". `List_organizations` is the case the upstream record
+        // cannot answer — an unscoped list whose customers exist only in the response body.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pAiRwiSeSuBjEcTeXaMpLeVaLuE0000000000000"));
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-1"},{"id":"org-2"}]}"""));
+
+        audit.LogToolCall(new ToolCallAudit(
+            ToolName: "List_organizations",
+            Arguments: AuditArguments.Format(null),
+            Records: context.Summarise(),
+            Outcome: "ok",
+            Duration: TimeSpan.FromMilliseconds(120),
+            CorrelationId: context.CorrelationId,
+            PermissionTier: "vitally:read",
+            TierServedStale: false,
+            McpClient: "claude-code"));
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "this user");
+        message.Should().Contain("List_organizations", "this tool");
+        message.Should().Contain("org-1").And.Contain("org-2", "these customers");
+    }
+
+    private static ToolCallAudit SampleCall(
+        string outcome = "ok",
+        string tier = "vitally:read",
+        bool tierStale = false) =>
+        new(
+            ToolName: "Search_users",
+            Arguments: AuditArguments.Format(null),
+            Records: new ToolCallAuditContext().Summarise(),
+            Outcome: outcome,
+            Duration: TimeSpan.FromMilliseconds(42),
+            CorrelationId: "corr-1",
+            PermissionTier: tier,
+            TierServedStale: tierStale,
+            McpClient: "claude-code");
+
+    [Fact]
+    public void LogToolCall_RecordsTheTierTheCallerResolvedTo_AndWhetherItWasStale()
+    {
+        // Entitlement is resolved live from Entra group membership, so it CANNOT be reconstructed
+        // afterwards — once someone leaves a group, nothing can say what they were entitled to at the
+        // time. And a tier served from the retained copy during a Graph outage is a weaker claim than
+        // a fresh one; a record that cannot tell them apart overstates its own confidence.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall(tier: "vitally:delete", tierStale: true));
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("vitally:delete", "the tier at the moment of the call");
+        message.Should().Contain("tierStale=True", "a stale tier is a weaker claim and must say so");
+    }
+
+    [Fact]
+    public void LogToolCall_RecordsAFailedCall_NotOnlyASuccessfulOne()
+    {
+        // A trail that records only successes cannot show an attempted deletion that errored, which
+        // is precisely the kind of event an access record exists to hold.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall(outcome: "error"));
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Should().Contain("outcome=error");
+    }
+
+    [Fact]
+    public void LogToolCall_NeverRecordsTheCallersEmail()
+    {
+        // The policy reversal opened up tool arguments, not the caller's own identity attributes. The
+        // object id resolves to a person with `az ad user show --id`, so the email adds nothing to
+        // attribution and only widens what the trail discloses.
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            new[]
+            {
+                new Claim("oid", "675ebdda-7590-4d79-8ec3-a2d17ab029ba"),
+                new Claim("preferred_username", "dsearle@fiscaltec.com"),
+                new Claim(ClaimTypes.Email, "dsearle@fiscaltec.com"),
+            },
+            authenticationType: "Test"));
+        var (audit, logger) = Build(user: user);
+
+        audit.LogToolCall(SampleCall());
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().NotContain("fiscaltec.com", "the object id is the identifier, not the email");
+    }
+
+    [Fact]
+    public void LogToolCall_ReportsArgumentTruncation_SeparatelyFromPagerTruncation()
+    {
+        // Two different facts that must not share a field. `truncated` says the PAGER stopped early,
+        // so the matching total is unknown. Argument truncation says the recorded arguments are not
+        // the full ones the caller sent. A record showing only the former would present a shortened
+        // 2 KB filter as though it had been captured in full.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var oversized = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(new Dictionary<string, object?> { ["jsonBody"] = new string('x', 9000) }))!;
+
+        audit.LogToolCall(SampleCall() with { Arguments = AuditArguments.Format(oversized) });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("argsTruncated=True", "the recorded arguments are not the full ones");
+        message.Should().Contain("truncated=False", "the pager did not stop early — a different fact");
+    }
+
+    [Fact]
+    public void LogToolCall_NeutralisesAClientNameThatTriesToForgeAuditLines()
+    {
+        // `ClientInfo.Name` arrives in the caller's own per-request `_meta` — it is attacker
+        // controlled, and it lands in a line-oriented log. A newline lets a client write what looks
+        // like a second audit record, attributing an action to someone else entirely. This repo
+        // already knows the pattern: `Program.cs` logs the authentication exception TYPE only, never
+        // `Exception.Message`, because IdentityModel builds that from caller-controlled claims.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var forged = "evil\r\nVitally audit: 00000000-0000-0000-0000-000000000000 called Delete_account";
+
+        audit.LogToolCall(SampleCall() with { McpClient = forged });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain("\n", "a client cannot start a new log line");
+        message.Should().NotContain("\r", "nor a carriage return, which some readers treat the same way");
+        message.Should().Contain("evil",
+            "the name is recorded, defanged rather than dropped — hiding the attempt hides the attacker");
+        message.Split('\n').Should().ContainSingle("the whole record stays one line");
+    }
+
+    [Fact]
+    public void LogToolCall_CapsAnOverlongClientName()
+    {
+        // Tool arguments are explicitly bounded; this field had no bound at all, so a client could
+        // inflate every record it made — on a stdout path that is about to become a billed telemetry
+        // path.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with { McpClient = new string('z', 5000) });
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Length
+            .Should().BeLessThan(1000, "an unbounded client name must not inflate the record");
+    }
+
+    [Fact]
+    public void LogAction_CarriesTheCorrelationId_SoTheUpstreamRecordsJoinToTheToolCall()
+    {
+        // The tool-call record is documented as carrying a correlation id that "ties the upstream
+        // records to this one". That join only exists if the upstream records carry it too — and a
+        // composite tool makes four of them, a paged one up to ten, so without this there is no way
+        // to tell which upstream calls belonged to which tool call.
+        var (audit, logger) = Build(includeReads: true, user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/organizations", 200, "corr-abc");
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().Contain("correlation=corr-abc");
+    }
+
+    [Fact]
+    public void LogToolCall_NeutralisesUnicodeLineSeparatorsInTheClientName()
+    {
+        // `char.IsControl` does not classify U+2028/U+2029 as control characters, so the sanitiser
+        // added for CR/LF let them straight through into a line-oriented log.
+        var lineSeparator = ((char)0x2028).ToString();
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with
+        {
+            McpClient = "evil" + lineSeparator + "Vitally audit: forged"
+        });
+
+        logger.Entries.Should().ContainSingle().Subject.Message
+            .Should().NotContain(lineSeparator, "a line separator cannot start a forged record either");
+    }
+
+    /// <summary>An id carrying a real CR/LF, built from escapes so the file itself stays one line.</summary>
+    private static readonly string Cr = ((char)13).ToString();
+    private static readonly string Lf = ((char)10).ToString();
+
+    /// <summary>An id carrying a real CR/LF, assembled from code points so this file stays parseable.</summary>
+    private static readonly string ForgedId = "acc-1" + Cr + Lf + "Vitally audit: forged";
+
+    [Fact]
+    public void LogToolCall_NeutralisesLineBreaksInTheRecordIdsItReports()
+    {
+        // The third route for the same attack, and one I opened myself: FromMutationUrl decodes a
+        // path segment, so a tool called with an id of `acc%0AVitally audit: forged` yields a real
+        // newline that went straight into the line-oriented message. The client name and the
+        // argument values were both sanitised; the ids were not.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(new AuditedRecords(
+            [ForgedId, new string('z', 5000)], 2, IdsAvailable: true));
+
+        audit.LogToolCall(SampleCall() with { Records = context.Summarise() });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain(Lf, "an id cannot start a new log line");
+        message.Should().NotContain(Cr, "nor a carriage return");
+        message.Should().NotContain(new string('z', 500), "nor can it bypass the size bound");
+    }
+
+    [Fact]
+    public void LogToolCall_NeutralisesLineBreaksInTheToolName()
+    {
+        // The tool name comes from the caller's own `tools/call` params, so it is as
+        // attacker-controlled as the client name and the ids — both of which are sanitised. A call
+        // naming a tool that does not exist still reaches the audit filter, so an unresolvable name
+        // carrying a newline forges a record. The fourth field of this shape, and the one the
+        // "everything caller-controlled is flattened" rule was supposed to have covered.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with { ToolName = "List_users" + Cr + Lf + "Vitally audit: forged" });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().NotContain(Lf, "a tool name cannot start a new log line");
+        message.Should().NotContain(Cr, "nor a carriage return");
     }
 }

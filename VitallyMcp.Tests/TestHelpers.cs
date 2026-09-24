@@ -56,13 +56,16 @@ public static class TestHelpers
         string? subdomain = "test-subdomain",
         string apiKey = "sk_live_test_key",
         ToolAuthorizer? authorizer = null,
-        AuditLogger? audit = null)
+        AuditLogger? audit = null,
+        ToolCallAuditContext? auditContext = null,
+        int maxAutoPageFetches = 10)
     {
         var options = Options.Create(new VitallyServerOptions
         {
             Region = region,
             Subdomain = subdomain,
-            DevelopmentApiKey = apiKey
+            DevelopmentApiKey = apiKey,
+            MaxAutoPageFetches = maxAutoPageFetches
         });
         var provider = new VitallyApiKeyProvider(
             options,
@@ -77,7 +80,7 @@ public static class TestHelpers
         audit ??= new AuditLogger(
             Options.Create(new AuditOptions { Enabled = false }),
             NullLogger<AuditLogger>.Instance);
-        return new VitallyService(httpClient, options, provider, authorizer, audit);
+        return new VitallyService(httpClient, options, provider, authorizer, audit, auditContext);
     }
 
     /// <summary>
