@@ -557,7 +557,7 @@ public class AuditLoggerTests
             }
         };
         var audit = new AuditLogger(
-            Options.Create(new AuditOptions { Enabled = true }), logger, accessor, factory);
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }), logger, accessor, factory);
 
         var context = new ToolCallAuditContext();
         context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-secret-1"}]}"""));
@@ -569,7 +569,7 @@ public class AuditLoggerTests
             Records = context.Summarise(),
         });
 
-        var breadcrumb = factory.Loggers["VitallyMcp.AuditLogger.Fallback"].Entries
+        var breadcrumb = factory.Loggers[AuditLogger.BreadcrumbCategory].Entries
             .Should().ContainSingle().Subject.Message;
 
         breadcrumb.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "who");
@@ -577,5 +577,43 @@ public class AuditLoggerTests
         breadcrumb.Should().Contain("corr-1", "and how to join it to the upstream records");
         breadcrumb.Should().NotContain("alice@example.com", "no arguments on the console table");
         breadcrumb.Should().NotContain("org-secret-1", "and no customer record ids either");
+    }
+
+    [Fact]
+    public void BreadcrumbCategory_IsNotAChildOfTheSuppressedCategory()
+    {
+        // `AddFilter` category rules are PREFIX matches. A rule on "VitallyMcp.AuditLogger" therefore
+        // also matches "VitallyMcp.AuditLogger.Fallback" — so a breadcrumb under a child category is
+        // suppressed from the console by the rule meant for the full record, AND from OpenTelemetry by
+        // its own rule, and lands nowhere at all. The degradation path silently becomes no path.
+        //
+        // Asserted on the names rather than through a host because that is exactly where the bug
+        // lives: the two constants have to be unrelated as strings, not merely different.
+        AuditLogger.BreadcrumbCategory.Should().NotStartWith("VitallyMcp.AuditLogger",
+            "a child category inherits the parent's suppression rule");
+    }
+
+    [Fact]
+    public void LogToolCall_EmitsNoBreadcrumb_WhenTheExporterIsNotConfigured()
+    {
+        // ILoggerFactory is in DI on every host, so a breadcrumb keyed off its presence alone would
+        // fire locally and in tests — where the console is NOT suppressed, giving two records per
+        // call and contradicting the claim that the telemetry change is inert until configured.
+        var factory = new CapturingFactory();
+        var (auditLogger, _) = (new CapturingLogger<AuditLogger>(), 0);
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = false }),
+            auditLogger, accessor, factory);
+
+        audit.LogToolCall(SampleCall());
+
+        factory.Loggers.Should().BeEmpty("no breadcrumb logger is created when nothing suppresses the console");
     }
 }

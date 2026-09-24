@@ -15,6 +15,18 @@ namespace VitallyMcp;
 /// </summary>
 public class AuditOptions
 {
+    /// <summary>
+    /// Whether to emit the customer-data-free breadcrumb alongside each tool-call record.
+    /// </summary>
+    /// <remarks>
+    /// Set in <c>Program.cs</c> only when the Azure Monitor exporter is configured, because the
+    /// breadcrumb exists to survive an export that silently fails — and with no exporter there is
+    /// nothing to survive, while the full record is still on the console. Keying it off
+    /// <see cref="ILoggerFactory"/> being present instead would fire on every host, since DI always
+    /// supplies one, and local runs would get two records per call.
+    /// </remarks>
+    public bool EmitBreadcrumb { get; set; }
+
     public const string SectionName = "Audit";
 
     /// <summary>When true, emit an audit record for each Vitally action. Defaults to true.</summary>

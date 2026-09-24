@@ -78,11 +78,18 @@ public class AuditLogger
     /// Category for the breadcrumb that stays on the console when the full record does not.
     /// </summary>
     /// <remarks>
-    /// Its own category so the two can be routed in opposite directions: <c>Program.cs</c> suppresses
-    /// the full record from the console provider and this one from the OpenTelemetry provider, so
-    /// each record goes to exactly one destination rather than both.
+    /// ⚠️ <b>Deliberately NOT a child of <c>VitallyMcp.AuditLogger</c>.</b> Logging filter rules match
+    /// by category <b>prefix</b>, so a name like <c>VitallyMcp.AuditLogger.Fallback</c> inherits the
+    /// console suppression written for the full record — and, with its own rule keeping it out of the
+    /// OpenTelemetry provider as well, the breadcrumb would land <i>nowhere</i>. The degradation path
+    /// would silently become no path at all, which is worse than not having built it.
+    /// <para>
+    /// The two records are routed in opposite directions: the full record is suppressed from the
+    /// console provider, this one from the OpenTelemetry provider, so each goes to exactly one
+    /// destination rather than both.
+    /// </para>
     /// </remarks>
-    private const string FallbackCategory = "VitallyMcp.AuditLogger.Fallback";
+    public const string BreadcrumbCategory = "VitallyMcp.AuditBreadcrumb";
 
     public AuditLogger(
         IOptions<AuditOptions> options,
@@ -93,7 +100,8 @@ public class AuditLogger
         _options = options.Value;
         _logger = logger;
         _httpContextAccessor = httpContextAccessor;
-        _fallback = loggerFactory?.CreateLogger(FallbackCategory);
+        // Only when something is actually suppressing the console — see AuditOptions.EmitBreadcrumb.
+        _fallback = _options.EmitBreadcrumb ? loggerFactory?.CreateLogger(BreadcrumbCategory) : null;
     }
 
     /// <summary>Records a completed action (after the upstream response, success or failure).</summary>

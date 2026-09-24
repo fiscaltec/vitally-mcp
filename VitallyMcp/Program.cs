@@ -160,7 +160,12 @@ if (!string.IsNullOrWhiteSpace(appInsightsConnection))
     // Suppressed from the OTel provider so the two records go to exactly one destination each rather
     // than both: the full record to AppEvents, the breadcrumb to the console. Otherwise the
     // breadcrumb would also land in AppTraces as noise.
-    builder.Logging.AddFilter<OpenTelemetryLoggerProvider>("VitallyMcp.AuditLogger.Fallback", LogLevel.None);
+    builder.Logging.AddFilter<OpenTelemetryLoggerProvider>(AuditLogger.BreadcrumbCategory, LogLevel.None);
+
+    // The breadcrumb only exists to survive a silent export failure, so it is switched on with the
+    // exporter rather than whenever an ILoggerFactory happens to be available — which is every host,
+    // and would give local runs two records per call while the console suppression is not in force.
+    builder.Services.PostConfigure<AuditOptions>(o => o.EmitBreadcrumb = true);
 }
 
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
