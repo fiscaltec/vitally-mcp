@@ -554,6 +554,14 @@ public class LoggingFilterTests
                     && r.CategoryName == AuditLogger.BreadcrumbCategory
                     && r.LogLevel == LogLevel.None,
                 "and the breadcrumb does not also become AppTraces noise");
+
+            // The two rules above and the flag would ALL still be present if UseAzureMonitor itself
+            // were removed — they are written by this file, not by the SDK. So assert the thing the
+            // SDK is actually responsible for: that a provider exists to export through.
+            services.GetServices<ILoggerProvider>().Should()
+                .Contain(p => p is OpenTelemetryLoggerProvider,
+                    "without the exporter's provider the records have nowhere to go, and the filters "
+                    + "aimed at it are aimed at nothing");
         }
         finally
         {

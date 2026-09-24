@@ -687,4 +687,63 @@ public class AuditLoggerTests
         breadcrumb.Should().NotContain("acc-1",
             "and still no customer identifiers — the resource path is exactly what must not follow it to stdout");
     }
+
+    [Theory]
+    [InlineData("alice@example.com")]
+    [InlineData("acc-9f3c2b1a")]
+    [InlineData("Get_account?query=bob@example.com")]
+    public void Breadcrumb_DoesNotCarryACallerInventedToolName(string hostileName)
+    {
+        // The tool name arrives in the caller's own tools/call params and the filter runs even for a
+        // tool that does not exist — so a client can name one anything. Flatten stops it breaking the
+        // line; it does nothing about the CONTENT. A tool named after a customer would therefore put
+        // that identifier on the console stream, which is the one the data map declares
+        // customer-data-free and #142's export is gated on.
+        //
+        // The full record in AppEvents keeps the name verbatim, where customer data is permitted and
+        // access-controlled. Only the console copy is restricted.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        audit.LogToolCall(SampleCall() with { ToolName = hostileName });
+        audit.LogToolCallDenied(null, hostileName, "vitally:delete");
+
+        foreach (var entry in factory.Loggers[AuditLogger.BreadcrumbCategory].Entries)
+        {
+            entry.Message.Should().NotContain(hostileName,
+                "a caller must not be able to write arbitrary text to the customer-data-free stream");
+        }
+    }
+
+    [Fact]
+    public void Breadcrumb_KeepsAToolNameThatLooksLikeOne()
+    {
+        // The restriction has to leave the breadcrumb useful: if an export is lost, this line is the
+        // only place the tool is named at all.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        audit.LogToolCall(SampleCall() with { ToolName = "List_organizations" });
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().Contain("List_organizations");
+    }
 }

@@ -173,7 +173,7 @@ public class AuditLogger
             ToolCallEventName));
 
         Breadcrumb("called {McpToolName} outcome={AuditOutcome} correlation={AuditCorrelationId}",
-            Flatten(call.ToolName, MaxToolNameChars), call.Outcome, call.CorrelationId);
+            ToolNameForConsole(call.ToolName), call.Outcome, call.CorrelationId);
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
@@ -229,7 +229,7 @@ public class AuditLogger
             ToolCallDeniedEventName));
 
         Breadcrumb("DENIED tools/call {McpToolName} (requires {RequiredPermission})",
-            Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission);
+            ToolNameForConsole(toolName), requiredPermission);
     }
 
     /// <summary>
@@ -412,6 +412,35 @@ public class AuditLogger
 
         Emit(() => _fallback.LogInformation("Vitally audit breadcrumb: {AuditUserId} " + detailTemplate, args));
     }
+
+    /// <summary>
+    /// A tool name that is safe to put on the console stream, or <c>unrecognised</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tool name is caller-supplied.</b> It arrives in the caller's own <c>tools/call</c>
+    /// params and the audit filter runs even for a tool that does not exist, so a client can name one
+    /// anything — including a customer's email or record id. <see cref="Flatten"/> stops it breaking
+    /// the line and does nothing about the content, so the breadcrumb would have carried whatever was
+    /// sent onto the console stream: the one the data map declares customer-data-free, and the one
+    /// #142's export is gated on.
+    /// <para>
+    /// So the console copy is restricted to names shaped like this server's tools —
+    /// <c>List_organizations</c>, <c>Get_account</c> — which excludes an email (<c>@</c>, <c>.</c>)
+    /// and a record id (<c>-</c>). An allowlist rather than a denylist, because the question is not
+    /// "what might a customer identifier look like" but "what does one of our tool names look like",
+    /// and only the second has a bounded answer.
+    /// </para>
+    /// <para>
+    /// The <b>full</b> record keeps the name verbatim: <c>AppEvents</c> is where customer data is
+    /// permitted and access-controlled, and an audit trail that silently renamed what the caller
+    /// invoked would be worse than useless. Only the console copy is restricted.
+    /// </para>
+    /// </remarks>
+    private static string ToolNameForConsole(string? toolName) =>
+        !string.IsNullOrEmpty(toolName) && ToolNameShape.IsMatch(toolName) ? toolName : "unrecognised";
+
+    private static readonly System.Text.RegularExpressions.Regex ToolNameShape =
+        new("^[A-Za-z][A-Za-z0-9_]{0,63}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static void Emit(Action write)
     {
