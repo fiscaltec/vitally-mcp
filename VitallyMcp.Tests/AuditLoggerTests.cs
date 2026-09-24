@@ -652,4 +652,39 @@ public class AuditLoggerTests
         state.Single(kv => kv.Key == "microsoft.custom_event.name").Value
             .Should().Be(expectedEventName, "every audit record belongs in AppEvents, not AppTraces");
     }
+
+    [Theory]
+    [MemberData(nameof(EveryAuditEmission))]
+    public void EveryAuditRecord_LeavesABreadcrumb(string eventName, Action<AuditLogger> emit)
+    {
+        // The console suppression covers the WHOLE category, so every record needs a degradation
+        // path, not just the tool-call one. Without this, a lost export takes a LogAction — the
+        // record that names the customer by resource path — and nothing anywhere shows the call
+        // happened.
+        //
+        // A theory rather than three more tests, because the failure mode here is forgetting one:
+        // the same omission has now been made twice, once for the routing attribute and once for the
+        // breadcrumb. A case per emission makes the next addition fail until it is covered.
+        _ = eventName;
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, IncludeReads = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        emit(audit);
+
+        var breadcrumb = factory.Loggers[AuditLogger.BreadcrumbCategory].Entries
+            .Should().ContainSingle().Subject.Message;
+
+        breadcrumb.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "who");
+        breadcrumb.Should().NotContain("acc-1",
+            "and still no customer identifiers — the resource path is exactly what must not follow it to stdout");
+    }
 }

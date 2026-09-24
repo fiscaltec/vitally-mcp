@@ -404,7 +404,8 @@ public class LoggingFilterTests
     /// is cleared before composing, so the host sees exactly <see cref="RequiredSettings"/>.
     /// </summary>
     private static readonly string[] ConfigurationPrefixes =
-        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__", "Logging__"];
+        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__", "Logging__",
+         "ApplicationInsights__"];
 
     // Logging__ is in that list for a reason specific to this class: WebApplication.CreateBuilder
     // reads it, so an ambient Logging__LogLevel__Default=Warning makes
@@ -556,8 +557,10 @@ public class LoggingFilterTests
         }
         finally
         {
+            // Restore alone: ApplicationInsights__ is in the prefix list above, so the snapshot
+            // covers it. Clearing it here as well would destroy an ambient value on a runner that
+            // had one — the key was previously outside the snapshot, so it was not saved to put back.
             RestoreConfiguration(previous);
-            Environment.SetEnvironmentVariable("ApplicationInsights__ConnectionString", null);
         }
     }
 }

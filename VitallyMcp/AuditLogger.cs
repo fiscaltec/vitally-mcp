@@ -124,6 +124,10 @@ public class AuditLogger
             + "correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
             ResolveUserId(), method.Method, ResourcePath(url), statusCode, correlationId ?? "none",
             UpstreamCallEventName));
+
+        // No resource path here: that is the field carrying the customer's record id.
+        Breadcrumb("{HttpMethod} -> {StatusCode} correlation={AuditCorrelationId}",
+            method.Method, statusCode, correlationId ?? "none");
     }
 
     /// <summary>
@@ -168,26 +172,8 @@ public class AuditLogger
             SanitiseClientName(call.McpClient),
             ToolCallEventName));
 
-        // A breadcrumb the console keeps, because OpenTelemetry export is ASYNCHRONOUS: an ingestion
-        // outage cannot throw back into this call, so a lost export would take the record with it —
-        // from AppEvents and from stdout both — which is what #147 forbids ("records degrade rather
-        // than disappear silently"). Emitted unconditionally rather than on a failure we cannot
-        // observe.
-        //
-        // It carries who, what and the correlation id, and deliberately NO arguments and NO record
-        // ids: the console table is the one the data map declares customer-data-free, and #142's
-        // export is gated on that staying true. Enough to prove a call happened and to join it to the
-        // upstream records, without putting a second copy of the customer data somewhere broader.
-        if (_fallback is not null)
-        {
-            Emit(() => _fallback.LogInformation(
-                "Vitally audit breadcrumb: {AuditUserId} called {McpToolName} outcome={AuditOutcome} "
-                + "correlation={AuditCorrelationId}",
-                ResolveUserId(),
-                Flatten(call.ToolName, MaxToolNameChars),
-                call.Outcome,
-                call.CorrelationId));
-        }
+        Breadcrumb("called {McpToolName} outcome={AuditOutcome} correlation={AuditCorrelationId}",
+            Flatten(call.ToolName, MaxToolNameChars), call.Outcome, call.CorrelationId);
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
@@ -203,6 +189,9 @@ public class AuditLogger
             + "correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
             ResolveUserId(), method.Method, ResourcePath(url), correlationId ?? "none",
             UpstreamDeniedEventName));
+
+        Breadcrumb("DENIED {HttpMethod} correlation={AuditCorrelationId}",
+            method.Method, correlationId ?? "none");
     }
 
     /// <summary>
@@ -238,6 +227,9 @@ public class AuditLogger
             + "event={microsoft.custom_event.name}",
             ResolveUserId(user), Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission,
             ToolCallDeniedEventName));
+
+        Breadcrumb("DENIED tools/call {McpToolName} (requires {RequiredPermission})",
+            Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission);
     }
 
     /// <summary>
@@ -390,6 +382,37 @@ public class AuditLogger
     /// </para>
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Leaves a customer-data-free trace of a record on the console.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every emission needs one, not just the tool call.</b> The console suppression covers the
+    /// whole <c>VitallyMcp.AuditLogger</c> category, and OpenTelemetry export is asynchronous — an
+    /// ingestion outage cannot throw back into the emitting call — so a record without a breadcrumb
+    /// would vanish from <c>AppEvents</c> and stdout both. That is what #147 forbids: "records
+    /// degrade rather than disappear silently". Emitted unconditionally, because there is no failure
+    /// signal to react to.
+    /// <para>
+    /// ⚠️ <b>Callers must pass nothing that identifies a customer.</b> Not the resource path, which
+    /// carries record ids; not arguments; not returned ids. The console table is the one the data map
+    /// declares customer-data-free and #142's export is gated on that staying true — so the
+    /// breadcrumb proves a call happened and joins it to the full record, and stops there.
+    /// </para>
+    /// </remarks>
+    private void Breadcrumb(string detailTemplate, params object?[] detail)
+    {
+        if (_fallback is null)
+        {
+            return;
+        }
+
+        var args = new object?[detail.Length + 1];
+        args[0] = ResolveUserId();
+        detail.CopyTo(args, 1);
+
+        Emit(() => _fallback.LogInformation("Vitally audit breadcrumb: {AuditUserId} " + detailTemplate, args));
+    }
+
     private static void Emit(Action write)
     {
         try
