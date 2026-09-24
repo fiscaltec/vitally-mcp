@@ -1,10 +1,13 @@
+using System.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using VitallyMcp;
+using OpenTelemetry;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Console;
 
@@ -568,6 +571,18 @@ public class LoggingFilterTests
             knownTools.IsRegistered("List_organizations").Should().BeTrue(
                 "and a real tool name must pass, or the breadcrumb never names a tool at all");
 
+            // Same shape of gap as the tool-name set: TelemetryRedactionTests construct the processor
+            // directly, so removing AddProcessor<QueryStringRedactingProcessor>() would leave them
+            // green while exported dependencies could carry search queries again.
+            //
+            // OpenTelemetry exposes no public API for enumerating a provider's processors, so this
+            // walks the chain by reflection. If the SDK's internals change the walk FAILS rather than
+            // quietly passing — a test that cannot find what it is looking for must not report
+            // success, which is the entire point of the finding that prompted it.
+            var tracerProvider = services.GetRequiredService<TracerProvider>();
+            ProcessorChainOf(tracerProvider).Should().Contain(p => p is QueryStringRedactingProcessor,
+                "the redaction processor must be attached to the pipeline, not merely registered in DI");
+
             services.GetServices<ILoggerProvider>().Should()
                 .Contain(p => p is OpenTelemetryLoggerProvider,
                     "without the exporter's provider the records have nowhere to go, and the filters "
@@ -579,6 +594,79 @@ public class LoggingFilterTests
             // covers it. Clearing it here as well would destroy an ambient value on a runner that
             // had one — the key was previously outside the snapshot, so it was not saved to put back.
             RestoreConfiguration(previous);
+        }
+    }
+
+    /// <summary>
+    /// Every processor attached to <paramref name="provider"/>, walked by reflection.
+    /// </summary>
+    /// <remarks>
+    /// OpenTelemetry keeps the processor chain internal, so there is no supported way to ask — the
+    /// SDK exposes it as a non-public <c>Processor</c> property, and a composite holds its members in
+    /// a linked list of <c>Head</c>/<c>Next</c> nodes.
+    /// <para>
+    /// This <b>throws</b> rather than returning empty when the internals do not look as expected. An
+    /// assertion built on a silently empty list would pass for the wrong reason, which is precisely
+    /// the failure mode that prompted this test — so if an SDK upgrade moves these members, the walk
+    /// needs updating rather than deleting.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<object> ProcessorChainOf(TracerProvider provider)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+        var root = Member(provider, "Processor");
+        root.Should().NotBeNull(
+            $"the OpenTelemetry SDK's Processor member was not found on {provider.GetType().Name}; "
+            + "this reflection walk needs updating rather than deleting");
+
+        var found = new List<object>();
+        Walk(root);
+        found.Should().HaveCountGreaterThan(1,
+            "a chain of one is the composite alone, which means the walk failed to descend into it "
+            + "rather than that nothing is attached");
+        return found;
+
+        void Walk(object? processor)
+        {
+            if (processor is null)
+            {
+                return;
+            }
+
+            found.Add(processor);
+
+            // A composite keeps its members in a head/next linked list; a leaf has neither. The SDK
+            // spells these as fields on some types and properties on others, so look for both.
+            var node = Member(processor, "head");
+            while (node is not null)
+            {
+                Walk(Member(node, "Value"));
+                node = Member(node, "Next");
+            }
+        }
+
+        static object? Member(object target, string name)
+        {
+            var type = target.GetType();
+            while (type is not null)
+            {
+                var property = type.GetProperty(name, Flags | BindingFlags.IgnoreCase);
+                if (property is not null)
+                {
+                    return property.GetValue(target);
+                }
+
+                var field = type.GetField(name, Flags | BindingFlags.IgnoreCase);
+                if (field is not null)
+                {
+                    return field.GetValue(target);
+                }
+
+                type = type.BaseType;
+            }
+
+            return null;
         }
     }
 }
