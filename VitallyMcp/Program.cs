@@ -10,6 +10,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
+using OpenTelemetry.Logs;
 using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -150,6 +151,16 @@ if (!string.IsNullOrWhiteSpace(appInsightsConnection))
     // nowhere else for a record to go, so suppressing the console locally would discard the audit
     // trail rather than move it.
     builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLevel.None);
+
+    // ...and send the breadcrumb the other way. AuditLogger emits a customer-data-free line under
+    // its own category so something survives an export that silently fails — OpenTelemetry export is
+    // asynchronous, so an ingestion outage cannot throw back into the emitting call, and without this
+    // a lost export would take the record from AppEvents and stdout both.
+    //
+    // Suppressed from the OTel provider so the two records go to exactly one destination each rather
+    // than both: the full record to AppEvents, the breadcrumb to the console. Otherwise the
+    // breadcrumb would also land in AppTraces as noise.
+    builder.Logging.AddFilter<OpenTelemetryLoggerProvider>("VitallyMcp.AuditLogger.Fallback", LogLevel.None);
 }
 
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when

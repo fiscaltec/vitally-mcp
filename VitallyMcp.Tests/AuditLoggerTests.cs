@@ -514,4 +514,68 @@ public class AuditLoggerTests
         state.Single(kv => kv.Key == "microsoft.custom_event.name").Value.Should()
             .Be("VitallyToolCall", "the event name groups these records in the table");
     }
+
+    /// <summary>An <see cref="ILoggerFactory"/> that hands out one capturing logger per category.</summary>
+    private sealed class CapturingFactory : ILoggerFactory
+    {
+        public Dictionary<string, CapturingLogger<object>> Loggers { get; } = new(StringComparer.Ordinal);
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            if (!Loggers.TryGetValue(categoryName, out var logger))
+            {
+                logger = new CapturingLogger<object>();
+                Loggers[categoryName] = logger;
+            }
+
+            return logger;
+        }
+
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void LogToolCall_LeavesACustomerDataFreeBreadcrumb_ForWhenTheExporterLosesTheRecord()
+    {
+        // Once the records route to AppEvents the console is suppressed, and OpenTelemetry export is
+        // ASYNCHRONOUS — an ingestion outage cannot throw back into the emitting call. So a lost
+        // export would take the record with it, from AppEvents and from stdout both, which is exactly
+        // what #147 forbids: "records degrade rather than disappear silently".
+        //
+        // The breadcrumb is the degraded form. It carries who, what and the correlation id — enough
+        // to prove a call happened and to join it to the upstream records — and deliberately NO
+        // arguments and NO record ids, because the console table is the one the data map declares
+        // customer-data-free and #142's export is gated on that staying true.
+        var factory = new CapturingFactory();
+        var logger = new CapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true }), logger, accessor, factory);
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-secret-1"}]}"""));
+
+        audit.LogToolCall(SampleCall() with
+        {
+            Arguments = AuditArguments.Format(
+                JsonSerializer.Deserialize<Dictionary<string, JsonElement>>("""{"query":"alice@example.com"}""")),
+            Records = context.Summarise(),
+        });
+
+        var breadcrumb = factory.Loggers["VitallyMcp.AuditLogger.Fallback"].Entries
+            .Should().ContainSingle().Subject.Message;
+
+        breadcrumb.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "who");
+        breadcrumb.Should().Contain("Search_users", "what");
+        breadcrumb.Should().Contain("corr-1", "and how to join it to the upstream records");
+        breadcrumb.Should().NotContain("alice@example.com", "no arguments on the console table");
+        breadcrumb.Should().NotContain("org-secret-1", "and no customer record ids either");
+    }
 }

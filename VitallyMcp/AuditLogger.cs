@@ -72,15 +72,28 @@ public class AuditLogger
     private readonly AuditOptions _options;
     private readonly ILogger<AuditLogger> _logger;
     private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly ILogger? _fallback;
+
+    /// <summary>
+    /// Category for the breadcrumb that stays on the console when the full record does not.
+    /// </summary>
+    /// <remarks>
+    /// Its own category so the two can be routed in opposite directions: <c>Program.cs</c> suppresses
+    /// the full record from the console provider and this one from the OpenTelemetry provider, so
+    /// each record goes to exactly one destination rather than both.
+    /// </remarks>
+    private const string FallbackCategory = "VitallyMcp.AuditLogger.Fallback";
 
     public AuditLogger(
         IOptions<AuditOptions> options,
         ILogger<AuditLogger> logger,
-        IHttpContextAccessor? httpContextAccessor = null)
+        IHttpContextAccessor? httpContextAccessor = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _options = options.Value;
         _logger = logger;
         _httpContextAccessor = httpContextAccessor;
+        _fallback = loggerFactory?.CreateLogger(FallbackCategory);
     }
 
     /// <summary>Records a completed action (after the upstream response, success or failure).</summary>
@@ -141,6 +154,27 @@ public class AuditLogger
             call.TierServedStale?.ToString() ?? "unknown",
             SanitiseClientName(call.McpClient),
             ToolCallEventName));
+
+        // A breadcrumb the console keeps, because OpenTelemetry export is ASYNCHRONOUS: an ingestion
+        // outage cannot throw back into this call, so a lost export would take the record with it —
+        // from AppEvents and from stdout both — which is what #147 forbids ("records degrade rather
+        // than disappear silently"). Emitted unconditionally rather than on a failure we cannot
+        // observe.
+        //
+        // It carries who, what and the correlation id, and deliberately NO arguments and NO record
+        // ids: the console table is the one the data map declares customer-data-free, and #142's
+        // export is gated on that staying true. Enough to prove a call happened and to join it to the
+        // upstream records, without putting a second copy of the customer data somewhere broader.
+        if (_fallback is not null)
+        {
+            Emit(() => _fallback.LogInformation(
+                "Vitally audit breadcrumb: {AuditUserId} called {McpToolName} outcome={AuditOutcome} "
+                + "correlation={AuditCorrelationId}",
+                ResolveUserId(),
+                Flatten(call.ToolName, MaxToolNameChars),
+                call.Outcome,
+                call.CorrelationId));
+        }
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
