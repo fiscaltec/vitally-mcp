@@ -558,6 +558,16 @@ public class LoggingFilterTests
             // The two rules above and the flag would ALL still be present if UseAzureMonitor itself
             // were removed — they are written by this file, not by the SDK. So assert the thing the
             // SDK is actually responsible for: that a provider exists to export through.
+            // The allowlist is only as good as the set behind it. If WithToolsFromAssembly does not
+            // expose McpServerTool registrations the way this assumes — or the timing changes — the
+            // set is EMPTY and every breadcrumb silently reads "unrecognised", which fails closed but
+            // also makes the field useless without anything failing.
+            var knownTools = services.GetRequiredService<KnownToolNames>();
+            knownTools.Count.Should().BeGreaterThan(50,
+                "this server registers 90-odd tools; an empty set means the SDK registrations were not found");
+            knownTools.IsRegistered("List_organizations").Should().BeTrue(
+                "and a real tool name must pass, or the breadcrumb never names a tool at all");
+
             services.GetServices<ILoggerProvider>().Should()
                 .Contain(p => p is OpenTelemetryLoggerProvider,
                     "without the exporter's provider the records have nowhere to go, and the filters "

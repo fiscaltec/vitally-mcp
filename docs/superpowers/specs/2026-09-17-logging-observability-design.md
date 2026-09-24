@@ -434,8 +434,9 @@ Two things have to be specified, not one:
 
 | Emitter | Lands in | |
 |---|---|---|
-| **`TelemetryClient.TrackEvent`** | **`AppEvents`** | **chosen** |
-| `ILogger` + App Insights provider | `AppTraces` | rejected |
+| **`ILogger` + the `microsoft.custom_event.name` attribute** (Azure Monitor OTel exporter) | **`AppEvents`** | **chosen — 2026-09-24, #164** |
+| `TelemetryClient.TrackEvent` | `AppEvents` | superseded — see below |
+| `ILogger` + App Insights provider, no attribute | `AppTraces` | rejected |
 
 ⚠️ **Superseded 2026-09-24 (#164). The destination is unchanged — `AppEvents` — but the mechanism is
 the Azure Monitor OpenTelemetry exporter, not `TelemetryClient`.** The table above set up a choice

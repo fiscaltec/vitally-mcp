@@ -56,6 +56,7 @@ namespace VitallyMcp;
 /// here carries the <c>microsoft.custom_event.name</c> attribute, which the Azure Monitor exporter
 /// uses to write it to <c>AppEvents</c> rather than <c>AppTraces</c>, and <c>Program.cs</c> takes the
 /// whole category off the console provider once that exporter is configured.
+/// </para>
 /// <para>
 /// ⚠️ <b>It is inert until <c>ApplicationInsights__ConnectionString</c> is set.</b> With no exporter
 /// there is nothing to export to, the console suppression is not registered either, and these records
@@ -365,28 +366,6 @@ public class AuditLogger
         string.IsNullOrWhiteSpace(name) ? "unknown" : Flatten(name, MaxClientNameChars);
 
     /// <summary>
-    /// Writes one record, absorbing any failure.
-    /// </summary>
-    /// <remarks>
-    /// <b>An audit write must never be the reason a tool call fails.</b> These are invoked from
-    /// <see cref="VitallyService.SendAsync"/> and from a call-tool filter's <c>finally</c>, so an
-    /// exception escaping here does not merely lose a record — it replaces the caller's result with
-    /// <i>"An error occurred invoking 'X'"</i> for a call that in fact succeeded. A telemetry sink
-    /// refusing writes is exactly the sort of thing that happens during the incident the trail is
-    /// wanted for, and losing the user's call as well as the record is the worse half of that.
-    /// <para>
-    /// Swallowed rather than re-logged: this catches a <i>synchronous</i> failure, and the logger is
-    /// the transport, so there is nowhere to re-log to.
-    /// </para>
-    /// <para>
-    /// ⚠️ <b>This does not catch an export failure, and cannot.</b> The Azure Monitor exporter is
-    /// asynchronous and batched, so an ingestion outage never surfaces here. The degradation the
-    /// design asks for is instead the breadcrumb on <see cref="BreadcrumbCategory"/> — emitted
-    /// unconditionally, because there is no failure signal to react to.
-    /// </para>
-    /// </para>
-    /// </remarks>
-    /// <summary>
     /// Leaves a customer-data-free trace of a record on the console.
     /// </summary>
     /// <remarks>
@@ -450,6 +429,27 @@ public class AuditLogger
     private string ToolNameForConsole(string? toolName) =>
         _knownTools?.IsRegistered(toolName) == true ? toolName! : "unrecognised";
 
+    /// <summary>
+    /// Writes one record, absorbing any failure.
+    /// </summary>
+    /// <remarks>
+    /// <b>An audit write must never be the reason a tool call fails.</b> These are invoked from
+    /// <see cref="VitallyService.SendAsync"/> and from a call-tool filter's <c>finally</c>, so an
+    /// exception escaping here does not merely lose a record — it replaces the caller's result with
+    /// <i>"An error occurred invoking 'X'"</i> for a call that in fact succeeded. A telemetry sink
+    /// refusing writes is exactly the sort of thing that happens during the incident the trail is
+    /// wanted for, and losing the user's call as well as the record is the worse half of that.
+    /// <para>
+    /// Swallowed rather than re-logged: this catches a <i>synchronous</i> failure, and the logger is
+    /// the transport, so there is nowhere to re-log to.
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>This does not catch an export failure, and cannot.</b> The Azure Monitor exporter is
+    /// asynchronous and batched, so an ingestion outage never surfaces here. The degradation the
+    /// design asks for is instead the breadcrumb on <see cref="BreadcrumbCategory"/> — emitted
+    /// unconditionally, because there is no failure signal to react to.
+    /// </para>
+    /// </remarks>
     private static void Emit(Action write)
     {
         try
