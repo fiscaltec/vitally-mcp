@@ -58,7 +58,8 @@ default of `false`. **After any recreate, set the variables and then verify them
 (#147); without it the exporter is not registered and this app's audit records — object ids, tool
 arguments, touched record ids — stay on stdout instead of reaching `AppEvents`. Neither survives a
 recreate, and neither failure announces itself. Read the value with
-`az monitor app-insights component show -a vitally-prod-appi-uksouth -g $RG --query connectionString -o tsv`.
+`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`
+(spelled out rather than `$RG`, which this prose sits above — the block below is where that is defined).
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
