@@ -193,6 +193,11 @@ ID_RESOURCE=$(az identity show -g "$RG" -n "$ID" --query id -o tsv)
 # Required since 2026-09-25 (#147): without it the exporter is not registered, so this app's audit
 # records — object ids, tool arguments, touched record ids — stay on stdout instead of reaching AppEvents.
 APPI_CS=$(az monitor app-insights component show -a vitally-prod-appi-uksouth -g "$RG" --query connectionString -o tsv)
+# Assert it resolved. `set -e` does NOT catch this: az exits 0 with empty output when the query path
+# stops resolving, the create below would then pass an empty setting, and the application treats
+# empty as unset (Program.cs:134 uses IsNullOrWhiteSpace) — so the app comes up healthy with its audit
+# records on stdout and nothing says so.
+[ -n "$APPI_CS" ] || { echo "ABORT — could not read the Application Insights connection string"; return 1 2>/dev/null || exit 1; }
 
 # ReadOnly is hard-wired true — this is the only guard against mutating real customer data,
 # since there is one live Vitally tenant. Substitute the tag from step 2.1 below.

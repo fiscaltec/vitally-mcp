@@ -23,4 +23,4 @@ teams_webhook_url          = "<Teams Power Automate Workflows webhook URL>"
 # taken off stdout and cannot be delivered: they exist nowhere.
 #
 # Supply the live value by environment instead:
-#   export TF_VAR_application_insights_connection_string=$(az monitor app-insights component show #     -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv)
+#   export TF_VAR_application_insights_connection_string=$(az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv)

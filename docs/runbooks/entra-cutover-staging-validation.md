@@ -299,7 +299,7 @@ else
       echo "$REV  NOT ASSESSED — could not read this revision"; rc=1
     fi
   done
-  [ "$rc" -eq 0 ] && echo "EXPORTING — every serving revision has the connection string"
+  [ "$rc" -eq 0 ] && echo "CONFIGURED — every serving revision has a connection string (NOT proof of ingestion)"
   [ "$rc" -eq 0 ]
 fi
 ```
@@ -321,6 +321,12 @@ fi
    the terminal. An explicit branch, as above.
 3. **`NOT ASSESSED` is not `<unset>`.** Stop and find out which it is. A **mixed** result counts as
    unset: one unsuppressed serving revision is enough to put full records on stdout.
+4. **`CONFIGURED` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
+   exporter *branch* was selected. A stale or wrong connection string is non-empty, so it prints
+   `CONFIGURED` while `Program.cs:176` suppresses the console records and the exporter's sends fail —
+   the records then exist nowhere, and this check would have told you everything was fine. **Only the
+   `AppEvents` query below establishes ingestion.** Treat `CONFIGURED` as a precondition for reading
+   `AppEvents`, never as a substitute for it.
 
 This proves the variable is **declared**, not that a `secretRef` resolves to a real secret — though a
 revision whose secretRef names a missing secret fails to provision and so never bears traffic.
