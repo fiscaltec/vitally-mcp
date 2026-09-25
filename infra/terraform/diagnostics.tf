@@ -53,20 +53,34 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 # ⚠️ ContainerAppConsoleLogs is DELIBERATELY NOT ENABLED HERE YET — this is phase 2b, and it is
 # gated, not forgotten.
 #
-# The console stream currently carries customer identifiers: AuditLogger writes the caller's object
-# id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logs outbound URIs
-# including query strings, which carry Search_users / Search_admins terms (#143). Exporting it today
-# would put that data into a table documented as customer-data-free, with the shortest retention and
-# the broadest access — the opposite of where the 2026-09-17 policy decision deliberately placed it.
+# It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
+# object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
+# URIs including query strings, which carry Search_users / Search_admins terms (#143). Exporting it
+# then would have put that data into a table documented as customer-data-free, with the shortest
+# retention and the broadest access — the opposite of where the 2026-09-17 policy decision placed it.
 #
-# Enable it only after BOTH:
-#   - #143, which filters the HttpClient categories down to Warning in Program.cs, and
-#   - the audit reroute, which is DONE in code: AuditLogger's records carry the
+# ⚠️ BOTH conditions are now MET ON PRODUCTION, so this is unfinished work rather than a blocked gate:
+#   - #143 filters the HttpClient categories down to Warning in Program.cs — closed.
+#   - The audit reroute landed and was SWITCHED ON 2026-09-25. AuditLogger's records carry the
 #     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console
 #     provider. NOTE it lands via the Azure Monitor OpenTelemetry exporter, not TelemetryClient
 #     .TrackEvent as this comment used to say — see the design doc's routing decision. Both the
-#     export and the suppression are conditional on ApplicationInsights__ConnectionString, which is
-#     not set on either target, so the gate is that SETTING rather than the code.
+#     export and the suppression are conditional on ApplicationInsights__ConnectionString, which IS
+#     set on production (verified by reading VitallyToolCall rows back out of AppEvents; the console
+#     now carries only a customer-data-free breadcrumb) and is NOT set on staging.
+#
+# ⚠️ STILL BLOCKED, and NOT per-target. This setting is attached to the shared CAE, so enabling
+# ContainerAppConsoleLogs exports the console of EVERY app in the environment. There is no way to
+# enable it for production alone. While staging runs without the connection string its console still
+# carries full audit records — caller object ids, tool arguments including free-text search terms,
+# record ids — against the production Vitally tenant, so enabling this today would do exactly what
+# the gate existed to prevent, via the other app.
+#
+# Unblocks when EITHER staging also has ApplicationInsights__ConnectionString (preferred — keeps the
+# targets alike) OR staging is torn down and the variable becomes part of its spin-up. The second is
+# fragile in a way this repo has already been bitten by: Authorization__ReadOnly is documented as not
+# surviving a recreate, and a forgotten variable here exports customer data rather than merely
+# dropping a guard.
 #
 # Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
 # category above — from the live stream, which is independent of this export path:

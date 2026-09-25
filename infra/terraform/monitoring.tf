@@ -34,16 +34,23 @@ resource "azurerm_application_insights" "appi" {
   application_type    = "web"
   workspace_id        = azurerm_log_analytics_workspace.law.id
 
-  # ⚠️ The SDK is wired but this component still receives NOTHING, and the difference matters.
+  # ⚠️ LIVE for production since 2026-09-25, and NOT for staging. The split is the thing to know.
   #
-  # As of #164 the app references Azure.Monitor.OpenTelemetry.AspNetCore and registers the exporter,
-  # and the audit records carry the microsoft.custom_event.name attribute that routes them to
-  # AppEvents. But BOTH the registration and the console suppression are conditional on
-  # ApplicationInsights__ConnectionString, which is set on NEITHER target — so nothing is exported
-  # yet and #142's console-log export is still gated. Setting that variable is the switch-on.
+  # #164 added Azure.Monitor.OpenTelemetry.AspNetCore and registers the exporter; the audit records
+  # carry the microsoft.custom_event.name attribute that routes them to AppEvents. BOTH that
+  # registration and the console suppression are conditional on ApplicationInsights__ConnectionString:
+  #   - production  — SET 2026-09-25 (revision 39). Verified by reading VitallyToolCall and
+  #                   VitallyUpstreamCall rows back out of AppEvents, not by inferring it from a
+  #                   healthy deploy: a wrong attribute routes to AppTraces with no error at all.
+  #   - staging     — NOT set. Its records still go to stdout and are retained nowhere.
   #
-  # (The earlier version of this comment said there was no SDK package and no code referencing the
-  # component. True until #164; the variable being absent is what keeps it inert now.)
+  # That split is what still blocks #142: its diagnostic setting is on the shared CAE, so enabling
+  # ContainerAppConsoleLogs would export staging's console too — which still carries full audit
+  # records. See diagnostics.tf.
+  #
+  # (Two earlier versions of this comment are worth not re-deriving: one said there was no SDK
+  # package at all, true until #164; the next said the variable was set on neither target, true
+  # until 2026-09-25.)
   #
   # It ingests over the private endpoint because the app's own traffic IS in the VNet — unlike the
   # CAE's platform log shipper, which is why ingestion below can stay false. DisableLocalAuth is true

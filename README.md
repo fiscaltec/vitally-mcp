@@ -71,7 +71,7 @@ The server reads its configuration from `appsettings.json`, `appsettings.{Enviro
 | `Authorization:LiveGroupCacheSeconds` | No | `60` | TTL for the per-user live group-membership cache. Lower = faster propagation, more Graph calls. |
 | `Authorization:LiveGroupStaleSeconds` | No | `3600` | How long a successful lookup stays usable as a **fallback after a Graph call fails**, so an outage degrades to each caller's last known-good tier instead of denying everyone. `0` disables it and denies immediately. Distinct from `LiveGroupCacheSeconds`, which governs answering *without* asking Graph — lengthening that one instead would stop revocations propagating. |
 | `Authorization:ReaderGroupId` / `EditorGroupId` / `AdminGroupId` | When `LiveGroupCheck=true` | — | Entra security-group object ids mapped to the read / read+write / read+write+delete tiers. At least one required when live check is on. Membership is transitive — a user in a group nested inside one of these is granted the tier. |
-| `Audit:Enabled` | No | `true` | Emit a structured audit record per action (authenticated user + verb + resource + outcome), giving a per-user "who did what" trail despite the shared Vitally key. ⚠️ On FISCAL's deployment these records are written to stdout but **do not currently reach Log Analytics or Application Insights** — the export path has never delivered a row (verified 2026-09-17, tracked in #142). The records exist; nothing retains them yet. |
+| `Audit:Enabled` | No | `true` | Emit a structured audit record per action (authenticated user + verb + resource + outcome), giving a per-user "who did what" trail despite the shared Vitally key. On FISCAL's **production** deployment these records are exported to Application Insights `AppEvents` and are queryable (since 2026-09-25); the console keeps only a customer-data-free breadcrumb. ⚠️ On **staging** the setting is absent, so its records go to stdout and are retained nowhere. |
 | `Audit:IncludeReads` | No | `true` | Also audit read operations (HTTP GET). **On by default** — reads are most of the traffic, and this is the only record of who accessed which customer record. Reads are the high-volume path, so this is the lever if ingest cost becomes a problem; mutations and denied attempts are recorded either way. |
 | `OAuth:SharedClientId` | No | — | Enables the OAuth proxy / DCR shim (see [OAuth proxy](#oauth-proxy) below). When set, every Dynamic Client Registration call returns this fixed client_id, and the server proxies `/oauth/authorize` and `/oauth/token` to the upstream issuer. Leave empty to fall through to the upstream's native DCR. |
 | `OAuth:SharedClientSecret` | No | — | Confidential-client secret for `SharedClientId`. Injected server-side on token exchange so the shared app registration can stay confidential without exposing the secret to MCP clients. |
@@ -210,26 +210,29 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - **Per-caller tool discovery.** Every tool additionally carries an `[Authorize]` policy for its tier, which the MCP SDK evaluates so `tools/list` advertises only what the caller may invoke. Discovery filtering and the `SendAsync` backstop resolve permissions through the same code path, so they cannot disagree — but the security boundary remains `SendAsync`. Hiding a tool is a usability improvement, not the control: an out-of-tier call is refused regardless of what the client was shown.
 - **Per-user audit trail** (`Audit:*`) — records are keyed on the caller's Entra **object id** from the `oid` claim: a GUID that resolves to a person with `az ad user show --id`, and no more personal than the alternatives. Where there is none, the resolver falls back to the raw `sub`, then `NameIdentifier`, then `unknown` — and `anonymous` for an unauthenticated caller. A consistent-but-opaque key beats none, though an Entra token always carries `oid`, so a record keyed on anything else means an unexpected token shape. Because all users share one Vitally key, Vitally's own log can't attribute actions to individuals; this server-side record can.
 
-  There are **three record shapes**, not one, because they are emitted at different points:
+  There are **four record shapes**, not one, because they are emitted at different points:
 
   | Record | Emitted at | Carries |
   |---|---|---|
-  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code |
+  | **Tool call** | a call-tool filter, once per *executed* `tools/call` | object id, tool name, **the arguments**, the ids of the records touched, counts, outcome, duration, permission tier, correlation id |
+  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code, correlation id |
   | Service denial | `SendAsync`, on an RBAC refusal | object id, HTTP verb, resource path — no status, the call never happened |
   | Tier denial | the SDK `[Authorize]` checkpoint, *before* `SendAsync` runs | object id, tool name, required permission — no verb or path, no upstream call was attempted |
 
-  The third exists precisely because that checkpoint rejects out-of-tier calls before the choke point, so the action record would never see them.
+  The **tool call** is the primary record — it is the one that can say *this user did this to these customers* — and the action record corroborates it by showing what the server actually did. They share a correlation id, which is what joins them.
+
+  The **tier denial** exists precisely because that checkpoint rejects out-of-tier calls before the choke point, so neither the tool-call record nor the action record would ever see them. ⚠️ A tier-denied call therefore records *who* and *which tool*, but **not the arguments** — the trail cannot say what the caller was reaching for. That is a deliberate boundary, not a gap.
 
   **Upstream response bodies are never logged** — they can carry meeting transcripts and arbitrary customer traits, and an audit trail does not need a copy of the data it is auditing access to.
 
-  ⚠️ Two caveats for FISCAL's own deployment, both being addressed:
+  Two notes on FISCAL's own deployment:
 
-  - **The records are not queryable anywhere yet.** They are written to stdout and the export path has never delivered a row to Log Analytics or Application Insights (verified 2026-09-17, tracked in #142). The trail exists in principle and is retained nowhere.
-  - **"Personal data is kept out of telemetry" no longer describes the intended design.** That rule was withdrawn on 2026-09-17: the audit trail is to record **tool arguments in full**, including free-text search terms that may contain names or email addresses, because without them it cannot say *which customer* was accessed.
+  - **The records are queryable on production, and not on staging.** Since 2026-09-25 production exports them to Application Insights `AppEvents`, verified by reading rows back rather than inferred from a clean deploy — a wrong routing attribute lands them in `AppTraces` with no error. Staging has no connection string, so its records stay on stdout and are retained nowhere.
+  - **"Personal data is kept out of telemetry" does not describe this design.** That rule was withdrawn on 2026-09-17: the trail records **tool arguments in full**, including free-text search terms that may contain names or email addresses, because without them it cannot say *which customer* was accessed. Upstream response bodies are still excluded.
 
     Note what that means for writes, since the two rules meet there: a create or update tool's `jsonBody` **is** a request payload, and it is recorded — *"alice set these fields on this account"* is the audit record for a modification. The exclusion is of **upstream response bodies**, which are data the server read back on the caller's behalf, not data the caller supplied. Records are size-capped.
 
-    See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`. The current code emits the three shapes in the table above; what it does not yet record is the **tool-call** record — arguments, returned record ids, result count and a correlation id.
+    See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`. The code emits all four shapes in the table above, the tool-call record included (#147).
 - The OAuth proxy's `/oauth/token` only services the `authorization_code` and `refresh_token` grants — it rejects any other grant before injecting the confidential client secret, so the secret can't be leveraged to mint tokens without a user sign-in.
 - Set `OAuth:PublicBaseUrl` in production so the OAuth metadata documents emit a fixed canonical origin rather than reflecting the request `Host`.
 - Vitally API keys are **not** distributed to clients or stored in tokens — they live in Key Vault, accessed by the server's managed identity.
