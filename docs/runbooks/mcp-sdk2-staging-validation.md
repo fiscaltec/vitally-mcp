@@ -9,7 +9,7 @@
 >
 > | If you came here to… | Go to |
 > |---|---|
-> | stand staging up | the **Staging** section of CLAUDE.md — `deploy.yml` plus the two `az containerapp hostname` commands, and set `Authorization__ReadOnly` yourself. `infra/terraform/containerapps-staging.tf` is an as-built *record*, not a stand-up path: `terraform apply` is never run here, so it applies nothing, including that guard |
+> | stand staging up | the **Staging** section of CLAUDE.md — `deploy.yml` plus the two `az containerapp hostname` commands, and set `Authorization__ReadOnly` **and `ApplicationInsights__ConnectionString`** yourself — two variables since 2026-09-25 (#147), neither of which survives a recreate. `infra/terraform/containerapps-staging.tf` is an as-built *record*, not a stand-up path: `terraform apply` is never run here, so it applies nothing, including that guard |
 > | validate an identity-provider change | `docs/runbooks/entra-cutover-staging-validation.md` |
 > | work on the app registration | `docs/runbooks/entra-app-registration.md` |
 > | tear staging down | the teardown table in CLAUDE.md |
@@ -190,6 +190,14 @@ APP=vitally-staging-ca-uksouth
 ID=vitally-staging-id-uksouth
 ID_CLIENT=$(az identity show -g "$RG" -n "$ID" --query clientId -o tsv)
 ID_RESOURCE=$(az identity show -g "$RG" -n "$ID" --query id -o tsv)
+# Required since 2026-09-25 (#147): without it the exporter is not registered, so this app's audit
+# records — object ids, tool arguments, touched record ids — stay on stdout instead of reaching AppEvents.
+APPI_CS=$(az monitor app-insights component show -a vitally-prod-appi-uksouth -g "$RG" --query connectionString -o tsv)
+# Assert it resolved. `set -e` does NOT catch this: az exits 0 with empty output when the query path
+# stops resolving, the create below would then pass an empty setting, and the application treats
+# empty as unset (Program.cs:134 uses IsNullOrWhiteSpace) — so the app comes up healthy with its audit
+# records on stdout and nothing says so.
+[ -n "$APPI_CS" ] || { echo "ABORT — could not read the Application Insights connection string"; return 1 2>/dev/null || exit 1; }
 
 # ReadOnly is hard-wired true — this is the only guard against mutating real customer data,
 # since there is one live Vitally tenant. Substitute the tag from step 2.1 below.
@@ -204,6 +212,7 @@ az containerapp create -g "$RG" -n "$APP" --environment "$CAE" \
     "Vitally__KeyVaultUri=https://$KV.vault.azure.net/" \
     "AZURE_CLIENT_ID=$ID_CLIENT" \
     "Authorization__ReadOnly=true" \
+    "ApplicationInsights__ConnectionString=$APPI_CS" \
     "Authorization__LiveGroupCheck=true" \
     "Authorization__ReaderGroupId=71451cc9-f5df-44ee-8ed1-3acc41a911eb" \
     "Authorization__EditorGroupId=19b9d659-284c-4f93-b1c3-a6354db1027c" \

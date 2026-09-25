@@ -30,6 +30,9 @@ and DR-able.
   ```bash
   export TF_VAR_oauth_shared_client_secret='…'  # Entra app secret — BOTH targets
   export TF_VAR_teams_webhook_url='…'
+  # Required since 2026-09-25 (#147), BOTH targets. Read the live value, do not invent one:
+  #   az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv
+  export TF_VAR_application_insights_connection_string='…'
   ```
   > ⚠️ Terraform persists these values in **state** even though the variables are `sensitive`. Always use a
   > **remote backend with encryption + tight RBAC** (the azurerm backend on a locked-down storage account)
@@ -67,6 +70,14 @@ usual checks: the app boots, `/health` returns 200 and the unauthenticated `/mcp
 because none of them exercises the credential. It surfaces only at `/oauth/token`, as
 `invalid_client`, for every user at once. Read the plan output for that secret by name before
 proceeding, and verify afterwards by signing in.
+
+`application_insights_connection_string` (added 2026-09-25, #147) has the same shape and a worse
+payload. Omitting it is safe — no default, so Terraform stops. A **placeholder** is the hazard, and
+it costs more than the export: `Program.cs:134` tests the value with `IsNullOrWhiteSpace`, so any
+non-empty string makes `exporterConfigured` true, which registers the exporter (whose sends then fail)
+**and** the console suppression at `Program.cs:176`. The records are taken off stdout and cannot be
+delivered — no audit trail anywhere, reported by nothing, since a failed export cannot be detected
+in-process. That is why it has no default and no line in `terraform.tfvars.example`.
 
 A few resources need an ID looked up before their import block works (see notes in `imports.tf`):
 role assignments (`az role assignment list --scope <id> --query "[].id"`), diagnostic settings

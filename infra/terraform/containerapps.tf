@@ -4,9 +4,9 @@ locals {
 }
 
 resource "azurerm_container_app_environment" "env" {
-  name                           = "${var.name_prefix}-cae-uksouth"
-  resource_group_name            = data.azurerm_resource_group.rg.name
-  location                       = var.location
+  name                = "${var.name_prefix}-cae-uksouth"
+  resource_group_name = data.azurerm_resource_group.rg.name
+  location            = var.location
   # Changed 2026-09-17 from the default "log-analytics" destination, which writes directly to the
   # workspace using its SHARED KEY. That never worked here and never could: monitoring.tf sets
   # local_authentication_enabled = false, so the workspace refuses shared-key writes — which is why
@@ -171,6 +171,14 @@ resource "azurerm_container_app" "app" {
       env {
         name  = "Authorization__AdminGroupId"
         value = var.entra_group_admin
+      }
+      # Set on production 2026-09-25 (#147). It switches on BOTH the Azure Monitor exporter — which
+      # routes the audit records to AppEvents via microsoft.custom_event.name — and the suppression
+      # of the VitallyMcp.AuditLogger category from the console provider. Unset, both are absent and
+      # the records stay on stdout; the application treats an empty value as unset.
+      env {
+        name  = "ApplicationInsights__ConnectionString"
+        value = var.application_insights_connection_string
       }
     }
   }

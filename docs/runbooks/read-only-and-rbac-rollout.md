@@ -52,7 +52,14 @@ the recipe describes.
 as-built capture and **`terraform apply` is never run here**; staging is stood up through
 `deploy.yml` plus the `az containerapp` commands in CLAUDE.md. So it is a recipe to follow and
 keep in step, not a mechanism that enforces anything, and a fresh app comes up on the application
-default of `false`. **After any recreate, set the variable and then verify it:**
+default of `false`. **After any recreate, set the variables and then verify them.**
+
+⚠️ **There are TWO now, not one.** `ApplicationInsights__ConnectionString` joined it on 2026-09-25
+(#147); without it the exporter is not registered and this app's audit records — object ids, tool
+arguments, touched record ids — stay on stdout instead of reaching `AppEvents`. Neither survives a
+recreate, and neither failure announces itself. Read the value with
+`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`
+(spelled out rather than `$RG`, which this prose sits above — the block below is where that is defined).
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
@@ -67,19 +74,29 @@ else
   rc=0
   for REV in $REVS; do
     if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
-      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
+         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv) \
+       && C=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+         --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
+      printf '%s\tReadOnly=%s\tAppInsights=%s\n' "$REV" "${V:-<unset>}" "$( [ -n "$C" ] && echo set || echo '<unset>' )"
       [ "$V" = "true" ] || rc=1
+      [ -n "$C" ] || rc=1
     else
       echo "NOT ASSESSED — could not read $REV"; rc=1
     fi
   done
-  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
+  [ "$rc" -eq 0 ] && echo "SPUN UP CORRECTLY — every traffic-bearing revision has both variables"
   [ "$rc" -eq 0 ]
 fi
 ```
 
 Empty output means **unguarded**, not "defaulted to safe" — the application default is `false`.
+
+Two details in the second half are load-bearing. It queries `[value,secretRef]` rather than `.value`,
+because a `secretRef` entry carries **no `value` key** and `.value` would render a variable that IS
+set exactly like one that is absent. And `AppInsights=set` means **configured, not exporting**: a
+stale string is non-empty and passes here while its sends fail and `Program.cs:176` suppresses the
+console records, so only an `AppEvents` query proves ingestion — see
+`docs/runbooks/entra-cutover-staging-validation.md`.
 It reads the revision *serving traffic* rather than the desired template, which would report the
 new value while the previous writable revision was still answering requests.
 
