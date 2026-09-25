@@ -198,6 +198,20 @@ resource "azurerm_container_app" "staging" {
         name  = "Authorization__ReadOnly"
         value = "true"
       }
+      # The SECOND variable a spin-up must set, added 2026-09-25 (#147). Without it the exporter is
+      # not registered, so this app's audit records — caller object ids, tool arguments including
+      # free-text search terms, and the ids of the customer records touched — stay on stdout instead
+      # of going to AppEvents. That matters beyond this app: #142's ContainerAppConsoleLogs export is
+      # one diagnostic setting on the CAE that production SHARES, so an unconfigured staging would
+      # carry those records into the console table for the whole environment.
+      #
+      # ⚠️ Value intentionally not literal here: it carries an instrumentation key. Read it from the
+      # component at spin-up time:
+      #   cs=$(az monitor app-insights component show -a vitally-prod-appi-uksouth       #        -g vitally-prod-rg-uksouth --query connectionString -o tsv)
+      env {
+        name  = "ApplicationInsights__ConnectionString"
+        value = "<read from vitally-prod-appi-uksouth at spin-up; see comment above>"
+      }
       env {
         name  = "Authorization__LiveGroupCheck"
         value = "true"

@@ -1025,6 +1025,29 @@ a separate dev environment (see the topology note at the end of this section).
 gh workflow run deploy.yml -f target=staging -f ref=<branch-tag-or-sha>
 ```
 
+⚠️ **Staging never auto-deploys, so a standing staging app can be arbitrarily old — check its image
+before concluding anything from its behaviour.** The release train ships to production only, and
+`deploy.yml` reaches staging solely by manual dispatch, so an app stood up weeks ago is still running
+whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127, 2026-09-15)
+while production ran `sha-410e851` — ten days and four merged PRs apart.
+
+```powershell
+az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth `
+  --query "properties.template.containers[0].image" -o tsv
+```
+
+**The failure mode is a configuration change that is accepted and does nothing.** Setting
+`ApplicationInsights__ConnectionString` on that stale app rolled a revision and came up `Healthy`,
+and had no effect whatever, because the code that reads it arrived with #164. Nothing reports this:
+a Container App does not validate variable names, so an app that has never heard of a setting accepts
+it exactly like one that honours it. Deploy first, then configure — or the verification step tells you
+about the image rather than about the setting, which is how the same mistake gets made twice.
+
+Two other differences that fall out of staleness and read as bugs: `Audit:IncludeReads` defaulted to
+`false` before 2026-09-17, so an old image audits no reads at all; and #143's `HttpClient` log filter
+is absent before that too, so an old image's console is full of `Start processing HTTP request` lines
+that a current one suppresses.
+
 `https://vitally-staging.fiscaltec.com` — a second Container App in the *same* resource group and the
 *same* Container Apps Environment as production, not a second environment. That is what makes it
 cheap: the CAE is VNet-injected, so a new app inside it reaches Key Vault and ACR over the existing
@@ -1072,6 +1095,14 @@ Revisit if scoped keys ever ship; a read-only key at the boundary beats any swit
 **So `Authorization__ReadOnly=true` is staging's guard, and it is the one live use for that switch.**
 Set it whenever staging is up, and unset it only for the tier-enforcement test, which has to see the
 write tools to prove a reader is denied one. Live state: **`true` on staging**, **unset on production**.
+
+⚠️ **A spin-up now has to set TWO variables, and the second is newer than most of this section.**
+`ApplicationInsights__ConnectionString` joined it on 2026-09-25 (#147): without it the exporter is not
+registered, so staging's audit records — object ids, tool arguments, touched record ids — stay on
+stdout. Neither variable survives a recreate, and neither failure announces itself. The second one
+also reaches beyond staging, because #142's `ContainerAppConsoleLogs` export is a single diagnostic
+setting on the CAE that production shares: an unconfigured staging would carry those records into the
+console table for the whole environment.
 
 ⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it — grep the file for
 `Authorization__ReadOnly` rather than a line number, which moves — but `infra/terraform/` is an as-built
