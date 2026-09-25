@@ -280,8 +280,10 @@ The reason changed on 2026-09-25 and the old one is worth unlearning: the export
 broken, it is simply **not configured on staging**, which has no `ApplicationInsights__ConnectionString`.
 So staging's `AuditLogger` category is not suppressed and its full records — arguments and all — are
 still on stdout, which is exactly what makes them readable here. **Production is the other way round**:
-its records are in `AppEvents` and its console carries only a customer-data-free breadcrumb, so this
-`grep` would find nothing there. If staging is ever given the connection string, this step has to move
+its records are in `AppEvents`, and its console carries only a customer-data-free breadcrumb — which
+this `grep` still *matches*, because the breadcrumb line also begins `Vitally audit`. So on production
+it returns lines that look like a result while carrying no tool name detail beyond the tool called, no
+arguments and no record ids. Read `AppEvents` there instead. If staging is ever given the connection string, this step has to move
 to the `AppEvents` query in CLAUDE.md's Logs row.
 
 ```bash

@@ -210,15 +210,18 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 - **Per-caller tool discovery.** Every tool additionally carries an `[Authorize]` policy for its tier, which the MCP SDK evaluates so `tools/list` advertises only what the caller may invoke. Discovery filtering and the `SendAsync` backstop resolve permissions through the same code path, so they cannot disagree — but the security boundary remains `SendAsync`. Hiding a tool is a usability improvement, not the control: an out-of-tier call is refused regardless of what the client was shown.
 - **Per-user audit trail** (`Audit:*`) — records are keyed on the caller's Entra **object id** from the `oid` claim: a GUID that resolves to a person with `az ad user show --id`, and no more personal than the alternatives. Where there is none, the resolver falls back to the raw `sub`, then `NameIdentifier`, then `unknown` — and `anonymous` for an unauthenticated caller. A consistent-but-opaque key beats none, though an Entra token always carries `oid`, so a record keyed on anything else means an unexpected token shape. Because all users share one Vitally key, Vitally's own log can't attribute actions to individuals; this server-side record can.
 
-  There are **three record shapes**, not one, because they are emitted at different points:
+  There are **four record shapes**, not one, because they are emitted at different points:
 
   | Record | Emitted at | Carries |
   |---|---|---|
-  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code |
+  | **Tool call** | a call-tool filter, once per *executed* `tools/call` | object id, tool name, **the arguments**, the ids of the records touched, counts, outcome, duration, permission tier, correlation id |
+  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code, correlation id |
   | Service denial | `SendAsync`, on an RBAC refusal | object id, HTTP verb, resource path — no status, the call never happened |
   | Tier denial | the SDK `[Authorize]` checkpoint, *before* `SendAsync` runs | object id, tool name, required permission — no verb or path, no upstream call was attempted |
 
-  The third exists precisely because that checkpoint rejects out-of-tier calls before the choke point, so the action record would never see them.
+  The **tool call** is the primary record — it is the one that can say *this user did this to these customers* — and the action record corroborates it by showing what the server actually did. They share a correlation id, which is what joins them.
+
+  The **tier denial** exists precisely because that checkpoint rejects out-of-tier calls before the choke point, so neither the tool-call record nor the action record would ever see them. ⚠️ A tier-denied call therefore records *who* and *which tool*, but **not the arguments** — the trail cannot say what the caller was reaching for. That is a deliberate boundary, not a gap.
 
   **Upstream response bodies are never logged** — they can carry meeting transcripts and arbitrary customer traits, and an audit trail does not need a copy of the data it is auditing access to.
 
@@ -229,7 +232,7 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
 
     Note what that means for writes, since the two rules meet there: a create or update tool's `jsonBody` **is** a request payload, and it is recorded — *"alice set these fields on this account"* is the audit record for a modification. The exclusion is of **upstream response bodies**, which are data the server read back on the caller's behalf, not data the caller supplied. Records are size-capped.
 
-    See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`. The current code emits the three shapes in the table above; what it does not yet record is the **tool-call** record — arguments, returned record ids, result count and a correlation id.
+    See `docs/superpowers/specs/2026-09-17-logging-observability-design.md`. The code emits all four shapes in the table above, the tool-call record included (#147).
 - The OAuth proxy's `/oauth/token` only services the `authorization_code` and `refresh_token` grants — it rejects any other grant before injecting the confidential client secret, so the secret can't be leveraged to mint tokens without a user sign-in.
 - Set `OAuth:PublicBaseUrl` in production so the OAuth metadata documents emit a fixed canonical origin rather than reflecting the request `Host`.
 - Vitally API keys are **not** distributed to clients or stored in tokens — they live in Key Vault, accessed by the server's managed identity.
