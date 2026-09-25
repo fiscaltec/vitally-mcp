@@ -275,9 +275,14 @@ filtering). To see the enforcement rather than the filtering, the denial is reco
 `AuditLogger.LogToolCallDenied` — look for the tool name, the caller's object id and the required
 permission.
 
-⚠️ **Not in Application Insights — it receives nothing, and neither does Log Analytics** (verified
-2026-09-17; #142). Read it from the container's live stream instead, which is independent of the
-broken export path:
+⚠️ **On staging, read this from the container's live stream — not from Application Insights.**
+The reason changed on 2026-09-25 and the old one is worth unlearning: the export path is no longer
+broken, it is simply **not configured on staging**, which has no `ApplicationInsights__ConnectionString`.
+So staging's `AuditLogger` category is not suppressed and its full records — arguments and all — are
+still on stdout, which is exactly what makes them readable here. **Production is the other way round**:
+its records are in `AppEvents` and its console carries only a customer-data-free breadcrumb, so this
+`grep` would find nothing there. If staging is ever given the connection string, this step has to move
+to the `AppEvents` query in CLAUDE.md's Logs row.
 
 ```bash
 az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
