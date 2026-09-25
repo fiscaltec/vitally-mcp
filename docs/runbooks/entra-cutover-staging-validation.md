@@ -285,23 +285,45 @@ and still writes full records to stdout. The `AppEvents` query would then read a
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+VAR=ApplicationInsights__ConnectionString
 if ! REVS=$(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
   echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
 else
   rc=0
   for REV in $REVS; do
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-           --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv); then
-      printf '%s\t%s\n' "$REV" "${V:+set}"
-      [ -n "$V" ] || rc=1
+    # [value,secretRef] because a secretRef entry has NO value key: querying .value alone renders a
+    # variable that IS set exactly like one that is absent. See the warning below.
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='$VAR']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
+      if [ -n "$V" ]; then echo "$REV  set"; else echo "$REV  <unset>"; rc=1; fi
     else
-      echo "NOT ASSESSED — could not read $REV"; rc=1
+      echo "$REV  NOT ASSESSED — could not read this revision"; rc=1
     fi
   done
   [ "$rc" -eq 0 ] && echo "EXPORTING — every serving revision has the connection string"
   [ "$rc" -eq 0 ]
 fi
 ```
+
+⚠️ **Three details here are load-bearing, and each was wrong in an earlier draft.**
+
+1. **Query `[value,secretRef]`, not `.value`.** A `secretRef` entry carries no `value` key at all, so
+   `.value|[0]` renders a variable that IS set exactly like one that is absent — measured against
+   production's `OAuth__SharedClientSecret`, which is defined that way. Neither app stores the
+   connection string as a secret today, but it holds an instrumentation key and this repo already
+   keeps the OAuth secret as a Container App secret, so that is one routine tidy-up away. The
+   consequence of getting it wrong is not a missing answer but a confidently **wrong** one: you would
+   be sent to the console `grep` on an app where suppression is in force, find only breadcrumbs, and
+   conclude nothing was audited.
+2. **Print an explicit `<unset>` token.** `"${V:+set}"` prints nothing at all for the unset case, so a
+   definite answer arrives as a blank column while "could not read" arrives loudly — backwards, since
+   the two demand different actions. ⚠️ Do **not** reach for `"${V:+set}${V:-UNSET}"`: when `V` is
+   non-empty that expands to `set` followed by the connection string itself, printing a credential to
+   the terminal. An explicit branch, as above.
+3. **`NOT ASSESSED` is not `<unset>`.** Stop and find out which it is. A **mixed** result counts as
+   unset: one unsuppressed serving revision is enough to put full records on stdout.
+
+This proves the variable is **declared**, not that a `secretRef` resolves to a real secret — though a
+revision whose secretRef names a missing secret fails to provision and so never bears traffic.
 
 ⚠️ **Fail closed, and read the guards as the check itself.** A per-revision read failure leaves `V`
 empty and would otherwise print that revision as unset, sending you to the console path on an Azure
@@ -316,8 +338,29 @@ to put full records on stdout.
 **With it set**, query the workspace — `AppEvents` holds both targets, told apart by `AppRoleName`:
 
 ```bash
-az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query "AppEvents | where Name == 'VitallyToolCallDenied' | where AppRoleName == 'vitally-staging-ca-uksouth'"
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query "AppEvents | where TimeGenerated > ago(30m) | where Name == 'VitallyToolCallDenied' | where AppRoleName == 'vitally-staging-ca-uksouth'"
 ```
+
+⚠️ **Wait before you believe an empty result, and wait longer than feels necessary.** The console
+stream this replaced was near real time; `AppEvents` is not. Measured on this workspace over 7 days
+(`extend lag = ingestion_time() - TimeGenerated`, which spans OpenTelemetry batching, network and
+ingestion):
+
+| Target | n | p50 | p95 | max |
+|---|---|---|---|---|
+| `vitally-prod-ca-uksouth` | 64 | 6.1s | 20.6s | **2m 32s** |
+| `vitally-staging-ca-uksouth` | 2 | 3.6s | 3.6s | 3.6s |
+
+Usually under ~20 seconds, but the tail is long — one record in 64 took over two and a half minutes.
+**Retry for at least 5 minutes before reading an empty result as "the denial was not audited"**, which
+is roughly double the worst case observed. Staging's two samples carry no weight; use production's
+figures for both, since they share the component and the exporter. `ingestion_time()` marks arrival in
+the pipeline, with a little further delay before a row is queryable, so the true figure is slightly
+higher than the table rather than lower.
+
+This matters more here than it looks: the step is a **tier-enforcement** test, so an empty result read
+too early says a denial was not recorded — a false negative on a safety property, the same shape as the
+`SEM0100` trap this runbook warns about elsewhere.
 
 **With it empty**, the console `grep` below is the right place.
 
