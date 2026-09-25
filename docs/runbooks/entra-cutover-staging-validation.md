@@ -275,16 +275,33 @@ filtering). To see the enforcement rather than the filtering, the denial is reco
 `AuditLogger.LogToolCallDenied` — look for the tool name, the caller's object id and the required
 permission.
 
-⚠️ **On staging, read this from the container's live stream — not from Application Insights.**
-The reason changed on 2026-09-25 and the old one is worth unlearning: the export path is no longer
-broken, it is simply **not configured on staging**, which has no `ApplicationInsights__ConnectionString`.
-So staging's `AuditLogger` category is not suppressed and its full records — arguments and all — are
-still on stdout, which is exactly what makes them readable here. **Production is the other way round**:
-its records are in `AppEvents`, and its console carries only a customer-data-free breadcrumb — which
-this `grep` still *matches*, because the breadcrumb line also begins `Vitally audit`. So on production
-it returns lines that look like a result while carrying no tool name detail beyond the tool called, no
-arguments and no record ids. Read `AppEvents` there instead. If staging is ever given the connection string, this step has to move
-to the `AppEvents` query in CLAUDE.md's Logs row.
+⚠️ **Where to read it depends on whether this staging app has `ApplicationInsights__ConnectionString`,
+so check that before looking anywhere.** Staging is stood up on demand and the setting does not
+survive a recreate, so the answer is not a property of "staging" but of the app in front of you:
+
+```bash
+az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv
+```
+
+| It is set (as on 2026-09-25) | It is empty |
+|---|---|
+| Staging behaves like production: the denial is in `AppEvents`, and the console carries only a breadcrumb | The `AuditLogger` category is unsuppressed, so the full record — arguments and all — is on the console |
+
+**With it set**, query the workspace — `AppEvents` holds both targets, told apart by `AppRoleName`:
+
+```bash
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query "AppEvents | where Name == 'VitallyToolCallDenied' | where AppRoleName == 'vitally-staging-ca-uksouth'"
+```
+
+**With it empty**, the console `grep` below is the right place.
+
+⚠️ **That `grep` is misleading when the setting IS present**, which is the trap worth knowing: the
+breadcrumb line also begins `Vitally audit`, so it still matches and returns lines that *look* like a
+result while carrying no arguments and no record ids. An empty-handed reading of it is not evidence
+that nothing was audited.
+
+The old version of this note said the export path was "broken" and that Application Insights received
+nothing. That was true until 2026-09-17 and is worth unlearning rather than working around.
 
 ```bash
 az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \

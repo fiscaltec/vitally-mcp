@@ -65,22 +65,22 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console
 #     provider. NOTE it lands via the Azure Monitor OpenTelemetry exporter, not TelemetryClient
 #     .TrackEvent as this comment used to say — see the design doc's routing decision. Both the
-#     export and the suppression are conditional on ApplicationInsights__ConnectionString, which IS
-#     set on production (verified by reading VitallyToolCall rows back out of AppEvents; the console
-#     now carries only a customer-data-free breadcrumb) and is NOT set on staging.
+#     export and the suppression are conditional on ApplicationInsights__ConnectionString, which is
+#     set on BOTH targets as of 2026-09-25 (production revision 39, staging revision 17), each
+#     verified by reading VitallyToolCall rows back out of AppEvents; both consoles now carry only a
+#     customer-data-free breadcrumb.
 #
-# ⚠️ STILL BLOCKED, and NOT per-target. This setting is attached to the shared CAE, so enabling
-# ContainerAppConsoleLogs exports the console of EVERY app in the environment. There is no way to
-# enable it for production alone. While staging runs without the connection string its console still
-# carries full audit records — caller object ids, tool arguments including free-text search terms,
-# record ids — against the production Vitally tenant, so enabling this today would do exactly what
-# the gate existed to prevent, via the other app.
+# So this is unfinished work, not a blocked gate — it is simply not enabled yet.
 #
-# Unblocks when EITHER staging also has ApplicationInsights__ConnectionString (preferred — keeps the
-# targets alike) OR staging is torn down and the variable becomes part of its spin-up. The second is
-# fragile in a way this repo has already been bitten by: Authorization__ReadOnly is documented as not
-# surviving a recreate, and a forgotten variable here exports customer data rather than merely
-# dropping a guard.
+# ⚠️ It is NOT per-target, and that outlives the enabling. This setting is attached to the shared
+# CAE, so it exports the console of EVERY app in the environment; there is no way to scope it to
+# production. Staging is an on-demand app and the variable does NOT survive a recreate, so once this
+# is enabled, a staging spin-up that omits ApplicationInsights__ConnectionString would carry that
+# app's unsuppressed audit records — caller object ids, tool arguments including free-text search
+# terms, record ids, against the production Vitally tenant — into the console table.
+#
+# That is the same failure mode Authorization__ReadOnly already has, so the staging spin-up now has
+# two variables to set and containerapps-staging.tf carries both. Check them together.
 #
 # Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
 # category above — from the live stream, which is independent of this export path:

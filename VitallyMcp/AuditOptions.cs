@@ -22,8 +22,10 @@ namespace VitallyMcp;
 /// </list>
 /// <b>Production has that setting since 2026-09-25 (#147) — the first row is its live state, verified by
 /// reading <c>VitallyToolCall</c> rows back out of <c>AppEvents</c> rather than inferred from a clean
-/// deploy, since a wrong attribute routes to <c>AppTraces</c> silently. Staging does not have it, so the
-/// second row is staging's live state.</b> Design in
+/// deploy, since a wrong attribute routes to <c>AppTraces</c> silently. Staging was switched on the same
+/// day (revision 17) and writes to the same table, told apart by <c>AppRoleName</c> — but it is an
+/// on-demand app and the setting does not survive a recreate, so the second row describes any
+/// deployment stood up without it.</b> Design in
 /// <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>; the console-log export
 /// it ungates is #142.
 /// </para>

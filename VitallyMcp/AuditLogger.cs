@@ -46,7 +46,8 @@ namespace VitallyMcp;
 /// inferred. That reverses what this comment said for most of its life, and the older claim has its
 /// own history: until 2026-09-17 nothing this server logged reached Log Analytics at all, because the
 /// workspace refuses the Container Apps shared-key shipper with local authentication disabled (#142).
-/// <b>Staging is still the old world</b> — no connection string, records on stdout, retained nowhere.
+/// Staging was switched on the same day and writes to the same table, told apart by <c>AppRoleName</c>;
+/// ⚠️ being an on-demand app, its setting does not survive a recreate.
 /// Second, the blanket "keep personal data out of telemetry" policy was <b>withdrawn on 2026-09-17</b>:
 /// the agreed design records tool arguments, including search terms that may carry names or email
 /// addresses, because without them the trail cannot say <i>which customer</i> was accessed. Upstream
@@ -62,10 +63,11 @@ namespace VitallyMcp;
 /// <para>
 /// ⚠️ <b>It is inert until <c>ApplicationInsights__ConnectionString</c> is set.</b> With no exporter
 /// there is nothing to export to, the console suppression is not registered either, and these records
-/// stay on stdout exactly as before — which is <b>staging's</b> state today. Production was flipped on
-/// 2026-09-25, so #142's console-log export is no longer gated on the audit data there; it is blocked
-/// instead by the diagnostic setting living on the CAE that both targets share, which would export
-/// staging's unsuppressed console with it.
+/// stay on stdout exactly as before — the state of any deployment that has not set it, including a
+/// staging app stood up without it. Both targets were switched on 2026-09-25, so #142's console-log
+/// export is no longer gated on the audit data; it is simply not enabled yet. ⚠️ Its diagnostic
+/// setting lives on the CAE that both targets share and cannot be scoped per app, so a later staging
+/// spin-up that omits the connection string would have its unsuppressed console exported with it.
 /// </para>
 /// </summary>
 /// <remarks>
