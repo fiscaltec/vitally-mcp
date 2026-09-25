@@ -1,8 +1,15 @@
+using System.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using VitallyMcp;
+using OpenTelemetry;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Console;
 
 namespace VitallyMcp.Tests;
 
@@ -400,7 +407,8 @@ public class LoggingFilterTests
     /// is cleared before composing, so the host sees exactly <see cref="RequiredSettings"/>.
     /// </summary>
     private static readonly string[] ConfigurationPrefixes =
-        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__", "Logging__"];
+        ["OAuth__", "Authorization__", "Vitally__", "Audit__", "ToolsListCache__", "Logging__",
+         "ApplicationInsights__"];
 
     // Logging__ is in that list for a reason specific to this class: WebApplication.CreateBuilder
     // reads it, so an ambient Logging__LogLevel__Default=Warning makes
@@ -490,6 +498,175 @@ public class LoggingFilterTests
         finally
         {
             RestoreConfiguration(previous);
+        }
+    }
+
+    [Fact]
+    public void AuditLoggerCategoryName_MatchesTheFilterThatKeepsRecordsOffStdout()
+    {
+        // Program.cs suppresses "VitallyMcp.AuditLogger" from the ConsoleLoggerProvider once the
+        // Azure Monitor exporter is configured, which is what #142's ContainerAppConsoleLogs export
+        // is gated on. That filter is a STRING: rename the class or move its namespace and the
+        // suppression stops matching, silently, and customer identifiers go back to the console
+        // stream — the table with the shortest retention and the broadest access.
+        //
+        // Nothing else would fail if that happened, so this asserts the category the filter names is
+        // still the category the logger actually uses.
+        typeof(AuditLogger).FullName.Should().Be("VitallyMcp.AuditLogger",
+            "Program.cs filters this exact category off the console provider");
+    }
+
+    [Fact]
+    public void WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp()
+    {
+        // Everything else about the exporter is tested against a hand-built AuditLogger or a host
+        // with no connection string, so a broken or missing UseAzureMonitor registration, a filter
+        // aimed at the wrong provider, or a PostConfigure that never ran would all leave the suite
+        // green. This composes the host the way production will have it and asserts the three things
+        // that must switch on together.
+        var previous = SnapshotAndClearConfiguration();
+        foreach (var (key, value) in RequiredSettings)
+        {
+            Environment.SetEnvironmentVariable(key, value);
+        }
+
+        // Well-formed but pointing nowhere. Export is asynchronous and batched, so nothing is
+        // contacted while the host is merely built.
+        Environment.SetEnvironmentVariable(
+            "ApplicationInsights__ConnectionString",
+            "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://localhost/");
+
+        try
+        {
+            using var factory = new WebApplicationFactory<Program>();
+            var services = factory.Services;
+
+            services.GetRequiredService<IOptions<AuditOptions>>().Value.EmitBreadcrumb
+                .Should().BeTrue("the breadcrumb switches on with the exporter, not with DI");
+
+            var rules = services.GetRequiredService<IOptions<LoggerFilterOptions>>().Value.Rules;
+
+            rules.Should().Contain(
+                r => r.ProviderName == typeof(ConsoleLoggerProvider).FullName
+                    && r.CategoryName == "VitallyMcp.AuditLogger"
+                    && r.LogLevel == LogLevel.None,
+                "the full records come off stdout once they have somewhere else to go");
+
+            rules.Should().Contain(
+                r => r.ProviderName == typeof(OpenTelemetryLoggerProvider).FullName
+                    && r.CategoryName == AuditLogger.BreadcrumbCategory
+                    && r.LogLevel == LogLevel.None,
+                "and the breadcrumb does not also become AppTraces noise");
+
+            // The two rules above and the flag would ALL still be present if UseAzureMonitor itself
+            // were removed — they are written by this file, not by the SDK. So assert the thing the
+            // SDK is actually responsible for: that a provider exists to export through.
+            // The allowlist is only as good as the set behind it. If WithToolsFromAssembly does not
+            // expose McpServerTool registrations the way this assumes — or the timing changes — the
+            // set is EMPTY and every breadcrumb silently reads "unrecognised", which fails closed but
+            // also makes the field useless without anything failing.
+            var knownTools = services.GetRequiredService<KnownToolNames>();
+            knownTools.Count.Should().BeGreaterThan(50,
+                "this server registers 90-odd tools; an empty set means the SDK registrations were not found");
+            knownTools.IsRegistered("List_organizations").Should().BeTrue(
+                "and a real tool name must pass, or the breadcrumb never names a tool at all");
+
+            // Same shape of gap as the tool-name set: TelemetryRedactionTests construct the processor
+            // directly, so removing AddProcessor<QueryStringRedactingProcessor>() would leave them
+            // green while exported dependencies could carry search queries again.
+            //
+            // OpenTelemetry exposes no public API for enumerating a provider's processors, so this
+            // walks the chain by reflection. If the SDK's internals change the walk FAILS rather than
+            // quietly passing — a test that cannot find what it is looking for must not report
+            // success, which is the entire point of the finding that prompted it.
+            var tracerProvider = services.GetRequiredService<TracerProvider>();
+            ProcessorChainOf(tracerProvider).Should().Contain(p => p is QueryStringRedactingProcessor,
+                "the redaction processor must be attached to the pipeline, not merely registered in DI");
+
+            services.GetServices<ILoggerProvider>().Should()
+                .Contain(p => p is OpenTelemetryLoggerProvider,
+                    "without the exporter's provider the records have nowhere to go, and the filters "
+                    + "aimed at it are aimed at nothing");
+        }
+        finally
+        {
+            // Restore alone: ApplicationInsights__ is in the prefix list above, so the snapshot
+            // covers it. Clearing it here as well would destroy an ambient value on a runner that
+            // had one — the key was previously outside the snapshot, so it was not saved to put back.
+            RestoreConfiguration(previous);
+        }
+    }
+
+    /// <summary>
+    /// Every processor attached to <paramref name="provider"/>, walked by reflection.
+    /// </summary>
+    /// <remarks>
+    /// OpenTelemetry keeps the processor chain internal, so there is no supported way to ask — the
+    /// SDK exposes it as a non-public <c>Processor</c> property, and a composite holds its members in
+    /// a linked list of <c>Head</c>/<c>Next</c> nodes.
+    /// <para>
+    /// This <b>throws</b> rather than returning empty when the internals do not look as expected. An
+    /// assertion built on a silently empty list would pass for the wrong reason, which is precisely
+    /// the failure mode that prompted this test — so if an SDK upgrade moves these members, the walk
+    /// needs updating rather than deleting.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<object> ProcessorChainOf(TracerProvider provider)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+        var root = Member(provider, "Processor");
+        root.Should().NotBeNull(
+            $"the OpenTelemetry SDK's Processor member was not found on {provider.GetType().Name}; "
+            + "this reflection walk needs updating rather than deleting");
+
+        var found = new List<object>();
+        Walk(root);
+        found.Should().HaveCountGreaterThan(1,
+            "a chain of one is the composite alone, which means the walk failed to descend into it "
+            + "rather than that nothing is attached");
+        return found;
+
+        void Walk(object? processor)
+        {
+            if (processor is null)
+            {
+                return;
+            }
+
+            found.Add(processor);
+
+            // A composite keeps its members in a head/next linked list; a leaf has neither. The SDK
+            // spells these as fields on some types and properties on others, so look for both.
+            var node = Member(processor, "head");
+            while (node is not null)
+            {
+                Walk(Member(node, "Value"));
+                node = Member(node, "Next");
+            }
+        }
+
+        static object? Member(object target, string name)
+        {
+            var type = target.GetType();
+            while (type is not null)
+            {
+                var property = type.GetProperty(name, Flags | BindingFlags.IgnoreCase);
+                if (property is not null)
+                {
+                    return property.GetValue(target);
+                }
+
+                var field = type.GetField(name, Flags | BindingFlags.IgnoreCase);
+                if (field is not null)
+                {
+                    return field.GetValue(target);
+                }
+
+                type = type.BaseType;
+            }
+
+            return null;
         }
     }
 }

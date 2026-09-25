@@ -26,6 +26,20 @@ resource "azurerm_role_assignment" "mi_cmk_crypto" {
   principal_id         = azurerm_user_assigned_identity.app.principal_id
 }
 
+# Telemetry: publish audit records and traces to Application Insights. Added 2026-09-24 with #164's
+# audit routing. It is required rather than optional: the component has DisableLocalAuth = true, so
+# the instrumentation key in the connection string is NOT accepted as a credential and the exporter
+# authenticates with this identity. Without this grant the records are dropped at ingestion —
+# asynchronously, so nothing in the app notices.
+#
+# ⚠️ Verify DisableLocalAuth with `az resource show`, not `az monitor app-insights component show`:
+# the extension reports it as null for this component while ARM reports true.
+resource "azurerm_role_assignment" "mi_monitoring_metrics_publisher" {
+  scope                = azurerm_application_insights.appi.id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = azurerm_user_assigned_identity.app.principal_id
+}
+
 # NOTE (Microsoft Graph): the identity also holds the Graph application permission
 # GroupMember.Read.All (for the live group-membership check). Graph app-role grants are
 # not managed here — assign via Graph/PowerShell or azuread_app_role_assignment in a

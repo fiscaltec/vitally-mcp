@@ -1,13 +1,17 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 using VitallyMcp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -117,6 +121,73 @@ builder.Services.AddHttpContextAccessor();
 // Key Vault and the Microsoft Graph group-membership lookup.
 builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ => new DefaultAzureCredential());
 
+// Route telemetry to Application Insights, and with it the audit records (#147). Registered only
+// when a connection string is configured, so local development and the test hosts are untouched —
+// the same conditional shape as the Key Vault client above.
+//
+// ⚠️ The connection string is still REQUIRED despite `DisableLocalAuth = true` on the component, and
+// #147 implied otherwise. What that setting refuses is the instrumentation key inside it being used
+// as a *credential*; the string itself still names the component and its ingestion endpoint, so
+// omitting it leaves the exporter with nowhere to send. The credential replaces the authentication,
+// not the address.
+var appInsightsConnection = builder.Configuration["ApplicationInsights:ConnectionString"];
+var exporterConfigured = !string.IsNullOrWhiteSpace(appInsightsConnection);
+
+// Forced either way, and deliberately OUTSIDE the branch. AuditOptions binds from the Audit: section,
+// so `Audit__EmitBreadcrumb=true` would otherwise switch the breadcrumb on with no exporter — and
+// with no exporter the console suppression is not registered either, so every call would emit the
+// full record AND the breadcrumb. It is a derived fact about the wiring, not an operator's choice.
+builder.Services.PostConfigure<AuditOptions>(o => o.EmitBreadcrumb = exporterConfigured);
+
+if (exporterConfigured)
+{
+    builder.Services.AddOpenTelemetry().UseAzureMonitor(options =>
+    {
+        options.ConnectionString = appInsightsConnection;
+
+        // The same DefaultAzureCredential the Key Vault client uses, which already resolves this
+        // Container App's user-assigned identity — so there is one credential path rather than two,
+        // and a managed-identity misconfiguration fails the same way for both.
+        options.Credential = new DefaultAzureCredential();
+    });
+
+    // UseAzureMonitor turns on automatic HttpClient dependency collection, and this server puts
+    // free-text search terms into Vitally query strings — Search_users passes its term as
+    // ?query=<value>, routinely a customer email. Those spans become AppDependencies rows, a
+    // different table from the audit records with its own retention, which AuditLogger's
+    // ResourcePath stripping does nothing for.
+    //
+    // Defence in depth rather than a fix for a live leak: on .NET 9+ the runtime redacts url.full
+    // itself. But that redaction is switchable process-wide (System.Net.Http.DisableUriRedaction),
+    // so this makes the guarantee local to this repository rather than inherited from a default
+    // nothing here controls. See QueryStringRedactingProcessor.
+    builder.Services.AddOpenTelemetry()
+        .WithTracing(tracing => tracing.AddProcessor<QueryStringRedactingProcessor>());
+    builder.Services.AddSingleton<QueryStringRedactingProcessor>();
+
+    // Take the audit records OFF stdout, now that they have somewhere else to go. This is what
+    // #142's ContainerAppConsoleLogs export is gated on: the console stream is the table with the
+    // shortest retention and the broadest access, and these records carry customer identifiers and
+    // search terms.
+    //
+    // Provider-specific, and deliberately inside this branch: with no exporter configured there is
+    // nowhere else for a record to go, so suppressing the console locally would discard the audit
+    // trail rather than move it.
+    builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLevel.None);
+
+    // ...and send the breadcrumb the other way. AuditLogger emits a customer-data-free line under
+    // its own category so something survives an export that silently fails — OpenTelemetry export is
+    // asynchronous, so an ingestion outage cannot throw back into the emitting call, and without this
+    // a lost export would take the record from AppEvents and stdout both.
+    //
+    // Suppressed from the OTel provider so the two records go to exactly one destination each rather
+    // than both: the full record to AppEvents, the breadcrumb to the console. Otherwise the
+    // breadcrumb would also land in AppTraces as noise.
+    builder.Logging.AddFilter<OpenTelemetryLoggerProvider>(AuditLogger.BreadcrumbCategory, LogLevel.None);
+
+
+}
+
 // Live group-permission resolver (Microsoft Graph). Registered always; only invoked when
 // Authorization:LiveGroupCheck is enabled. The short timeout bounds how long a slow or
 // unreachable Graph can stall a tool call; it does NOT buy a fallback. #108 removed the
@@ -144,6 +215,12 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
 
 builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddScoped<ToolAuthorizer>();
+// The names this server actually registered, so the audit breadcrumb can tell a real tool from one
+// a caller invented — the audit filter runs for unknown names too, and the console stream is the one
+// that must stay customer-data-free.
+builder.Services.AddSingleton(sp => new KnownToolNames(
+    sp.GetServices<ModelContextProtocol.Server.McpServerTool>().Select(t => t.ProtocolTool.Name)));
+
 builder.Services.AddScoped<AuditLogger>();
 
 // Scoped, and that is the whole contract: the tool's VitallyService writes what it touched into
@@ -379,9 +456,10 @@ mcpBuilder.WithRequestFilters(filters =>
             // record is bad; losing the user's call as well is worse, and inexplicable client-side.
             //
             // Swallowed rather than re-logged, because in this configuration the logger IS the sink
-            // that just failed. Once the record routes through TrackEvent, the fallback the design
-            // calls for — degrade to ILogger rather than disappear — becomes possible and belongs
-            // here.
+            // that just failed. Note this catches only a SYNCHRONOUS failure: the Azure Monitor
+            // exporter is asynchronous, so a lost export never reaches here — the breadcrumb on
+            // AuditLogger.BreadcrumbCategory is what covers that, emitted unconditionally because
+            // there is no failure signal to react to.
             try
             {
                 var summary = auditContext.Summarise();

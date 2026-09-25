@@ -34,13 +34,22 @@ resource "azurerm_application_insights" "appi" {
   application_type    = "web"
   workspace_id        = azurerm_log_analytics_workspace.law.id
 
-  # ⚠️ This component receives NOTHING. Verified 2026-09-17: no APPLICATIONINSIGHTS_CONNECTION_STRING
-  # (or any ApplicationInsights* variable) on the Container App, no SDK package reference in
-  # VitallyMcp.csproj, and no code in VitallyMcp/ referencing it. An earlier version of this comment
-  # said "the Container App emits telemetry via the instrumentation key" — it does not, and never has.
-  # Wiring the SDK up is the planned route for audit, failure and performance telemetry, and it
-  # ingests over the private endpoint because the app's own traffic IS in the VNet — unlike the CAE's
-  # platform log shipper, which is why ingestion below can stay false.
+  # ⚠️ The SDK is wired but this component still receives NOTHING, and the difference matters.
+  #
+  # As of #164 the app references Azure.Monitor.OpenTelemetry.AspNetCore and registers the exporter,
+  # and the audit records carry the microsoft.custom_event.name attribute that routes them to
+  # AppEvents. But BOTH the registration and the console suppression are conditional on
+  # ApplicationInsights__ConnectionString, which is set on NEITHER target — so nothing is exported
+  # yet and #142's console-log export is still gated. Setting that variable is the switch-on.
+  #
+  # (The earlier version of this comment said there was no SDK package and no code referencing the
+  # component. True until #164; the variable being absent is what keeps it inert now.)
+  #
+  # It ingests over the private endpoint because the app's own traffic IS in the VNet — unlike the
+  # CAE's platform log shipper, which is why ingestion below can stay false. DisableLocalAuth is true
+  # on this component, so the exporter authenticates with the user-assigned managed identity, which
+  # was granted Monitoring Metrics Publisher here on 2026-09-24. ⚠️ Verify that property with
+  # `az resource show`: `az monitor app-insights component show` reports disableLocalAuth as null.
   internet_ingestion_enabled = false
 
   # Opened 2026-09-17 alongside the workspace, for the same reason and permanently.

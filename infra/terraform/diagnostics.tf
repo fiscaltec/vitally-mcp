@@ -61,8 +61,12 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #
 # Enable it only after BOTH:
 #   - #143, which filters the HttpClient categories down to Warning in Program.cs, and
-#   - the audit reroute, which moves AuditLogger to TelemetryClient.TrackEvent and suppresses it
-#     from the console provider specifically.
+#   - the audit reroute, which is DONE in code: AuditLogger's records carry the
+#     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console
+#     provider. NOTE it lands via the Azure Monitor OpenTelemetry exporter, not TelemetryClient
+#     .TrackEvent as this comment used to say — see the design doc's routing decision. Both the
+#     export and the suppression are conditional on ApplicationInsights__ConnectionString, which is
+#     not set on either target, so the gate is that SETTING rather than the code.
 #
 # Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
 # category above — from the live stream, which is independent of this export path:

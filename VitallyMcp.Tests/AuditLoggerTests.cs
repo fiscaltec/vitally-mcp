@@ -487,4 +487,326 @@ public class AuditLoggerTests
         message.Should().NotContain(Lf, "a tool name cannot start a new log line");
         message.Should().NotContain(Cr, "nor a carriage return");
     }
+
+    [Fact]
+    public void LogToolCall_CarriesTheCustomEventAttribute_SoTheRecordLandsInAppEventsNotAppTraces()
+    {
+        // The Azure Monitor exporter chooses the destination table by looking for ONE exact,
+        // case-sensitive attribute key in the log state. Miss it or misspell it and the record is
+        // written to AppTraces instead — silently, with no error and no warning — where it shares a
+        // table with ordinary diagnostics and loses the per-table retention and access the audit
+        // trail is being routed for. This test is the only thing that catches that before Azure does.
+        var logger = new StateCapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(Options.Create(new AuditOptions { Enabled = true }), logger, accessor);
+
+        audit.LogToolCall(SampleCall());
+
+        var state = logger.States.Should().ContainSingle().Subject;
+        state.Should().Contain(kv => kv.Key == "microsoft.custom_event.name",
+            "this exact key is what routes the record to AppEvents");
+        state.Single(kv => kv.Key == "microsoft.custom_event.name").Value.Should()
+            .Be("VitallyToolCall", "the event name groups these records in the table");
+    }
+
+    /// <summary>An <see cref="ILoggerFactory"/> that hands out one capturing logger per category.</summary>
+    private sealed class CapturingFactory : ILoggerFactory
+    {
+        public Dictionary<string, CapturingLogger<object>> Loggers { get; } = new(StringComparer.Ordinal);
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            if (!Loggers.TryGetValue(categoryName, out var logger))
+            {
+                logger = new CapturingLogger<object>();
+                Loggers[categoryName] = logger;
+            }
+
+            return logger;
+        }
+
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void LogToolCall_LeavesACustomerDataFreeBreadcrumb_ForWhenTheExporterLosesTheRecord()
+    {
+        // Once the records route to AppEvents the console is suppressed, and OpenTelemetry export is
+        // ASYNCHRONOUS — an ingestion outage cannot throw back into the emitting call. So a lost
+        // export would take the record with it, from AppEvents and from stdout both, which is exactly
+        // what #147 forbids: "records degrade rather than disappear silently".
+        //
+        // The breadcrumb is the degraded form. It carries who, what and the correlation id — enough
+        // to prove a call happened and to join it to the upstream records — and deliberately NO
+        // arguments and NO record ids, because the console table is the one the data map declares
+        // customer-data-free and #142's export is gated on that staying true.
+        var factory = new CapturingFactory();
+        var logger = new CapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }), logger, accessor, factory,
+            new KnownToolNames(["Search_users"]));
+
+        var context = new ToolCallAuditContext();
+        context.RecordUpstream(AuditRecordIds.Extract("""{"results":[{"id":"org-secret-1"}]}"""));
+
+        audit.LogToolCall(SampleCall() with
+        {
+            Arguments = AuditArguments.Format(
+                JsonSerializer.Deserialize<Dictionary<string, JsonElement>>("""{"query":"alice@example.com"}""")),
+            Records = context.Summarise(),
+        });
+
+        var breadcrumb = factory.Loggers[AuditLogger.BreadcrumbCategory].Entries
+            .Should().ContainSingle().Subject.Message;
+
+        breadcrumb.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "who");
+        breadcrumb.Should().Contain("Search_users", "what");
+        breadcrumb.Should().Contain("corr-1", "and how to join it to the upstream records");
+        breadcrumb.Should().NotContain("alice@example.com", "no arguments on the console table");
+        breadcrumb.Should().NotContain("org-secret-1", "and no customer record ids either");
+    }
+
+    [Fact]
+    public void BreadcrumbCategory_IsNotAChildOfTheSuppressedCategory()
+    {
+        // `AddFilter` category rules are PREFIX matches. A rule on "VitallyMcp.AuditLogger" therefore
+        // also matches "VitallyMcp.AuditLogger.Fallback" — so a breadcrumb under a child category is
+        // suppressed from the console by the rule meant for the full record, AND from OpenTelemetry by
+        // its own rule, and lands nowhere at all. The degradation path silently becomes no path.
+        //
+        // Asserted on the names rather than through a host because that is exactly where the bug
+        // lives: the two constants have to be unrelated as strings, not merely different.
+        AuditLogger.BreadcrumbCategory.Should().NotStartWith("VitallyMcp.AuditLogger",
+            "a child category inherits the parent's suppression rule");
+    }
+
+    [Fact]
+    public void LogToolCall_EmitsNoBreadcrumb_WhenTheExporterIsNotConfigured()
+    {
+        // ILoggerFactory is in DI on every host, so a breadcrumb keyed off its presence alone would
+        // fire locally and in tests — where the console is NOT suppressed, giving two records per
+        // call and contradicting the claim that the telemetry change is inert until configured.
+        var factory = new CapturingFactory();
+        var (auditLogger, _) = (new CapturingLogger<AuditLogger>(), 0);
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = false }),
+            auditLogger, accessor, factory);
+
+        audit.LogToolCall(SampleCall());
+
+        factory.Loggers.Should().BeEmpty("no breadcrumb logger is created when nothing suppresses the console");
+    }
+
+    public static TheoryData<string, Action<AuditLogger>> EveryAuditEmission() => new()
+    {
+        { "VitallyUpstreamCall", a => a.LogAction(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1", 200) },
+        { "VitallyUpstreamDenied", a => a.LogDenied(HttpMethod.Delete, "https://rest.vitally-eu.io/resources/accounts/acc-1") },
+        { "VitallyToolCallDenied", a => a.LogToolCallDenied(null, "Delete_account", "vitally:delete") },
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryAuditEmission))]
+    public void EveryAuditRecord_CarriesTheCustomEventAttribute(string expectedEventName, Action<AuditLogger> emit)
+    {
+        // Program.cs suppresses the WHOLE VitallyMcp.AuditLogger category from stdout once the
+        // exporter is configured — but only a record carrying microsoft.custom_event.name reaches
+        // AppEvents. A record without it goes to AppTraces instead, so these three would have been
+        // taken off the console AND kept out of the audit table: removed from the one place they were
+        // visible, and landed in the shared diagnostics table with its own retention and access.
+        //
+        // LogAction is the sharpest case, because its resource path names the customer.
+        var logger = new StateCapturingLogger<AuditLogger>();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, IncludeReads = true }), logger, accessor);
+
+        emit(audit);
+
+        var state = logger.States.Should().ContainSingle().Subject;
+        state.Single(kv => kv.Key == "microsoft.custom_event.name").Value
+            .Should().Be(expectedEventName, "every audit record belongs in AppEvents, not AppTraces");
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryAuditEmission))]
+    public void EveryAuditRecord_LeavesABreadcrumb(string eventName, Action<AuditLogger> emit)
+    {
+        // The console suppression covers the WHOLE category, so every record needs a degradation
+        // path, not just the tool-call one. Without this, a lost export takes a LogAction — the
+        // record that names the customer by resource path — and nothing anywhere shows the call
+        // happened.
+        //
+        // A theory rather than three more tests, because the failure mode here is forgetting one:
+        // the same omission has now been made twice, once for the routing attribute and once for the
+        // breadcrumb. A case per emission makes the next addition fail until it is covered.
+        _ = eventName;
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, IncludeReads = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        emit(audit);
+
+        var breadcrumb = factory.Loggers[AuditLogger.BreadcrumbCategory].Entries
+            .Should().ContainSingle().Subject.Message;
+
+        breadcrumb.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "who");
+        breadcrumb.Should().NotContain("acc-1",
+            "and still no customer identifiers — the resource path is exactly what must not follow it to stdout");
+    }
+
+    [Theory]
+    [InlineData("alice@example.com")]
+    [InlineData("acc-9f3c2b1a")]
+    [InlineData("Get_account?query=bob@example.com")]
+    [InlineData("Acme_123")]
+    [InlineData("alice")]
+    public void Breadcrumb_DoesNotCarryACallerInventedToolName(string hostileName)
+    {
+        // The tool name arrives in the caller's own tools/call params and the filter runs even for a
+        // tool that does not exist — so a client can name one anything. Flatten stops it breaking the
+        // line; it does nothing about the CONTENT. A tool named after a customer would therefore put
+        // that identifier on the console stream, which is the one the data map declares
+        // customer-data-free and #142's export is gated on.
+        //
+        // The full record in AppEvents keeps the name verbatim, where customer data is permitted and
+        // access-controlled. Only the console copy is restricted.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory,
+            new KnownToolNames(["List_organizations", "Get_account"]));
+
+        audit.LogToolCall(SampleCall() with { ToolName = hostileName });
+        audit.LogToolCallDenied(null, hostileName, "vitally:delete");
+
+        foreach (var entry in factory.Loggers[AuditLogger.BreadcrumbCategory].Entries)
+        {
+            entry.Message.Should().NotContain(hostileName,
+                "only a REGISTERED tool name reaches the customer-data-free stream — a shape check "
+                + "would pass Acme_123 and alice, which are exactly the identifiers at issue");
+        }
+    }
+
+    [Fact]
+    public void Breadcrumb_KeepsAToolNameThatLooksLikeOne()
+    {
+        // The restriction has to leave the breadcrumb useful: if an export is lost, this line is the
+        // only place the tool is named at all.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise")
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory,
+            new KnownToolNames(["List_organizations", "Get_account"]));
+
+        audit.LogToolCall(SampleCall() with { ToolName = "List_organizations" });
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().Contain("List_organizations");
+    }
+
+    [Fact]
+    public void DenialBreadcrumb_AttributesToTheExplicitPrincipal_NotTheAmbientContext()
+    {
+        // LogToolCallDenied takes the principal deliberately: the SDK authorisation checkpoint hands
+        // the policy's own principal, which is the authoritative identity and can exist with NO
+        // ambient HttpContext. The breadcrumb resolved the actor from the accessor instead, so the
+        // AppEvents record would name the caller while its degraded copy said "anonymous" — and the
+        // two could not be joined, which is the one job the breadcrumb has when an export is lost.
+        var factory = new CapturingFactory();
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true }),
+            new CapturingLogger<AuditLogger>(),
+            httpContextAccessor: null,
+            loggerFactory: factory);
+
+        audit.LogToolCallDenied(
+            EntraV2User("675ebdda-7590-4d79-8ec3-a2d17ab029ba", "S-1pairwise"),
+            "Delete_account",
+            "vitally:delete");
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().Contain("675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+                "the breadcrumb must name whoever the full record names");
+    }
+
+    [Fact]
+    public void Breadcrumb_UsesTheObjectIdOnly_NeverTheSubjectFallbacks()
+    {
+        // ResolveUserId falls back to the raw `sub` and then NameIdentifier when `oid` is absent —
+        // deliberately, because a consistent-but-opaque key beats none in the FULL record. But those
+        // are token-supplied strings: an unexpected token shape can carry an email, or a line break,
+        // straight onto the console stream that is supposed to be customer-data-free and
+        // injection-free. Every other caller-controlled field on that line is sanitised; the identity
+        // was not.
+        //
+        // The breadcrumb takes the oid or nothing. An oid is a GUID by construction, so it cannot
+        // carry either problem.
+        var factory = new CapturingFactory();
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    new[] { new Claim("sub", "alice@example.com") }, authenticationType: "Test"))
+            }
+        };
+        var audit = new AuditLogger(
+            Options.Create(new AuditOptions { Enabled = true, EmitBreadcrumb = true, IncludeReads = true }),
+            new CapturingLogger<AuditLogger>(), accessor, factory);
+
+        audit.LogAction(HttpMethod.Get, "https://rest.vitally-eu.io/resources/organizations", 200);
+
+        factory.Loggers[AuditLogger.BreadcrumbCategory].Entries.Should().ContainSingle()
+            .Subject.Message.Should().NotContain("alice@example.com",
+                "a token subject can be an email, and the console stream must not carry one");
+    }
 }

@@ -52,12 +52,16 @@ namespace VitallyMcp;
 /// </para>
 /// <para>
 /// <b>The tool-call record is implemented</b> (#147) — arguments, returned record ids, counts,
-/// correlation id, and the effective permission tier. What is <i>not</i> yet done is routing: these
-/// records still go through <see cref="ILogger"/> to stdout, and stdout is not exported, so nothing
-/// here is queryable yet. Until <see cref="LogToolCall"/> writes via <c>TrackEvent</c> and the console
-/// provider is suppressed for this category, #142's console-log export stays gated — exporting it
-/// sooner would put customer identifiers into the table with the shortest retention and the broadest
-/// access. Design: <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>.
+/// correlation id, and the effective permission tier. <b>Routing is implemented too</b>: every record
+/// here carries the <c>microsoft.custom_event.name</c> attribute, which the Azure Monitor exporter
+/// uses to write it to <c>AppEvents</c> rather than <c>AppTraces</c>, and <c>Program.cs</c> takes the
+/// whole category off the console provider once that exporter is configured.
+/// </para>
+/// <para>
+/// ⚠️ <b>It is inert until <c>ApplicationInsights__ConnectionString</c> is set.</b> With no exporter
+/// there is nothing to export to, the console suppression is not registered either, and these records
+/// stay on stdout exactly as before. So #142's console-log export is ungated by that configuration
+/// flip, not by this code existing.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -72,15 +76,39 @@ public class AuditLogger
     private readonly AuditOptions _options;
     private readonly ILogger<AuditLogger> _logger;
     private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly ILogger? _fallback;
+    private readonly KnownToolNames? _knownTools;
+
+    /// <summary>
+    /// Category for the breadcrumb that stays on the console when the full record does not.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>Deliberately NOT a child of <c>VitallyMcp.AuditLogger</c>.</b> Logging filter rules match
+    /// by category <b>prefix</b>, so a name like <c>VitallyMcp.AuditLogger.Fallback</c> inherits the
+    /// console suppression written for the full record — and, with its own rule keeping it out of the
+    /// OpenTelemetry provider as well, the breadcrumb would land <i>nowhere</i>. The degradation path
+    /// would silently become no path at all, which is worse than not having built it.
+    /// <para>
+    /// The two records are routed in opposite directions: the full record is suppressed from the
+    /// console provider, this one from the OpenTelemetry provider, so each goes to exactly one
+    /// destination rather than both.
+    /// </para>
+    /// </remarks>
+    public const string BreadcrumbCategory = "VitallyMcp.AuditBreadcrumb";
 
     public AuditLogger(
         IOptions<AuditOptions> options,
         ILogger<AuditLogger> logger,
-        IHttpContextAccessor? httpContextAccessor = null)
+        IHttpContextAccessor? httpContextAccessor = null,
+        ILoggerFactory? loggerFactory = null,
+        KnownToolNames? knownTools = null)
     {
+        _knownTools = knownTools;
         _options = options.Value;
         _logger = logger;
         _httpContextAccessor = httpContextAccessor;
+        // Only when something is actually suppressing the console — see AuditOptions.EmitBreadcrumb.
+        _fallback = _options.EmitBreadcrumb ? loggerFactory?.CreateLogger(BreadcrumbCategory) : null;
     }
 
     /// <summary>Records a completed action (after the upstream response, success or failure).</summary>
@@ -96,8 +124,14 @@ public class AuditLogger
         }
 
         Emit(() => _logger.LogInformation(
-            "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode} correlation={AuditCorrelationId}",
-            ResolveUserId(), method.Method, ResourcePath(url), statusCode, correlationId ?? "none"));
+            "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode} "
+            + "correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
+            ResolveUserId(), method.Method, ResourcePath(url), statusCode, correlationId ?? "none",
+            UpstreamCallEventName));
+
+        // No resource path here: that is the field carrying the customer's record id.
+        Breadcrumb(null, "{HttpMethod} -> {StatusCode} correlation={AuditCorrelationId}",
+            method.Method, statusCode, correlationId ?? "none");
     }
 
     /// <summary>
@@ -121,7 +155,8 @@ public class AuditLogger
             + "truncated={AuditPagerTruncated} argsTruncated={AuditArgumentsTruncated} "
             + "unreadable={AuditCallsWithoutIds} "
             + "outcome={AuditOutcome} durationMs={AuditDurationMs} correlation={AuditCorrelationId} "
-            + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName}",
+            + "tier={AuditPermissionTier} tierStale={AuditTierServedStale} client={McpClientName} "
+            + "event={microsoft.custom_event.name}",
             ResolveUserId(),
             Flatten(call.ToolName, MaxToolNameChars),
             call.Arguments.Rendered,
@@ -138,7 +173,11 @@ public class AuditLogger
             call.CorrelationId,
             call.PermissionTier,
             call.TierServedStale?.ToString() ?? "unknown",
-            SanitiseClientName(call.McpClient)));
+            SanitiseClientName(call.McpClient),
+            ToolCallEventName));
+
+        Breadcrumb(null, "called {McpToolName} outcome={AuditOutcome} correlation={AuditCorrelationId}",
+            ToolNameForConsole(call.ToolName), call.Outcome, call.CorrelationId);
     }
 
     /// <summary>Records an action the caller was not permitted to perform (RBAC denial).</summary>
@@ -150,8 +189,13 @@ public class AuditLogger
         }
 
         Emit(() => _logger.LogWarning(
-            "Vitally audit: {AuditUserId} DENIED {HttpMethod} {VitallyResource} correlation={AuditCorrelationId}",
-            ResolveUserId(), method.Method, ResourcePath(url), correlationId ?? "none"));
+            "Vitally audit: {AuditUserId} DENIED {HttpMethod} {VitallyResource} "
+            + "correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
+            ResolveUserId(), method.Method, ResourcePath(url), correlationId ?? "none",
+            UpstreamDeniedEventName));
+
+        Breadcrumb(null, "DENIED {HttpMethod} correlation={AuditCorrelationId}",
+            method.Method, correlationId ?? "none");
     }
 
     /// <summary>
@@ -183,8 +227,13 @@ public class AuditLogger
         }
 
         Emit(() => _logger.LogWarning(
-            "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission})",
-            ResolveUserId(user), Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission));
+            "Vitally audit: {AuditUserId} DENIED tools/call {McpToolName} (requires {RequiredPermission}) "
+            + "event={microsoft.custom_event.name}",
+            ResolveUserId(user), Flatten(toolName ?? "unknown", MaxToolNameChars), requiredPermission,
+            ToolCallDeniedEventName));
+
+        Breadcrumb(user, "DENIED tools/call {McpToolName} (requires {RequiredPermission})",
+            ToolNameForConsole(toolName), requiredPermission);
     }
 
     /// <summary>
@@ -252,6 +301,40 @@ public class AuditLogger
             or System.Globalization.UnicodeCategory.ParagraphSeparator;
 
     /// <summary>
+    /// Groups the tool-call records in the destination table.
+    /// </summary>
+    /// <remarks>
+    /// <b>The placeholder carrying this is what decides which table the record lands in.</b> The
+    /// Azure Monitor exporter looks for the attribute key <c>microsoft.custom_event.name</c> —
+    /// exactly, case-sensitively — in the log state, and writes an <c>AppEvents</c> row when it finds
+    /// one. Without it, or with it misspelled, the record becomes an <c>AppTraces</c> row instead:
+    /// <b>silently</b>, with no error and no warning, sharing a table with ordinary diagnostics and
+    /// losing the per-table retention and access control this routing exists to obtain.
+    /// <para>
+    /// So the odd-looking placeholder name in the template below is load-bearing rather than
+    /// decorative, and <c>AuditLoggerTests</c> asserts its exact spelling. Note also that a record
+    /// carrying an <b>exception</b> is emitted as <c>AppExceptions</c> regardless of this attribute —
+    /// which is why <see cref="Emit"/> never passes one.
+    /// </para>
+    /// </remarks>
+    private const string ToolCallEventName = "VitallyToolCall";
+
+    /// <summary>Event names for the corroboration and denial records.</summary>
+    /// <remarks>
+    /// Every audit emission needs one. <c>Program.cs</c> suppresses the whole
+    /// <c>VitallyMcp.AuditLogger</c> category from stdout once the exporter is configured, but only a
+    /// record carrying the attribute reaches <c>AppEvents</c> — so a record without it would be taken
+    /// off the console <i>and</i> kept out of the audit table, landing in <c>AppTraces</c> with the
+    /// shared diagnostics and their own retention and access. Distinct names so the four shapes stay
+    /// separable in the table.
+    /// </remarks>
+    private const string UpstreamCallEventName = "VitallyUpstreamCall";
+
+    private const string UpstreamDeniedEventName = "VitallyUpstreamDenied";
+
+    private const string ToolCallDeniedEventName = "VitallyToolCallDenied";
+
+    /// <summary>
     /// Longest a tool name may be in the message.
     /// </summary>
     /// <remarks>
@@ -283,6 +366,78 @@ public class AuditLogger
         string.IsNullOrWhiteSpace(name) ? "unknown" : Flatten(name, MaxClientNameChars);
 
     /// <summary>
+    /// Leaves a customer-data-free trace of a record on the console.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every emission needs one, not just the tool call.</b> The console suppression covers the
+    /// whole <c>VitallyMcp.AuditLogger</c> category, and OpenTelemetry export is asynchronous — an
+    /// ingestion outage cannot throw back into the emitting call — so a record without a breadcrumb
+    /// would vanish from <c>AppEvents</c> and stdout both. That is what #147 forbids: "records
+    /// degrade rather than disappear silently". Emitted unconditionally, because there is no failure
+    /// signal to react to.
+    /// <para>
+    /// ⚠️ <b>Callers must pass nothing that identifies a customer.</b> Not the resource path, which
+    /// carries record ids; not arguments; not returned ids. The console table is the one the data map
+    /// declares customer-data-free and #142's export is gated on that staying true — so the
+    /// breadcrumb proves a call happened and joins it to the full record, and stops there.
+    /// </para>
+    /// </remarks>
+    private void Breadcrumb(ClaimsPrincipal? user, string detailTemplate, params object?[] detail)
+    {
+        if (_fallback is null)
+        {
+            return;
+        }
+
+        var args = new object?[detail.Length + 1];
+
+        // The principal is passed in rather than read from the ambient context, because
+        // LogToolCallDenied is called from the SDK authorisation checkpoint with the POLICY's own
+        // principal — authoritative, and able to exist with no ambient HttpContext at all. Resolving
+        // from the accessor there gave "anonymous" on the breadcrumb while the full record named the
+        // caller, so the degraded copy could not be joined to the record it degrades from, which is
+        // its only job.
+        //
+        // ⚠️ The OBJECT ID only, never ResolveUserId's fallback chain. That chain deliberately falls
+        // back to the raw `sub` and then NameIdentifier, because a consistent-but-opaque key beats
+        // none in the full record — but both are token-supplied strings, so an unexpected token shape
+        // could put an email, or a line break, on the console stream. An oid is a GUID by
+        // construction and can carry neither. Every other caller-controlled field on this line is
+        // sanitised; the identity was the one that was not.
+        args[0] = CallerIdentity.TryGetObjectId(user ?? _httpContextAccessor?.HttpContext?.User)
+            ?? "unresolved";
+        detail.CopyTo(args, 1);
+
+        Emit(() => _fallback.LogInformation("Vitally audit breadcrumb: {AuditUserId} " + detailTemplate, args));
+    }
+
+    /// <summary>
+    /// A tool name that is safe to put on the console stream, or <c>unrecognised</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tool name is caller-supplied.</b> It arrives in the caller's own <c>tools/call</c>
+    /// params and the audit filter runs even for a tool that does not exist, so a client can name one
+    /// anything — including a customer's name or record id. The console stream is the one the data map
+    /// declares customer-data-free and #142's export is gated on, so the console copy is restricted to
+    /// names this server actually registered.
+    /// <para>
+    /// ⚠️ <b>Checked against the registered set, not a shape.</b> An earlier version matched
+    /// <c>^[A-Za-z][A-Za-z0-9_]{0,63}$</c>, which does exclude an email and a hyphenated id — but
+    /// <c>Acme_123</c> and <c>alice</c> pass it, and a customer's name is exactly the identifier that
+    /// must not reach this stream. Membership is the only test that answers the actual question.
+    /// </para>
+    /// <para>
+    /// With no <see cref="KnownToolNames"/> injected there is nothing to check against, so everything
+    /// reads <c>unrecognised</c> — fail closed, because the cost of being wrong here is customer data
+    /// on the broadest-access stream. The <b>full</b> record keeps the name verbatim regardless:
+    /// <c>AppEvents</c> is where customer data is permitted and access-controlled, and a trail that
+    /// silently renamed what the caller invoked would be worse than useless.
+    /// </para>
+    /// </remarks>
+    private string ToolNameForConsole(string? toolName) =>
+        _knownTools?.IsRegistered(toolName) == true ? toolName! : "unrecognised";
+
+    /// <summary>
     /// Writes one record, absorbing any failure.
     /// </summary>
     /// <remarks>
@@ -293,9 +448,14 @@ public class AuditLogger
     /// refusing writes is exactly the sort of thing that happens during the incident the trail is
     /// wanted for, and losing the user's call as well as the record is the worse half of that.
     /// <para>
-    /// Swallowed rather than re-logged, because the logger <i>is</i> the sink that just failed.
-    /// Once the record routes through <c>TrackEvent</c>, the fallback the design calls for — degrade
-    /// to <see cref="ILogger"/> rather than disappear — becomes possible and belongs here.
+    /// Swallowed rather than re-logged: this catches a <i>synchronous</i> failure, and the logger is
+    /// the transport, so there is nowhere to re-log to.
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>This does not catch an export failure, and cannot.</b> The Azure Monitor exporter is
+    /// asynchronous and batched, so an ingestion outage never surfaces here. The degradation the
+    /// design asks for is instead the breadcrumb on <see cref="BreadcrumbCategory"/> — emitted
+    /// unconditionally, because there is no failure signal to react to.
     /// </para>
     /// </remarks>
     private static void Emit(Action write)
