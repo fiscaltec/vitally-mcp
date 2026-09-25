@@ -62,8 +62,10 @@ namespace VitallyMcp;
 /// <para>
 /// ⚠️ <b>It is inert until <c>ApplicationInsights__ConnectionString</c> is set.</b> With no exporter
 /// there is nothing to export to, the console suppression is not registered either, and these records
-/// stay on stdout exactly as before. So #142's console-log export is ungated by that configuration
-/// flip, not by this code existing.
+/// stay on stdout exactly as before — which is <b>staging's</b> state today. Production was flipped on
+/// 2026-09-25, so #142's console-log export is no longer gated on the audit data there; it is blocked
+/// instead by the diagnostic setting living on the CAE that both targets share, which would export
+/// staging's unsuppressed console with it.
 /// </para>
 /// </summary>
 /// <remarks>

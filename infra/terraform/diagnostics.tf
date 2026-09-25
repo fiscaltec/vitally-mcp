@@ -69,8 +69,18 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #     set on production (verified by reading VitallyToolCall rows back out of AppEvents; the console
 #     now carries only a customer-data-free breadcrumb) and is NOT set on staging.
 #
-# So: safe to enable for production, and NOT safe while staging runs without that setting, since one
-# diagnostic setting on the shared CAE exports BOTH apps' console streams.
+# ⚠️ STILL BLOCKED, and NOT per-target. This setting is attached to the shared CAE, so enabling
+# ContainerAppConsoleLogs exports the console of EVERY app in the environment. There is no way to
+# enable it for production alone. While staging runs without the connection string its console still
+# carries full audit records — caller object ids, tool arguments including free-text search terms,
+# record ids — against the production Vitally tenant, so enabling this today would do exactly what
+# the gate existed to prevent, via the other app.
+#
+# Unblocks when EITHER staging also has ApplicationInsights__ConnectionString (preferred — keeps the
+# targets alike) OR staging is torn down and the variable becomes part of its spin-up. The second is
+# fragile in a way this repo has already been bitten by: Authorization__ReadOnly is documented as not
+# surviving a recreate, and a forgotten variable here exports customer data rather than merely
+# dropping a guard.
 #
 # Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
 # category above — from the live stream, which is independent of this export path:
