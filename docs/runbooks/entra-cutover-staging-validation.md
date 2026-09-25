@@ -293,8 +293,9 @@ else
   for REV in $REVS; do
     # [value,secretRef] because a secretRef entry has NO value key: querying .value alone renders a
     # variable that IS set exactly like one that is absent. See the warning below.
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='$VAR']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
-      if [ -n "$V" ]; then echo "$REV  set"; else echo "$REV  <unset>"; rc=1; fi
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='$VAR']|[0]|[value,secretRef]|[?@]|[0]" -o tsv) && I=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].image" -o tsv); then
+      echo "$REV  $( [ -n "$V" ] && echo set || echo '<unset>' )  ${I:-<no image>}"
+      { [ -n "$V" ] && [ -n "$I" ]; } || rc=1
     else
       echo "$REV  NOT ASSESSED — could not read this revision"; rc=1
     fi
@@ -304,7 +305,7 @@ else
 fi
 ```
 
-⚠️ **Three details here are load-bearing, and each was wrong in an earlier draft.**
+⚠️ **Five details here are load-bearing, and each was wrong in an earlier draft.**
 
 1. **Query `[value,secretRef]`, not `.value`.** A `secretRef` entry carries no `value` key at all, so
    `.value|[0]` renders a variable that IS set exactly like one that is absent — measured against
@@ -321,7 +322,13 @@ fi
    the terminal. An explicit branch, as above.
 3. **`NOT ASSESSED` is not `<unset>`.** Stop and find out which it is. A **mixed** result counts as
    unset: one unsuppressed serving revision is enough to put full records on stdout.
-4. **`CONFIGURED` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
+4. **The IMAGE matters as much as the variable, and the check prints both.** An image built before
+   #164 (`410e851`, 2026-09-25) has no exporter registration at all, so it **ignores this variable
+   entirely** — a stale revision reports `set` and still writes full records to stdout, while the table
+   above would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran a
+   22-day-old image until 2026-09-25, and setting the variable on it changed nothing. If the tag
+   predates `sha-410e851`, deploy before reading anything into either answer.
+5. **`CONFIGURED` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
    exporter *branch* was selected. A stale or wrong connection string is non-empty, so it prints
    `CONFIGURED` while `Program.cs:176` suppresses the console records and the exporter's sends fail —
    the records then exist nowhere, and this check would have told you everything was fine. **Only the
@@ -337,9 +344,12 @@ CLI, RBAC or transient error rather than on a real answer. `NOT ASSESSED` is not
 find out which it is. A **mixed** result counts as unset: one unsuppressed serving revision is enough
 to put full records on stdout.
 
-| It is set (as on 2026-09-25) | It is empty |
+| Set, on a post-#164 image | Empty, **or any image predating `sha-410e851`** |
 |---|---|
 | Staging behaves like production: the denial is in `AppEvents`, and the console carries only a breadcrumb | The `AuditLogger` category is unsuppressed, so the full record — arguments and all — is on the console |
+
+⚠️ **Both columns depend on the image, not only the variable** — see detail 4 below. A pre-#164 image
+ignores the variable, so `set` on such a revision still means the records are on the console.
 
 **With it set**, query the workspace — `AppEvents` holds both targets, told apart by `AppRoleName`:
 
