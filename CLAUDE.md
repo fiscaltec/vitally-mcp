@@ -1037,10 +1037,25 @@ be serving every request. Same trap this file already records for `Authorization
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-for REV in $(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv); do
-  az containerapp revision show -n $CA -g $RG --revision "$REV" --query "{rev:name, image:properties.template.containers[0].image}" -o tsv
-done
+if ! REVS=$(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
+else
+  rc=0
+  for REV in $REVS; do
+    if IMG=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].image" -o tsv); then
+      printf '%s\t%s\n' "$REV" "$IMG"
+    else
+      echo "NOT ASSESSED — could not read $REV"; rc=1
+    fi
+  done
+  [ "$rc" -eq 0 ]
+fi
 ```
+
+⚠️ The guards are the check. A bare `for REV in $(az …)` runs its body **zero times** on a failed or
+empty listing and still exits 0, so an outage or a missing role prints nothing and reads exactly like
+a successful look at a current image \u2014 the same fail-open shape this file warns about for
+`Authorization__ReadOnly`.
 
 **The failure mode is a configuration change that is accepted and does nothing.** Setting
 `ApplicationInsights__ConnectionString` on that stale app rolled a revision and came up `Healthy`,

@@ -285,14 +285,29 @@ and still writes full records to stdout. The `AppEvents` query would then read a
 
 ```bash
 CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-for REV in $(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv); do
-  V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv)
-  printf '%s\t%s\n' "$REV" "${V:+set}"
-done
+if ! REVS=$(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
+  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
+else
+  rc=0
+  for REV in $REVS; do
+    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+           --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv); then
+      printf '%s\t%s\n' "$REV" "${V:+set}"
+      [ -n "$V" ] || rc=1
+    else
+      echo "NOT ASSESSED — could not read $REV"; rc=1
+    fi
+  done
+  [ "$rc" -eq 0 ] && echo "EXPORTING — every serving revision has the connection string"
+  [ "$rc" -eq 0 ]
+fi
 ```
 
-Empty output means no revision is taking traffic, or the listing failed — not "unset". Treat a
-**mixed** result as unset: one unsuppressed serving revision is enough to put full records on stdout.
+⚠️ **Fail closed, and read the guards as the check itself.** A per-revision read failure leaves `V`
+empty and would otherwise print that revision as unset, sending you to the console path on an Azure
+CLI, RBAC or transient error rather than on a real answer. `NOT ASSESSED` is not "unset" \u2014 stop and
+find out which it is. A **mixed** result counts as unset: one unsuppressed serving revision is enough
+to put full records on stdout.
 
 | It is set (as on 2026-09-25) | It is empty |
 |---|---|
