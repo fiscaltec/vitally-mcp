@@ -20,7 +20,10 @@ namespace VitallyMcp;
 ///     shipper authenticates with a shared key, so that path was refused from the day the workspace
 ///     was created.</item>
 /// </list>
-/// Neither deployed target has that setting yet, so the second row is the live state. Design in
+/// <b>Production has that setting since 2026-09-25 (#147) — the first row is its live state, verified by
+/// reading <c>VitallyToolCall</c> rows back out of <c>AppEvents</c> rather than inferred from a clean
+/// deploy, since a wrong attribute routes to <c>AppTraces</c> silently. Staging does not have it, so the
+/// second row is staging's live state.</b> Design in
 /// <c>docs/superpowers/specs/2026-09-17-logging-observability-design.md</c>; the console-log export
 /// it ungates is #142.
 /// </para>
