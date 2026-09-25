@@ -279,9 +279,20 @@ permission.
 so check that before looking anywhere.** Staging is stood up on demand and the setting does not
 survive a recreate, so the answer is not a property of "staging" but of the app in front of you:
 
+⚠️ Ask every **traffic-bearing revision**, not `az containerapp show` — that returns the *desired*
+template, so during a swap it reports the variable as set while an older revision still serves requests
+and still writes full records to stdout. The `AppEvents` query would then read as a false negative.
+
 ```bash
-az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv
+CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+for REV in $(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv); do
+  V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString'].value|[0]" -o tsv)
+  printf '%s\t%s\n' "$REV" "${V:+set}"
+done
 ```
+
+Empty output means no revision is taking traffic, or the listing failed — not "unset". Treat a
+**mixed** result as unset: one unsuppressed serving revision is enough to put full records on stdout.
 
 | It is set (as on 2026-09-25) | It is empty |
 |---|---|

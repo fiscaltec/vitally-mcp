@@ -30,6 +30,9 @@ and DR-able.
   ```bash
   export TF_VAR_oauth_shared_client_secret='…'  # Entra app secret — BOTH targets
   export TF_VAR_teams_webhook_url='…'
+  # Required since 2026-09-25 (#147), BOTH targets. Read the live value, do not invent one:
+  #   az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv
+  export TF_VAR_application_insights_connection_string='…'
   ```
   > ⚠️ Terraform persists these values in **state** even though the variables are `sensitive`. Always use a
   > **remote backend with encryption + tight RBAC** (the azurerm backend on a locked-down storage account)
@@ -58,6 +61,12 @@ reconcile. Only then the apply that performs the imports. Afterwards, comment ou
 ⚠️ Before any of that, confirm the OAuth secret layout: each target carries **one** Container App
 secret, `entra-oauth-client-secret`, holding the same value — a **copy** of the Key Vault secret
 `entra-mcp-client-secret`, not a reference to it.
+
+The same reasoning applies to `application_insights_connection_string`, added 2026-09-25 (#147) and
+also without a default: omitting it is safe, while a **placeholder** value would be applied and would
+silently stop the audit-record export to `AppEvents` — with nothing reporting it, because a failed
+export cannot be detected in-process. That is why the variable has no default rather than a
+descriptive one.
 
 Being precise about the hazard, because the obvious guess is wrong: *omitting*
 `oauth_shared_client_secret` is safe — it has no default, so Terraform prompts or fails before it

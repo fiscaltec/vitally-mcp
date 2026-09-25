@@ -1031,9 +1031,15 @@ before concluding anything from its behaviour.** The release train ships to prod
 whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127, 2026-09-15)
 while production ran `sha-410e851` — ten days and four merged PRs apart.
 
-```powershell
-az containerapp show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth `
-  --query "properties.template.containers[0].image" -o tsv
+⚠️ Read it off the **traffic-bearing revision**, not `az containerapp show` — that returns the
+*desired* template, which flips the moment an update is accepted while the previous revision may still
+be serving every request. Same trap this file already records for `Authorization__ReadOnly`:
+
+```bash
+CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
+for REV in $(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv); do
+  az containerapp revision show -n $CA -g $RG --revision "$REV" --query "{rev:name, image:properties.template.containers[0].image}" -o tsv
+done
 ```
 
 **The failure mode is a configuration change that is accepted and does nothing.** Setting
