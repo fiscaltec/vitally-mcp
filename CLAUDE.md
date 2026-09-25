@@ -1158,14 +1158,17 @@ else
   rc=0
   for REV in $REVS; do
     if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
-      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
+         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv) \
+       && C=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
+         --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
+      printf '%s\tReadOnly=%s\tAppInsights=%s\n' "$REV" "${V:-<unset>}" "$( [ -n "$C" ] && echo set || echo '<unset>' )"
       [ "$V" = "true" ] || rc=1
+      [ -n "$C" ] || rc=1
     else
       echo "NOT ASSESSED — could not read $REV"; rc=1
     fi
   done
-  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
+  [ "$rc" -eq 0 ] && echo "SPUN UP CORRECTLY — every traffic-bearing revision has both variables"
   [ "$rc" -eq 0 ]
 fi
 ```
@@ -1173,6 +1176,18 @@ fi
 Empty output means unguarded, not "defaulted to safe". It reads the **serving** revision on
 purpose: `az containerapp show` returns the desired template, which flips the moment an update is
 accepted, while the previous — unguarded — revision may still be taking traffic.
+
+⚠️ **It checks BOTH spin-up variables, because a check that verifies one of two is worse than no
+check at all** — an operator runs it, sees a pass, and concludes the spin-up is complete. Two details
+in the second half are load-bearing:
+
+- It queries `[value,secretRef]`, not `.value`. A `secretRef` entry carries **no `value` key**, so
+  `.value` renders a variable that IS set exactly like one that is absent (measured against
+  production's `OAuth__SharedClientSecret`, which is defined that way).
+- `AppInsights=set` means **configured, not exporting**. A stale or wrong connection string is
+  non-empty and passes here, while its sends fail and `Program.cs:176` suppresses the console records
+  — so the records would exist nowhere and this check would still say pass. Only an `AppEvents` query
+  proves ingestion; `docs/runbooks/entra-cutover-staging-validation.md` has it.
 
 **The custom domain is bound out of band**, as production's is. `fiscaltec.com` is on Cloudflare, so
 DNS is not in `infra/terraform/`: the zone needs an **un-proxied** (DNS-only) `CNAME` from
