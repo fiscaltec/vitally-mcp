@@ -62,12 +62,6 @@ reconcile. Only then the apply that performs the imports. Afterwards, comment ou
 secret, `entra-oauth-client-secret`, holding the same value — a **copy** of the Key Vault secret
 `entra-mcp-client-secret`, not a reference to it.
 
-The same reasoning applies to `application_insights_connection_string`, added 2026-09-25 (#147) and
-also without a default: omitting it is safe, while a **placeholder** value would be applied and would
-silently stop the audit-record export to `AppEvents` — with nothing reporting it, because a failed
-export cannot be detected in-process. That is why the variable has no default rather than a
-descriptive one.
-
 Being precise about the hazard, because the obvious guess is wrong: *omitting*
 `oauth_shared_client_secret` is safe — it has no default, so Terraform prompts or fails before it
 can change anything. What breaks sign-in is supplying a **wrong value**, most plausibly a stale one
@@ -76,6 +70,14 @@ usual checks: the app boots, `/health` returns 200 and the unauthenticated `/mcp
 because none of them exercises the credential. It surfaces only at `/oauth/token`, as
 `invalid_client`, for every user at once. Read the plan output for that secret by name before
 proceeding, and verify afterwards by signing in.
+
+`application_insights_connection_string` (added 2026-09-25, #147) has the same shape and a worse
+payload. Omitting it is safe — no default, so Terraform stops. A **placeholder** is the hazard, and
+it costs more than the export: `Program.cs:134` tests the value with `IsNullOrWhiteSpace`, so any
+non-empty string makes `exporterConfigured` true, which registers the exporter (whose sends then fail)
+**and** the console suppression at `Program.cs:176`. The records are taken off stdout and cannot be
+delivered — no audit trail anywhere, reported by nothing, since a failed export cannot be detected
+in-process. That is why it has no default and no line in `terraform.tfvars.example`.
 
 A few resources need an ID looked up before their import block works (see notes in `imports.tf`):
 role assignments (`az role assignment list --scope <id> --query "[].id"`), diagnostic settings

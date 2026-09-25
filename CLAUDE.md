@@ -1028,8 +1028,9 @@ gh workflow run deploy.yml -f target=staging -f ref=<branch-tag-or-sha>
 ⚠️ **Staging never auto-deploys, so a standing staging app can be arbitrarily old — check its image
 before concluding anything from its behaviour.** The release train ships to production only, and
 `deploy.yml` reaches staging solely by manual dispatch, so an app stood up weeks ago is still running
-whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127, 2026-09-15)
-while production ran `sha-410e851` — ten days and four merged PRs apart.
+whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127), last deployed there on **2026-09-03**,
+while production ran `sha-410e851` — **22 days and 21 merged commits apart**
+(`git log --oneline 06dcf7b..410e851 | wc -l`).
 
 ⚠️ Read it off the **traffic-bearing revision**, not `az containerapp show` — that returns the
 *desired* template, which flips the moment an update is accepted while the previous revision may still
@@ -1043,7 +1044,8 @@ else
   rc=0
   for REV in $REVS; do
     if IMG=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].image" -o tsv); then
-      printf '%s\t%s\n' "$REV" "$IMG"
+      printf '%s\t%s\n' "$REV" "${IMG:-<none>}"
+      [ -n "$IMG" ] || { echo "NOT ASSESSED — no image resolved for $REV"; rc=1; }
     else
       echo "NOT ASSESSED — could not read $REV"; rc=1
     fi
@@ -1052,10 +1054,19 @@ else
 fi
 ```
 
-⚠️ The guards are the check. A bare `for REV in $(az …)` runs its body **zero times** on a failed or
-empty listing and still exits 0, so an outage or a missing role prints nothing and reads exactly like
-a successful look at a current image \u2014 the same fail-open shape this file warns about for
-`Authorization__ReadOnly`.
+⚠️ **Exit 0 here means "the read succeeded", not "the image is current"** — there is no expected
+value to assert against. Compare what it prints against production yourself, and treat two
+traffic-bearing revisions on different images as a finding.
+
+The guards still do real work. A bare `for REV in $(az …)` runs its body **zero times** on a failed or
+empty listing and still exits 0; and `az` exits **0 with empty output** when a `--query` path stops
+resolving (an extension bump, a multi-container template), so without the emptiness check a schema
+change prints a blank line that reads as a clean look at a current image. Same fail-open shape this
+file warns about for `Authorization__ReadOnly`.
+
+⚠️ `NOT ASSESSED` on the listing is also what a **torn-down** staging app produces, and an absent
+staging app is a normal state rather than a fault (#112) — check whether it exists before reading
+that message as an outage.
 
 **The failure mode is a configuration change that is accepted and does nothing.** Setting
 `ApplicationInsights__ConnectionString` on that stale app rolled a revision and came up `Healthy`,
@@ -1065,9 +1076,10 @@ it exactly like one that honours it. Deploy first, then configure — or the ver
 about the image rather than about the setting, which is how the same mistake gets made twice.
 
 Two other differences that fall out of staleness and read as bugs: `Audit:IncludeReads` defaulted to
-`false` before 2026-09-17, so an old image audits no reads at all; and #143's `HttpClient` log filter
-is absent before that too, so an old image's console is full of `Start processing HTTP request` lines
-that a current one suppresses.
+`false` before 2026-09-17, so an old image audits no reads at all; and #143's `HttpClient` log filter landed later still,
+on **2026-09-21** (`17b1d78`, PR #148), so an image built between those two dates has the audit default
+but not the filter — its console is full of `Start processing HTTP request` lines that a current one
+suppresses.
 
 `https://vitally-staging.fiscaltec.com` — a second Container App in the *same* resource group and the
 *same* Container Apps Environment as production, not a second environment. That is what makes it
@@ -1121,9 +1133,10 @@ write tools to prove a reader is denied one. Live state: **`true` on staging**, 
 `ApplicationInsights__ConnectionString` joined it on 2026-09-25 (#147): without it the exporter is not
 registered, so staging's audit records — object ids, tool arguments, touched record ids — stay on
 stdout. Neither variable survives a recreate, and neither failure announces itself. The second one
-also reaches beyond staging, because #142's `ContainerAppConsoleLogs` export is a single diagnostic
-setting on the CAE that production shares: an unconfigured staging would carry those records into the
-console table for the whole environment.
+will also reach beyond staging **once #142 is enabled** (it is not today: `ContainerAppConsoleLogs` is
+`false` on the `cae-system-logs` setting). That export is a single diagnostic setting on the CAE that
+production shares, so from the moment it is switched on, an unconfigured staging would carry those
+records into the console table for the whole environment.
 
 ⚠️ **A recreate does NOT inherit it.** `containerapps-staging.tf` records it — grep the file for
 `Authorization__ReadOnly` rather than a line number, which moves — but `infra/terraform/` is an as-built

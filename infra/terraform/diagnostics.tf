@@ -50,8 +50,8 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   }
 }
 
-# ⚠️ ContainerAppConsoleLogs is DELIBERATELY NOT ENABLED HERE YET — this is phase 2b, and it is
-# gated, not forgotten.
+# ⚠️ ContainerAppConsoleLogs is NOT ENABLED YET — this is phase 2b. It is no longer GATED: both of
+# its preconditions were met on 2026-09-25. It is unfinished work with one constraint attached, below.
 #
 # It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
 # object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
@@ -59,7 +59,7 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 # then would have put that data into a table documented as customer-data-free, with the shortest
 # retention and the broadest access — the opposite of where the 2026-09-17 policy decision placed it.
 #
-# ⚠️ BOTH conditions are now MET ON PRODUCTION, so this is unfinished work rather than a blocked gate:
+# ⚠️ BOTH conditions are now MET ON BOTH TARGETS, so this is unfinished work rather than a blocked gate:
 #   - #143 filters the HttpClient categories down to Warning in Program.cs — closed.
 #   - The audit reroute landed and was SWITCHED ON 2026-09-25. AuditLogger's records carry the
 #     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console

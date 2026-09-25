@@ -46,7 +46,8 @@ namespace VitallyMcp;
 /// inferred. That reverses what this comment said for most of its life, and the older claim has its
 /// own history: until 2026-09-17 nothing this server logged reached Log Analytics at all, because the
 /// workspace refuses the Container Apps shared-key shipper with local authentication disabled (#142).
-/// Staging was switched on the same day and writes to the same table, told apart by <c>AppRoleName</c>;
+/// Staging was switched on that same date, 2026-09-25, and writes to the same table, told apart by
+/// <c>AppRoleName</c>;
 /// ⚠️ being an on-demand app, its setting does not survive a recreate.
 /// Second, the blanket "keep personal data out of telemetry" policy was <b>withdrawn on 2026-09-17</b>:
 /// the agreed design records tool arguments, including search terms that may carry names or email

@@ -717,9 +717,9 @@ was actually done, so the collision is left in place and flagged rather than tid
 | 1 | audit reads by default | #139 / PR #140 | ✅ **done** 2026-09-17 |
 | 3 | logging configuration: noise + `HttpClient` PII | #143 | ✅ **done** 2026-09-21 |
 | **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | #142 | ✅ **done** 2026-09-17 — and **still delivering**: 868 rows spanning 2026-09-17T18:25:09Z → 2026-09-22T11:38:18Z, re-checked 2026-09-22 |
-| **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | blocked on 3 ✅, **4** |
+| **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | **ready** — 3 ✅ and 4 ✅ as of 2026-09-25. Not enabled yet, and NOT per-target: the setting is on the CAE both apps share, so a staging spin-up without `ApplicationInsights__ConnectionString` would export its unsuppressed console |
 | **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
-| 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | **ready** — 3 and 3a both done |
+| 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | ✅ **done** 2026-09-25 — switched on and verified by reading `VitallyToolCall` rows back out of `AppEvents` on **both** targets |
 | 5 | failure logging | #94 | **ready** — 3 done |
 | 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done |
 | 7 | routing and retention per tier | #93 | blocked on **2b**, **4**, measured volume (2a ✅) |

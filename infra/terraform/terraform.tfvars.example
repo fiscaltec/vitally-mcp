@@ -10,11 +10,17 @@
 # secret name, `entra-oauth-client-secret` — #156 collapsed the duplicated staging variable
 # (closing #102) and removed the third, rollback-only value that used to sit alongside it.
 
-# `application_insights_connection_string` is REQUIRED as of 2026-09-25 (#147) and has no default, so
-# an adoption prompts or fails without it. Read the live value rather than inventing one — a wrong or
-# placeholder value silently stops the audit-record export, which nothing else would report:
-#   az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv
+oauth_shared_client_secret = "<Entra app client secret, Key Vault 'entra-mcp-client-secret' — BOTH targets>"
+teams_webhook_url          = "<Teams Power Automate Workflows webhook URL>"
 
-oauth_shared_client_secret             = "<Entra app client secret, Key Vault 'entra-mcp-client-secret' — BOTH targets>"
-teams_webhook_url                      = "<Teams Power Automate Workflows webhook URL>"
-application_insights_connection_string = "<read from vitally-prod-appi-uksouth; see above — BOTH targets>"
+# ⚠️ `application_insights_connection_string` is REQUIRED as of 2026-09-25 (#147) and is DELIBERATELY
+# NOT GIVEN A LINE HERE. It has no default so that Terraform prompts or fails; a placeholder sitting in
+# a copied-and-unfilled tfvars IS a default, and would be applied.
+#
+# That is not a lost export, it is a lost TRAIL. Program.cs:134 tests the value with
+# IsNullOrWhiteSpace, so any non-empty placeholder makes `exporterConfigured` true — which registers the
+# exporter (whose sends then fail) AND the console suppression at Program.cs:176. The audit records are
+# taken off stdout and cannot be delivered: they exist nowhere.
+#
+# Supply the live value by environment instead:
+#   export TF_VAR_application_insights_connection_string=$(az monitor app-insights component show #     -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv)

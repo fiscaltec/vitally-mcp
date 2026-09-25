@@ -305,7 +305,7 @@ fi
 
 ⚠️ **Fail closed, and read the guards as the check itself.** A per-revision read failure leaves `V`
 empty and would otherwise print that revision as unset, sending you to the console path on an Azure
-CLI, RBAC or transient error rather than on a real answer. `NOT ASSESSED` is not "unset" \u2014 stop and
+CLI, RBAC or transient error rather than on a real answer. `NOT ASSESSED` is not "unset" — stop and
 find out which it is. A **mixed** result counts as unset: one unsuppressed serving revision is enough
 to put full records on stdout.
 
@@ -326,8 +326,13 @@ breadcrumb line also begins `Vitally audit`, so it still matches and returns lin
 result while carrying no arguments and no record ids. An empty-handed reading of it is not evidence
 that nothing was audited.
 
-The old version of this note said the export path was "broken" and that Application Insights received
-nothing. That was true until 2026-09-17 and is worth unlearning rather than working around.
+This note has been corrected twice in a day, so be sceptical of any copy of it you have in your head.
+The original said Application Insights received nothing and the export path was broken — true until
+**2026-09-25**, when #147's exporter was switched on (Log Analytics itself started working earlier,
+on 2026-09-17, which is a different thing). The intermediate version said the path was fine but
+staging was unconfigured — true for about three hours that afternoon. Both are now wrong: **both
+targets export**, and the only question is whether the particular staging app in front of you has the
+variable.
 
 ```bash
 az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth \
