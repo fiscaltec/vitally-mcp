@@ -204,13 +204,9 @@ resource "azurerm_container_app" "staging" {
       # of going to AppEvents. That matters beyond this app: #142's ContainerAppConsoleLogs export is
       # one diagnostic setting on the CAE that production SHARES, so an unconfigured staging would
       # carry those records into the console table for the whole environment.
-      #
-      # ⚠️ Value intentionally not literal here: it carries an instrumentation key. Read it from the
-      # component at spin-up time:
-      #   cs=$(az monitor app-insights component show -a vitally-prod-appi-uksouth       #        -g vitally-prod-rg-uksouth --query connectionString -o tsv)
       env {
         name  = "ApplicationInsights__ConnectionString"
-        value = "<read from vitally-prod-appi-uksouth at spin-up; see comment above>"
+        value = var.application_insights_connection_string
       }
       env {
         name  = "Authorization__LiveGroupCheck"

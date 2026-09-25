@@ -171,6 +171,12 @@ variable "oauth_shared_client_secret" {
   sensitive   = true
 }
 
+variable "application_insights_connection_string" {
+  type        = string
+  description = "Connection string for the Application Insights component `vitally-prod-appi-uksouth`, set on BOTH Container Apps (production and staging) since 2026-09-25 (#147). Read it with `az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`. It is REQUIRED even though the component has DisableLocalAuth = true: that setting refuses the instrumentation key as a credential, while the string still names the component and its ingestion endpoint. Deliberately has no default — an adoption must supply the live value rather than plant a placeholder that would silently stop the export."
+  sensitive   = true
+}
+
 variable "teams_webhook_url" {
   type        = string
   description = "Teams Power Automate Workflows webhook URL for the secret-expiry scanner job."
