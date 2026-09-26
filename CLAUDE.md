@@ -154,16 +154,36 @@ net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring fro
 
 **That ruleset is not the whole gate.** It says nothing about Copilot, and reading "0 approvals
 required" as "nothing else to wait for" is exactly what merged #117 with three unreviewed commits —
-see the next section before merging anything.
+see *Copilot review & merge gate* below before merging anything (the section after next — a
+pre-review section now sits between).
 
 ### Review the PR yourself before Copilot does
 
 Run the `pr-review-toolkit` agents against the branch **before opening the PR**, or before the first
-re-request if it is already open. Measured on #166 (2026-09-25): four Copilot rounds had produced 8
-findings on that branch; three agents then produced **26** on the same commit, and Copilot went on to
-find 5 more. Neither reviewer subsumes the other, and running both is what ended a six-round PR.
+re-request if it is already open.
 
-| Agent | Finds | Worth running when |
+⚠️ **It does not shorten the review loop, and claiming otherwise was the first thing this section got
+wrong.** Measured on #166 (2026-09-25), all reconcilable from the API:
+
+| | |
+|---|---|
+| Copilot reviews on the PR | **11** |
+| Rounds before the agents ran (on `23c022c`) | 5, having produced 12 threads |
+| Applied from the agents | **20**, in `e80c93c` |
+| Copilot rounds *after* that | **6**, producing 6 more threads |
+
+So six rounds followed the pre-review. What it changed was the **class** of defect left: the agents
+cleared claims that had become false, wrong dates and counts, and gaps in files the diff never
+touched — none of which Copilot had raised in five rounds, because it reviews the diff. Copilot then
+kept finding a different class: what a check actually *establishes*, a command that could not run, an
+unasserted capture. Run both because they do not overlap, not because the loop gets shorter.
+
+Invoke them with `/pr-review-toolkit:review-pr`, or individually with the `Agent` tool passing
+`subagent_type`. ⚠️ **Write the `pr-review-toolkit:` prefix.** `code-reviewer` and `code-simplifier`
+exist in **two** installed plugins, and `feature-dev:code-reviewer` has **no Bash** — so it silently
+cannot run `git` or `az`, which is exactly what makes the briefs below work.
+
+| Agent (prefix `pr-review-toolkit:`) | Finds | Worth running when |
 |---|---|---|
 | `comment-analyzer` | claims that have become false, contradictions **across files**, commands that do not do what the prose says | any change touching prose, comments or runbooks |
 | `silent-failure-hunter` | fail-open shapes, swallowed errors, "could not assess" rendered as a definite answer | any change adding a shell check, a catch block or a fallback |
@@ -171,10 +191,16 @@ find 5 more. Neither reviewer subsumes the other, and running both is what ended
 
 `pr-test-analyzer` and `type-design-analyzer` apply when tests or new types are involved.
 
+⚠️ **These ship in a plugin, not in this repo** — there is no `.claude/agents/` here. A session
+without that plugin cannot follow this section, and should say so rather than skipping the step
+silently.
+
 ⚠️ **Invert `searledan/spendy`'s skip rule.** Its pre-commit checklist (`CLAUDE.md:53-107`) skips
 `/simplify` for *documentation-only* changes. That is wrong **here**: this repo's prose carries
-operational commands and live-state claims, so a documentation change is a correctness change, and
-both of the PRs that needed this most (#165, #166) were documentation-only.
+operational commands and live-state claims, so a documentation change is a correctness change. #165
+was prose-only and still needed five rounds. (#166 is often described as documentation-only and was
+not — it added a required Terraform variable and an `env` block, which is where two of its findings
+landed.)
 
 Three things determine whether the agents are worth the tokens:
 
@@ -249,7 +275,11 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
       request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
       anything. Both conditions, always.
-   2. A clean pass says *"reviewed N of N files … generated no new comments"* and adds no threads.
+   2. A clean pass reports **`Findings: None`** in the review body and adds no threads.
+      ⚠️ That string is the *current* format; the older *"reviewed N of N files … generated no new
+      comments"* wording this file used to cite appears **zero times** across all 11 reviews on #166,
+      so do not match on it. And see the merge step below: `Findings: None` alone is not sufficient
+      — twice on #166 a real defect arrived on exactly that.
    3. Work every open thread: fix and reply, or reply with the reasoning — then **resolve** it.
    4. **If you pushed code in (3), re-request and go back to (1):**
       ```bash

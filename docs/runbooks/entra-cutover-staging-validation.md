@@ -398,13 +398,27 @@ az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksou
   --type console --tail 100 | grep "Vitally audit"
 ```
 
-⚠️ **A failed `logs show` looks exactly like a quiet stream.** It needs
-`Microsoft.App/containerApps/getAuthToken/action`, which comes from a PIM-eligible role, so once an
-elevation lapses it returns `AuthorizationFailed` on **stderr** and nothing on stdout — and any
-pipeline that discards stderr, or any `wc -l`, reports zero lines. Measured 2026-09-26: several
-minutes went into reading a lapsed elevation as "the console is suppressed, as designed", which is
-the conclusion this command is most often used to reach. Check the exit status and read stderr before
-drawing any inference from an empty console.
+⚠️ **A failed `logs show` produces the same empty result as a suppressed stream, and `$?` cannot
+tell them apart.** It needs `Microsoft.App/containerApps/getAuthToken/action`, which comes from a
+PIM-eligible role, so a lapsed elevation returns `AuthorizationFailed` and no stdout. In the pipeline
+above `$?` is **grep's** status, which is `1` whether `az` failed or `az` succeeded with no matching
+lines — precisely the two cases you are trying to distinguish. Measured 2026-09-26:
+
+```
+az OK, no match   -> $? = 1   PIPESTATUS[0] = 0
+az AuthFailed     -> $? = 1   PIPESTATUS[0] = 1
+```
+
+So read **`${PIPESTATUS[0]}`**, or drop the pipe and grep a file:
+
+```bash
+az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --type console --tail 100 > /tmp/console.txt || echo "NOT ASSESSED — logs show failed; check elevation"
+grep "Vitally audit" /tmp/console.txt
+```
+
+This matters because an empty console is the conclusion this command is most often used to *reach*
+— "the audit records are suppressed, as designed" — so a failure here confirms what you were hoping
+to see.
 
 The old expectation of **"no tool arguments"** is also now obsolete by decision, not by defect: the
 2026-09-17 design deliberately records arguments so the trail can say *which customer* was accessed.
