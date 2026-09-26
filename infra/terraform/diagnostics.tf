@@ -88,5 +88,11 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #   az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
 #     --type console --tail 100
 #
+# ⚠️ A FAILED logs show looks exactly like a quiet stream. It needs
+# Microsoft.App/containerApps/getAuthToken/action, which comes from a PIM-eligible role, so a lapsed
+# elevation returns AuthorizationFailed on stderr and nothing on stdout — and a pipeline that
+# discards stderr reports zero lines. That reads as "the audit records are suppressed, as designed",
+# which is the very thing this stream is used to confirm. Check the exit status first.
+#
 # ContainerAppHTTPLogs is also deliberately absent: it carries request URLs and needs the same PII
 # scrutiny as the HttpClient categories before it can be considered.

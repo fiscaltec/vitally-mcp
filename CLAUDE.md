@@ -156,6 +156,40 @@ net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring fro
 required" as "nothing else to wait for" is exactly what merged #117 with three unreviewed commits —
 see the next section before merging anything.
 
+### Review the PR yourself before Copilot does
+
+Run the `pr-review-toolkit` agents against the branch **before opening the PR**, or before the first
+re-request if it is already open. Measured on #166 (2026-09-25): four Copilot rounds had produced 8
+findings on that branch; three agents then produced **26** on the same commit, and Copilot went on to
+find 5 more. Neither reviewer subsumes the other, and running both is what ended a six-round PR.
+
+| Agent | Finds | Worth running when |
+|---|---|---|
+| `comment-analyzer` | claims that have become false, contradictions **across files**, commands that do not do what the prose says | any change touching prose, comments or runbooks |
+| `silent-failure-hunter` | fail-open shapes, swallowed errors, "could not assess" rendered as a definite answer | any change adding a shell check, a catch block or a fallback |
+| `code-reviewer` | guideline breaches, Terraform/infra correctness, instructions that fail if followed literally | most changes |
+
+`pr-test-analyzer` and `type-design-analyzer` apply when tests or new types are involved.
+
+⚠️ **Invert `searledan/spendy`'s skip rule.** Its pre-commit checklist (`CLAUDE.md:53-107`) skips
+`/simplify` for *documentation-only* changes. That is wrong **here**: this repo's prose carries
+operational commands and live-state claims, so a documentation change is a correctness change, and
+both of the PRs that needed this most (#165, #166) were documentation-only.
+
+Three things determine whether the agents are worth the tokens:
+
+- **Brief them concretely.** Name where to look, say that prose is operational instruction, and grant
+  read-only `az`. The findings that mattered came from checking claims against git history, the live
+  Azure estate and files *outside the diff* — none of which happens unprompted.
+- **Argue with them.** They revise: one withdrew a DRY-based recommendation once told its cited
+  precedent (`verify-oauth-metadata.sh`, a CI-executed script) did not transfer to human diagnostics.
+- **Expect truncated reports.** All three cut off mid-finding and needed a follow-up `SendMessage`.
+
+⚠️ **Run every command you put in a document, with a negative control.** Six backslash-continuation
+failures in one session produced plausible text that would not run, and a fail-closed check was
+written three times before it actually failed closed — proven only by pointing it at a nonexistent
+resource. Reading the snippet never caught any of them; executing it caught all of them.
+
 ### Copilot review & merge gate
 
 Copilot reviews every PR automatically, **asynchronously**, and its reviews are always `COMMENTED` —
@@ -245,6 +279,18 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       a fresh timestamp look an hour stale on top.
 3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
    branch current, Copilot's latest review on the current head, zero unresolved threads.
+
+   ⚠️ **Read Copilot's whole review body, never the `Findings:` count.** Twice on #166 a real defect
+   arrived on a pass reporting **`Findings: None`** with the gate `CLEAN` and zero threads:
+
+   | Where it hid | What it was |
+   |---|---|
+   | The overview **headline** | *"Resolve the undefined `$RG` command"* — prose used `-g $RG` three lines above where `RG` is set, so the documented command errored with `expected one argument` |
+   | A collapsed **"Previously missed"** section | a decision tree that chose between `AppEvents` and the console on a variable that a pre-#164 image ignores entirely |
+
+   Both would have merged on the count alone. The headline also carries *generic* text — the same
+   blurb alleged "conflicting Application Insights guidance" that did not exist — so check each claim
+   rather than acting on it or dismissing it wholesale.
 
    **Pin the merge to the SHA you verified** — the hook requires it and denies without it — and
    **write the PR number and the SHA out literally**:

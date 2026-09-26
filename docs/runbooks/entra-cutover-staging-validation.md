@@ -398,6 +398,14 @@ az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksou
   --type console --tail 100 | grep "Vitally audit"
 ```
 
+⚠️ **A failed `logs show` looks exactly like a quiet stream.** It needs
+`Microsoft.App/containerApps/getAuthToken/action`, which comes from a PIM-eligible role, so once an
+elevation lapses it returns `AuthorizationFailed` on **stderr** and nothing on stdout — and any
+pipeline that discards stderr, or any `wc -l`, reports zero lines. Measured 2026-09-26: several
+minutes went into reading a lapsed elevation as "the console is suppressed, as designed", which is
+the conclusion this command is most often used to reach. Check the exit status and read stderr before
+drawing any inference from an empty console.
+
 The old expectation of **"no tool arguments"** is also now obsolete by decision, not by defect: the
 2026-09-17 design deliberately records arguments so the trail can say *which customer* was accessed.
 Do not raise their presence as a finding. An **email in the actor field** would still be one — the
