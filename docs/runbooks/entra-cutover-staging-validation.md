@@ -420,6 +420,12 @@ This matters because an empty console is the conclusion this command is most oft
 — "the audit records are suppressed, as designed" — so a failure here confirms what you were hoping
 to see.
 
+**The remedy is `/infra-pims`**, which activates the infrastructure PIM roles in one request. Naming
+it matters: the step that gets skipped is re-elevating, by someone mid-validation who has just read
+the empty console as an answer. A near-identical note sits in `infra/terraform/diagnostics.tf`
+against the *unpiped* form, where `$?` alone is sufficient — keep the two in step if you touch
+either.
+
 The old expectation of **"no tool arguments"** is also now obsolete by decision, not by defect: the
 2026-09-17 design deliberately records arguments so the trail can say *which customer* was accessed.
 Do not raise their presence as a finding. An **email in the actor field** would still be one — the

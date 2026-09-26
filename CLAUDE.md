@@ -195,21 +195,42 @@ cannot run `git` or `az`, which is exactly what makes the briefs below work.
 without that plugin cannot follow this section, and should say so rather than skipping the step
 silently.
 
-⚠️ **Invert `searledan/spendy`'s skip rule.** Its pre-commit checklist (`CLAUDE.md:53-107`) skips
-`/simplify` for *documentation-only* changes. That is wrong **here**: this repo's prose carries
-operational commands and live-state claims, so a documentation change is a correctness change. #165
-was prose-only and still needed five rounds. (#166 is often described as documentation-only and was
-not — it added a required Terraform variable and an `env` block, which is where two of its findings
-landed.)
+⚠️ **Do not skip this for a documentation-only change**, which is the opposite of what a reader
+arriving from `searledan/spendy` will expect. Its *Pre-commit Checklist* skips step 1 for
+"documentation-only changes" — but step 1 is **`/simplify`**, a reuse/quality/efficiency pass over
+*code* that also applies fixes, and spendy's checklist never mentions `pr-review-toolkit` at all. So
+there is no rule there to invert: the two are different tools, and looking for a `pr-review-toolkit`
+skip rule in spendy is a dead end.
+
+What transfers is the reasoning, and here it runs the other way. Prose in this repo is operational
+instruction — commands people run and live-state claims they act on — so a documentation change is a
+correctness change. #165 was prose-only and still took five rounds. (#166 is often described as
+documentation-only and was not: it added a required Terraform variable and an `env` block, where two
+of its findings landed.)
 
 Three things determine whether the agents are worth the tokens:
 
-- **Brief them concretely.** Name where to look, say that prose is operational instruction, and grant
-  read-only `az`. The findings that mattered came from checking claims against git history, the live
-  Azure estate and files *outside the diff* — none of which happens unprompted.
+- **Brief them concretely.** Name where to look, say that prose is operational instruction, and tell
+  them they may run read-only `az` and `git`. The findings that mattered came from checking claims
+  against git history, the live Azure estate and files *outside the diff* — none of which happens
+  unprompted. ⚠️ **Confirm your Azure elevation first** (`/infra-pims`): an agent hitting a lapsed
+  PIM gets `AuthorizationFailed` and, per the `silent-failure-hunter` row above, is liable to report
+  that as a definite negative rather than "could not assess". See the note under
+  `docs/runbooks/entra-cutover-staging-validation.md`.
 - **Argue with them.** They revise: one withdrew a DRY-based recommendation once told its cited
   precedent (`verify-oauth-metadata.sh`, a CI-executed script) did not transfer to human diagnostics.
 - **Expect truncated reports.** All three cut off mid-finding and needed a follow-up `SendMessage`.
+
+**What to do with the output.** Verify each finding against the source before acting — on #166 an
+agent's headline claim was right and its supporting count was not, and on this section every number
+an agent challenged turned out to be wrong. Fix what survives verification; where you disagree, say
+so in the PR rather than only in a reply the next session cannot see. **Stop after one pass plus one
+re-run** if the first pass changed anything substantive; a third adds little and the loop has no
+natural end, since agents will keep finding something.
+
+⚠️ **It satisfies nothing in the merge gate.** Copilot still reviews, the threads still have to be
+worked and resolved, and its latest review must still be on the current head. This is work done
+*before* that loop, not a substitute for any step in it.
 
 ⚠️ **Run every command you put in a document, with a negative control.** Six backslash-continuation
 failures in one session produced plausible text that would not run, and a fail-closed check was
