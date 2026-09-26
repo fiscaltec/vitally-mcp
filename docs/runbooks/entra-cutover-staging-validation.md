@@ -398,6 +398,54 @@ az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksou
   --type console --tail 100 | grep "Vitally audit"
 ```
 
+⚠️ **A failed `logs show` produces the same empty result as a suppressed stream, and `$?` cannot
+tell them apart.** It needs `Microsoft.App/containerApps/getAuthToken/action`, which comes from a
+PIM-eligible role, so a lapsed elevation returns `AuthorizationFailed` and no stdout. In the pipeline
+above `$?` is **grep's** status, which is `1` whether `az` failed or `az` succeeded with no matching
+lines — precisely the two cases you are trying to distinguish. Measured 2026-09-26:
+
+```
+az OK, no match   -> $? = 1   PIPESTATUS[0] = 0
+az AuthFailed     -> $? = 1   PIPESTATUS[0] = 1
+```
+
+So read **`${PIPESTATUS[0]}`**, or drop the pipe and grep a file:
+
+```bash
+if ! az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --type console --tail 100 > /tmp/console.txt; then
+  echo "NOT ASSESSED — logs show failed; run /infra-pims and retry"; exit 2
+fi
+grep "Vitally audit" /tmp/console.txt   # 0 = found, 1 = none on this app
+```
+
+⚠️ **Guard it, do not `|| echo` it.** `cmd > file || echo "..."` *absorbs* the failure — `echo`
+succeeds, so the `||` branch returns 0 — and `grep` then runs on an empty file, leaving the block's
+status as grep's. Measured:
+
+```
+|| echo form:   az fails -> 1    az OK no match -> 1    az OK match -> 0   (1 is ambiguous)
+if-guard only:  az fails -> 1    az OK no match -> 1    az OK match -> 0   (still ambiguous)
+exit 2 form:    az fails -> 2    az OK no match -> 1    az OK match -> 0   (all three distinct)
+```
+
+The middle row is worth keeping: guarding the command is **not sufficient on its own**, because the
+guard's `false` and `grep`'s no-match both yield 1. Only a distinct status separates "could not
+assess" from "assessed, nothing there" for anything reading the code rather than the message.
+
+This is the third time in this file's history that an exit-status check has been written without
+discriminating — including in the fix for the previous one. Run it against a nonexistent app before
+trusting any version of it.
+
+This matters because an empty console is the conclusion this command is most often used to *reach*
+— "the audit records are suppressed, as designed" — so a failure here confirms what you were hoping
+to see.
+
+**The remedy is `/infra-pims`**, which activates the infrastructure PIM roles in one request. Naming
+it matters: the step that gets skipped is re-elevating, by someone mid-validation who has just read
+the empty console as an answer. A near-identical note sits in `infra/terraform/diagnostics.tf`
+against the *unpiped* form, where `$?` alone is sufficient — keep the two in step if you touch
+either.
+
 The old expectation of **"no tool arguments"** is also now obsolete by decision, not by defect: the
 2026-09-17 design deliberately records arguments so the trail can say *which customer* was accessed.
 Do not raise their presence as a finding. An **email in the actor field** would still be one — the

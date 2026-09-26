@@ -88,5 +88,14 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #   az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
 #     --type console --tail 100
 #
+# ⚠️ A FAILED logs show looks exactly like a quiet container. It needs
+# Microsoft.App/containerApps/getAuthToken/action, which comes from a PIM-eligible role, so a lapsed
+# elevation returns AuthorizationFailed on stderr and nothing on stdout. Reading that as "no startup
+# failures" is the wrong conclusion in the one case you most want to be right about. The command
+# above is unpiped, so its exit status IS the answer — check it, and run /infra-pims if it is
+# non-zero. ⚠️ The copy of this note in
+# docs/runbooks/entra-cutover-staging-validation.md covers a PIPED form, where $? is grep's status
+# and cannot tell a failure from no matches; keep the two in step if you touch either.
+#
 # ContainerAppHTTPLogs is also deliberately absent: it carries request URLs and needs the same PII
 # scrutiny as the HttpClient categories before it can be considered.

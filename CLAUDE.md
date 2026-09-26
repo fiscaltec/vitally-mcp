@@ -154,7 +154,88 @@ net10.0)`, `nuget-vuln`, `image-cve`. Read the ruleset rather than inferring fro
 
 **That ruleset is not the whole gate.** It says nothing about Copilot, and reading "0 approvals
 required" as "nothing else to wait for" is exactly what merged #117 with three unreviewed commits —
-see the next section before merging anything.
+see *Copilot review & merge gate* below before merging anything (the section after next — a
+pre-review section now sits between).
+
+### Review the PR yourself before Copilot does
+
+Run the `pr-review-toolkit` agents against the branch **before opening the PR**, or before the first
+re-request if it is already open.
+
+⚠️ **It does not shorten the review loop, and claiming otherwise was the first thing this section got
+wrong.** Measured on #166 (2026-09-25), all reconcilable from the API:
+
+| | |
+|---|---|
+| Copilot reviews on the PR | **11** |
+| Rounds before the agents ran (on `23c022c`) | 5, having produced 12 threads |
+| Applied from the agents | **20**, in `e80c93c` |
+| Copilot rounds *after* that | **6**, producing 6 more threads |
+
+So six rounds followed the pre-review. What it changed was the **class** of defect left: the agents
+cleared claims that had become false, wrong dates and counts, and gaps in files the diff never
+touched — none of which Copilot had raised in five rounds, because it reviews the diff. Copilot then
+kept finding a different class: what a check actually *establishes*, a command that could not run, an
+unasserted capture. Run both because they do not overlap, not because the loop gets shorter.
+
+Invoke them with `/pr-review-toolkit:review-pr`, or individually with the `Agent` tool passing
+`subagent_type`. ⚠️ **Write the `pr-review-toolkit:` prefix.** `code-reviewer` and `code-simplifier`
+exist in **two** installed plugins, and `feature-dev:code-reviewer` has **no Bash** — so it silently
+cannot run `git` or `az`, which is exactly what makes the briefs below work.
+
+| Agent (prefix `pr-review-toolkit:`) | Finds | Worth running when |
+|---|---|---|
+| `comment-analyzer` | claims that have become false, contradictions **across files**, commands that do not do what the prose says | any change touching prose, comments or runbooks |
+| `silent-failure-hunter` | fail-open shapes, swallowed errors, "could not assess" rendered as a definite answer | any change adding a shell check, a catch block or a fallback |
+| `code-reviewer` | guideline breaches, Terraform/infra correctness, instructions that fail if followed literally | most changes |
+
+`pr-test-analyzer` and `type-design-analyzer` apply when tests or new types are involved.
+
+⚠️ **These ship in a plugin, not in this repo** — there is no `.claude/agents/` here. A session
+without that plugin cannot follow this section, and should say so rather than skipping the step
+silently.
+
+⚠️ **Do not skip this for a documentation-only change**, which is the opposite of what a reader
+arriving from `searledan/spendy` will expect. Its *Pre-commit Checklist* skips step 1 for
+"documentation-only changes" — but step 1 is **`/simplify`**, a reuse/quality/efficiency pass over
+*code* that also applies fixes, and spendy's checklist never mentions `pr-review-toolkit` at all. So
+there is no rule there to invert: the two are different tools, and looking for a `pr-review-toolkit`
+skip rule in spendy is a dead end.
+
+What transfers is the reasoning, and here it runs the other way. Prose in this repo is operational
+instruction — commands people run and live-state claims they act on — so a documentation change is a
+correctness change. #165 was prose-only and still took five rounds. (#166 is often described as
+documentation-only and was not: it added a required Terraform variable and an `env` block, where two
+of its findings landed.)
+
+Three things determine whether the agents are worth the tokens:
+
+- **Brief them concretely.** Name where to look, say that prose is operational instruction, and tell
+  them they may run read-only `az` and `git`. The findings that mattered came from checking claims
+  against git history, the live Azure estate and files *outside the diff* — none of which happens
+  unprompted. ⚠️ **Confirm your Azure elevation first** (`/infra-pims`): an agent hitting a lapsed
+  PIM gets `AuthorizationFailed` and, per the `silent-failure-hunter` row above, is liable to report
+  that as a definite negative rather than "could not assess". See the note under
+  `docs/runbooks/entra-cutover-staging-validation.md`.
+- **Argue with them.** They revise: one withdrew a DRY-based recommendation once told its cited
+  precedent (`verify-oauth-metadata.sh`, a CI-executed script) did not transfer to human diagnostics.
+- **Expect truncated reports.** All three cut off mid-finding and needed a follow-up `SendMessage`.
+
+**What to do with the output.** Verify each finding against the source before acting — on #166 an
+agent's headline claim was right and its supporting count was not, and on this section every number
+an agent challenged turned out to be wrong. Fix what survives verification; where you disagree, say
+so in the PR rather than only in a reply the next session cannot see. **Stop after one pass plus one
+re-run** if the first pass changed anything substantive; a third adds little and the loop has no
+natural end, since agents will keep finding something.
+
+⚠️ **It satisfies nothing in the merge gate.** Copilot still reviews, the threads still have to be
+worked and resolved, and its latest review must still be on the current head. This is work done
+*before* that loop, not a substitute for any step in it.
+
+⚠️ **Run every command you put in a document, with a negative control.** Six backslash-continuation
+failures in one session produced plausible text that would not run, and a fail-closed check was
+written three times before it actually failed closed — proven only by pointing it at a nonexistent
+resource. Reading the snippet never caught any of them; executing it caught all of them.
 
 ### Copilot review & merge gate
 
@@ -215,7 +296,11 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       ⚠️ **"Not pending" alone is meaningless.** Copilot dequeues itself the moment it accepts a
       request, so `reviewRequests` is empty within seconds of asking — long before it has reviewed
       anything. Both conditions, always.
-   2. A clean pass says *"reviewed N of N files … generated no new comments"* and adds no threads.
+   2. A clean pass reports **`Findings: None`** in the review body and adds no threads.
+      ⚠️ That string is the *current* format; the older *"reviewed N of N files … generated no new
+      comments"* wording this file used to cite appears **zero times** across all 11 reviews on #166,
+      so do not match on it. And see the merge step below: `Findings: None` alone is not sufficient
+      — twice on #166 a real defect arrived on exactly that.
    3. Work every open thread: fix and reply, or reply with the reasoning — then **resolve** it.
    4. **If you pushed code in (3), re-request and go back to (1):**
       ```bash
@@ -245,6 +330,18 @@ it. Two consequences, both of which have cost real time in this repo and its sib
       a fresh timestamp look an hour stale on top.
 3. Only then merge (squash), re-checking all three immediately beforehand: required checks green and
    branch current, Copilot's latest review on the current head, zero unresolved threads.
+
+   ⚠️ **Read Copilot's whole review body, never the `Findings:` count.** Twice on #166 a real defect
+   arrived on a pass reporting **`Findings: None`** with the gate `CLEAN` and zero threads:
+
+   | Where it hid | What it was |
+   |---|---|
+   | The overview **headline** | *"Resolve the undefined `$RG` command"* — prose used `-g $RG` three lines above where `RG` is set, so the documented command errored with `expected one argument` |
+   | A collapsed **"Previously missed"** section | a decision tree that chose between `AppEvents` and the console on a variable that a pre-#164 image ignores entirely |
+
+   Both would have merged on the count alone. The headline also carries *generic* text — the same
+   blurb alleged "conflicting Application Insights guidance" that did not exist — so check each claim
+   rather than acting on it or dismissing it wholesale.
 
    **Pin the merge to the SHA you verified** — the hook requires it and denies without it — and
    **write the PR number and the SHA out literally**:
