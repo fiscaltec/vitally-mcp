@@ -105,16 +105,20 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #
 # ⚠️ It is NOT per-target, and that outlives the enabling. This setting is attached to the shared
 # CAE, so it exports the console of EVERY app in the environment; there is no way to scope it to
-# production. Staging is an on-demand app and the variable does NOT survive a recreate, so once this
-# is enabled, a staging spin-up that omits ApplicationInsights__ConnectionString would carry that
-# app's unsuppressed audit records — caller object ids, tool arguments including free-text search
-# terms, record ids, against the production Vitally tenant — into the console table.
+# production, and it reaches Container Apps JOBS as well as apps: the Key Vault expiry scanner
+# (vitally-prod-secscan-uksouth) writes [scan] lines into this table with an EMPTY ContainerAppName
+# and its identity in JobName, so filtering by ContainerAppName alone silently omits it. Staging is an on-demand app and
+# the variable does NOT survive a recreate, so a staging spin-up that omits
+# ApplicationInsights__ConnectionString now carries that app's unsuppressed audit records — caller
+# object ids, tool arguments including free-text search terms, record ids, against the production
+# Vitally tenant — into the console table. Live consequence since 2026-09-26, not a future one.
 #
 # That is the same failure mode Authorization__ReadOnly already has, so the staging spin-up now has
 # two variables to set and containerapps-staging.tf carries both. Check them together.
 #
-# Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
-# category above — from the live stream, which is independent of this export path:
+# Startup failures reach stdout and so are NOT covered by the system-log category; since 2026-09-26
+# they ARE covered by the console category above, which is one of the things enabling 2b bought. The
+# live stream remains useful for watching them in real time, and is independent of this export path:
 #
 #   az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
 #     --type console --tail 100

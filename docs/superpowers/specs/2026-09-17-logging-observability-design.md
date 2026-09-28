@@ -477,7 +477,7 @@ builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLe
 ```
 
 Provider-specific, so audit records reach App Insights and **not** stdout. Without it, **phase 2b**
-exports them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad
+(live since 2026-09-26) would export them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad
 access, and a table documented as customer-data-free while carrying names and search terms. This
 suppression is precisely why 2b WAS gated on phase 4 rather than shipping with 2a. Both landed, and 2b
 went live 2026-09-26.
@@ -753,8 +753,9 @@ record that cannot tell them apart overstates its own confidence.
 identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in
 succession: the first had 2 and 3 independent; the second gated 2 on 3, which is still not enough,
 because phase 3 is noise and `HttpClient` filtering only — `AuditLogger` keeps writing object ids and
-resource paths to stdout until **phase 4** moves it to `TrackEvent` and adds the
-`ConsoleLoggerProvider` suppression.
+resource paths to stdout until **phase 4** moves it off the console and adds the
+`ConsoleLoggerProvider` suppression. (Phase 4 shipped via the Azure Monitor OpenTelemetry exporter,
+**not** `TrackEvent` as this sentence originally said — see the routing decision above.)
 
 So exporting console logs any earlier puts customer identifiers into
 `ContainerAppConsoleLogs` — the table with the **shortest** retention and the **broadest** access, and
