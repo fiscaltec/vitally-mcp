@@ -38,6 +38,12 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   # then store null. Reading the setting back from ARM is the only way to see that. Claiming it here
   # would document a property the live resource does not have.
   #
+  # RE-CONFIRMED 2026-09-26 while enabling ContainerAppConsoleLogs: the create was issued WITH
+  # --export-to-resource-specific true and its response said "Dedicated"; `diagnostic-settings show`
+  # immediately afterwards said null. The same call also returned "metrics": [] while ARM still held
+  # AllMetrics/false — so treat the create RESPONSE as untrustworthy for this resource generally, not
+  # only for the destination type, and read the setting back before recording anything from it.
+  #
   # It is implicit for this resource type — CONFIRMED 2026-09-17 against the live table once records
   # began flowing, rather than inferred from the documentation. ContainerAppSystemLogs has typed
   # columns (ContainerAppName, Reason, RevisionName, ReplicaName) with no "_s" suffixes, which is the
@@ -48,10 +54,18 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   enabled_log {
     category = "ContainerAppSystemLogs"
   }
+
+  # Added 2026-09-26 (#142). See the block below for the verification and the standing constraint.
+  enabled_log {
+    category = "ContainerAppConsoleLogs"
+  }
 }
 
-# ⚠️ ContainerAppConsoleLogs is NOT ENABLED YET — this is phase 2b. It is no longer GATED: both of
-# its preconditions were met on 2026-09-25. It is unfinished work with one constraint attached, below.
+# ✅ ContainerAppConsoleLogs was ENABLED on 2026-09-26, completing phase 2b (#142). Verified over two
+# days of real traffic rather than a smoke test: 1,172 exported rows from production carrying 230
+# breadcrumbs and ZERO full audit records, and 1,827 from staging carrying 4 and zero. The breadcrumb
+# count is the load-bearing half — it proves the export carries this application's audit-adjacent
+# output, so "zero full records" reflects suppression working rather than nothing being exported.
 #
 # It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
 # object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
@@ -59,7 +73,7 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 # then would have put that data into a table documented as customer-data-free, with the shortest
 # retention and the broadest access — the opposite of where the 2026-09-17 policy decision placed it.
 #
-# ⚠️ BOTH conditions are now MET ON BOTH TARGETS, so this is unfinished work rather than a blocked gate:
+# The two conditions it was gated on, both met on both targets before it was enabled:
 #   - #143 filters the HttpClient categories down to Warning in Program.cs — closed.
 #   - The audit reroute landed and was SWITCHED ON 2026-09-25. AuditLogger's records carry the
 #     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console
@@ -70,7 +84,7 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #     verified by reading VitallyToolCall rows back out of AppEvents; both consoles now carry only a
 #     customer-data-free breadcrumb.
 #
-# So this is unfinished work, not a blocked gate — it is simply not enabled yet.
+# Both were met before it was enabled on 2026-09-26.
 #
 # ⚠️ It is NOT per-target, and that outlives the enabling. This setting is attached to the shared
 # CAE, so it exports the console of EVERY app in the environment; there is no way to scope it to

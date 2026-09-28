@@ -46,9 +46,9 @@ resource "azurerm_application_insights" "appi" {
   #
   # ⚠️ Staging is an ON-DEMAND app, so "set on staging" describes the app that exists today and NOT
   # any future one: the variable does not survive a recreate. containerapps-staging.tf carries it for
-  # that reason. A staging app without it does not merely lose its own trail — once #142 enables
-  # ContainerAppConsoleLogs on the shared CAE, its unsuppressed console records would be exported for
-  # the whole environment.
+  # that reason. A staging app without it does not merely lose its own trail: ContainerAppConsoleLogs
+  # has been enabled on the shared CAE since 2026-09-26 (#142), so its unsuppressed console records
+  # are exported for the whole environment.
   #
   # (Three earlier versions of this comment are worth not re-deriving: the first said there was no SDK
   # package at all, true until #164; the second said the variable was set on neither target, true until

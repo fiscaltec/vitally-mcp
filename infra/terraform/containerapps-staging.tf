@@ -201,10 +201,10 @@ resource "azurerm_container_app" "staging" {
       # The SECOND variable a spin-up must set, added 2026-09-25 (#147). Without it the exporter is
       # not registered, so this app's audit records — caller object ids, tool arguments including
       # free-text search terms, and the ids of the customer records touched — stay on stdout instead
-      # of going to AppEvents. It will matter beyond this app ONCE #142 is enabled — it is not today,
-      # ContainerAppConsoleLogs being false on the cae-system-logs setting — because that export is one
-      # diagnostic setting on the CAE that production SHARES, so from then on an unconfigured staging
-      # would carry those records into the console table for the whole environment.
+      # of going to AppEvents. It matters beyond this app, because ContainerAppConsoleLogs was ENABLED
+      # on 2026-09-26 (#142): that export is one diagnostic setting on the CAE that production SHARES
+      # and cannot be scoped per app, so an unconfigured staging now carries those records into the
+      # console table for the whole environment. A live consequence, not a future one.
       env {
         name  = "ApplicationInsights__ConnectionString"
         value = var.application_insights_connection_string
