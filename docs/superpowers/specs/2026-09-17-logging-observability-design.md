@@ -1,15 +1,18 @@
 # Logging and observability — design (supersedes the 2026-08-11 spec)
 
-**Status:** partly implemented — phases 0, 1, 2a, 3 and 3a are done; 4 onwards are not. The
-*Phasing* table at the foot of this document is the current state and the map to the GitHub issues;
-it is the section to read first and the section to keep current.
+**Status:** phases 0, 1, 2a, 2b, 3, 3a and 4 are done (2b and 4 landed 2026-09-25/26); 5 onwards are
+not, and 7 is waiting only on measured volume. The *Phasing* table at the foot of this document is
+the current state and the map to the GitHub issues; it is the section to read first and the section
+to keep current. ⚠️ Prose above that table describes the position **as designed on 2026-09-17** and
+is not a status source — several statements in it were true then and are not now.
 
 **Supersedes** `2026-08-11-observability-design.md`, which is kept as a dated artefact. That spec's
 shape was right in outline and wrong in two load-bearing ways, both found on 2026-09-17 once its own
 Phase 1 made the workspace readable for the first time:
 
-- it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server has ever
-  reached Log Analytics.**
+- it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server had ever
+  reached Log Analytics** — true when this was written; the first records arrived later that day, and
+  audit records reached `AppEvents` on 2026-09-25.
 - it scoped the work as observability improvement. It is a compliance gap, and precisely: **reads
   were never emitted** (`IncludeReads` was `false` on every target, #139), while **mutations and
   denials were emitted and then never ingested**. Two independent failures with the same effect —
@@ -490,7 +493,11 @@ rather than by reading the configuration.
 ### Use a diagnostic setting, not the shared-key shipper
 
 The CAE exposes diagnostic-setting categories — `ContainerAppConsoleLogs`, `ContainerAppSystemLogs`,
-`ContainerAppHTTPLogs`, `AllMetrics` — and **none is configured**.
+`ContainerAppHTTPLogs`, `AllMetrics` — and **as of 2026-09-17, when this was written, none was
+configured**. That is the starting state this design reasons from; it is no longer the live state.
+`cae-system-logs` now enables `ContainerAppSystemLogs` (2a, 2026-09-17) and `ContainerAppConsoleLogs`
+(2b, 2026-09-26). `ContainerAppHTTPLogs` and `AllMetrics` remain off — the former deliberately, since
+it carries request URLs and needs its own PII review.
 
 Microsoft's private-link documentation is explicit:
 
