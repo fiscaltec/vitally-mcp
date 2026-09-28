@@ -61,11 +61,14 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   }
 }
 
-# ✅ ContainerAppConsoleLogs was ENABLED on 2026-09-26, completing phase 2b (#142). Verified over two
-# days of real traffic rather than a smoke test: 1,172 exported rows from production carrying 230
-# breadcrumbs and ZERO full audit records, and 1,827 from staging carrying 4 and zero. The breadcrumb
-# count is the load-bearing half — it proves the export carries this application's audit-adjacent
-# output, so "zero full records" reflects suppression working rather than nothing being exported.
+# ✅ ContainerAppConsoleLogs was ENABLED on 2026-09-26T09:20Z, completing phase 2b (#142).
+#
+# Verified across everything exported since, a window anyone can reproduce rather than a relative one:
+#   ContainerAppConsoleLogs | where TimeGenerated > datetime(2026-09-26T09:20:00Z)
+#     3,394 rows, 308 breadcrumbs, ZERO full audit records
+#     (production 1,510 / 304 / 0   staging 1,881 / 4 / 0)
+# The breadcrumb count is the load-bearing half: zero full records is ALSO what a broken export looks
+# like, so it means nothing until some of this application's own output is present in the table.
 #
 # It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
 # object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
