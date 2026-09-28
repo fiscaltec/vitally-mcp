@@ -412,11 +412,18 @@ az AuthFailed     -> $? = 1   PIPESTATUS[0] = 1
 So read **`${PIPESTATUS[0]}`**, or drop the pipe and grep a file:
 
 ```bash
-if ! az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --type console --tail 100 > /tmp/console.txt; then
+CONSOLE=$(mktemp); trap 'rm -f "$CONSOLE"' EXIT
+if ! az containerapp logs show -n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth --type console --tail 100 > "$CONSOLE"; then
   echo "NOT ASSESSED — logs show failed; run /infra-pims and retry"; exit 2
 fi
-grep "Vitally audit" /tmp/console.txt   # 0 = found, 1 = none on this app
+grep "Vitally audit" "$CONSOLE"   # 0 = found, 1 = none on this app
 ```
+
+⚠️ **`mktemp`, not a fixed path.** On the branch this block is written for — an app whose records
+are *not* suppressed — the file it captures holds full audit records: object ids, tool arguments
+including search terms, and touched record ids. A predictable `/tmp/console.txt` leaves that behind
+after the check, collides with a concurrent validation, and can be pre-created as a symlink. The
+`trap` removes it on every exit path, including the `exit 2` above.
 
 ⚠️ **Guard it, do not `|| echo` it.** `cmd > file || echo "..."` *absorbs* the failure — `echo`
 succeeds, so the `||` branch returns 0 — and `grep` then runs on an empty file, leaving the block's

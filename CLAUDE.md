@@ -219,7 +219,8 @@ Three things determine whether the agents are worth the tokens:
   `docs/runbooks/entra-cutover-staging-validation.md`.
 - **Argue with them.** They revise: one withdrew a DRY-based recommendation once told its cited
   precedent (`verify-oauth-metadata.sh`, a CI-executed script) did not transfer to human diagnostics.
-- **Expect truncated reports.** All three cut off mid-finding and needed a follow-up `SendMessage`.
+- **Expect truncated reports.** Every agent run so far has cut off mid-finding and needed a
+  follow-up `SendMessage` — three of three on #166, two of two on this change.
 
 **What to do with the output.** Verify each finding against the source before acting — on #166 an
 agent's headline claim was right and its supporting count was not, and on this section every number
