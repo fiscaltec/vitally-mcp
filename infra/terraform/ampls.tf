@@ -58,10 +58,11 @@ resource "azurerm_monitor_private_link_scope" "ampls" {
   # Opened 2026-09-17 so operators can query at all.
   #
   # ⚠️ Do NOT read this as "ingestion is private". An earlier version of this comment said so and was
-  # wrong twice over: this mode governs traffic FROM private-endpoint networks, not public ingress
-  # (see above), and monitoring.tf currently has internet_ingestion_enabled = true on the workspace —
-  # temporarily, pending the re-lock in #142. The workspace's public ingestion endpoint is reachable
-  # today. See monitoring.tf and docs/superpowers/specs/2026-09-17-logging-observability-design.md.
+  # wrong: this mode governs traffic FROM private-endpoint networks, not public ingress (see above).
+  # The temporary opening it also described is over — #142's re-lock was applied, monitoring.tf now
+  # sets internet_ingestion_enabled = false, and the live workspace reports
+  # publicNetworkAccessForIngestion: Disabled (verified 2026-09-28). Query access stays Enabled, a
+  # separate decision recorded in the design doc.
   query_access_mode = "Open"
 }
 

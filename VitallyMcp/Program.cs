@@ -55,8 +55,8 @@ builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 // table keeps. The saving is real and financially irrelevant.
 //
 // They are kept for READABILITY of the live stream. `az containerapp logs show --type console` is
-// how a running container is debugged, and it is the only way to see startup failures until phase 2b
-// of #142 exports console logs. Two-thirds chatter makes that materially worse — hunting audit
+// how a running container is debugged, and it was the only way to see startup failures until phase 2b
+// of #142 began exporting console logs on 2026-09-26. Two-thirds chatter makes that materially worse — hunting audit
 // records in an unfiltered stream is what prompted measuring this in the first place.
 //
 // Sampling caveat, so the figures are not over-trusted: 4.2 minutes on a quiet morning with 5 audit
@@ -166,9 +166,9 @@ if (exporterConfigured)
     builder.Services.AddSingleton<QueryStringRedactingProcessor>();
 
     // Take the audit records OFF stdout, now that they have somewhere else to go. This is what
-    // #142's ContainerAppConsoleLogs export is gated on: the console stream is the table with the
-    // shortest retention and the broadest access, and these records carry customer identifiers and
-    // search terms.
+    // #142's ContainerAppConsoleLogs export WAS gated on, and that export went live on 2026-09-26 —
+    // so this filter is now the only thing keeping customer identifiers and search terms out of a
+    // table with the shortest retention and the broadest access. It is load-bearing, not tidying.
     //
     // Provider-specific, and deliberately inside this branch: with no exporter configured there is
     // nowhere else for a record to go, so suppressing the console locally would discard the audit
