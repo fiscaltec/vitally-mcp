@@ -1,15 +1,18 @@
 # Logging and observability — design (supersedes the 2026-08-11 spec)
 
-**Status:** partly implemented — phases 0, 1, 2a, 3 and 3a are done; 4 onwards are not. The
-*Phasing* table at the foot of this document is the current state and the map to the GitHub issues;
-it is the section to read first and the section to keep current.
+**Status:** phases 0, 1, 2a, 2b, 3, 3a and 4 are done (2b and 4 landed 2026-09-25/26); 5 onwards are
+not, and 7 is waiting only on measured volume. The *Phasing* table at the foot of this document is
+the current state and the map to the GitHub issues; it is the section to read first and the section
+to keep current. ⚠️ Prose above that table describes the position **as designed on 2026-09-17** and
+is not a status source — several statements in it were true then and are not now.
 
 **Supersedes** `2026-08-11-observability-design.md`, which is kept as a dated artefact. That spec's
 shape was right in outline and wrong in two load-bearing ways, both found on 2026-09-17 once its own
 Phase 1 made the workspace readable for the first time:
 
-- it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server has ever
-  reached Log Analytics.**
+- it treated the telemetry pipeline as *working but unreadable*. **Nothing from this server had ever
+  reached Log Analytics** — true when this was written; the first records arrived later that day, and
+  audit records reached `AppEvents` on 2026-09-25.
 - it scoped the work as observability improvement. It is a compliance gap, and precisely: **reads
   were never emitted** (`IncludeReads` was `false` on every target, #139), while **mutations and
   denials were emitted and then never ingested**. Two independent failures with the same effect —
@@ -394,7 +397,7 @@ It does three jobs at once:
   an earlier draft wrongly made it one: unfiltered the stream runs ~9.1 MB/day, so these filters save
   ~2.24 GB/year, which is single-figure pounds — and per-table retention lets the noise expire at 30
   days regardless. The justification is **readability of the live stream**, which is how a running
-  container is debugged and the only way to see startup failures until phase 2b
+  container is debugged, and was the only way to see startup failures until phase 2b landed on 2026-09-26
 - **constrains `System.Net.Http.HttpClient.*`**, closing the query-string exposure above
 - makes levels reviewable in source rather than implicit in framework defaults
 
@@ -477,9 +480,10 @@ builder.Logging.AddFilter<ConsoleLoggerProvider>("VitallyMcp.AuditLogger", LogLe
 ```
 
 Provider-specific, so audit records reach App Insights and **not** stdout. Without it, **phase 2b**
-exports them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad
+(live since 2026-09-26) would export them to `ContainerAppConsoleLogs` regardless of where else they go — short retention, broad
 access, and a table documented as customer-data-free while carrying names and search terms. This
-suppression is precisely why 2b is gated on phase 4 rather than shipping with 2a.
+suppression is precisely why 2b WAS gated on phase 4 rather than shipping with 2a. Both landed, and 2b
+went live 2026-09-26.
 
 Verify it by sampling the console stream after deploy and confirming no `Vitally audit:` line appears,
 rather than by reading the configuration.
@@ -489,7 +493,11 @@ rather than by reading the configuration.
 ### Use a diagnostic setting, not the shared-key shipper
 
 The CAE exposes diagnostic-setting categories — `ContainerAppConsoleLogs`, `ContainerAppSystemLogs`,
-`ContainerAppHTTPLogs`, `AllMetrics` — and **none is configured**.
+`ContainerAppHTTPLogs`, `AllMetrics` — and **as of 2026-09-17, when this was written, none was
+configured**. That is the starting state this design reasons from; it is no longer the live state.
+`cae-system-logs` now enables `ContainerAppSystemLogs` (2a, 2026-09-17) and `ContainerAppConsoleLogs`
+(2b, 2026-09-26). `ContainerAppHTTPLogs` and `AllMetrics` remain off — the former deliberately, since
+it carries request URLs and needs its own PII review.
 
 Microsoft's private-link documentation is explicit:
 
@@ -527,13 +535,16 @@ discards logs quietly.
    - **2a, immediately: `ContainerAppSystemLogs`.** Platform events — crashes, OOM kills, scaling,
      revision changes. No customer data, no dependency on a code change, and it covers the most
      acute gap: today the app can die leaving no record anywhere. Low volume.
-   - **2b, gated on phases 3 and 4: `ContainerAppConsoleLogs`.** Only once `AuditLogger` has moved
-     to `TrackEvent` and console suppression is in place, or this exports the customer identifiers
+   - **2b, was gated on phases 3 and 4: `ContainerAppConsoleLogs`.** ✅ Enabled 2026-09-26. Only once
+     `AuditLogger` had moved off the console (via the OpenTelemetry exporter, NOT `TrackEvent` as this
+     line originally said) and suppression was in place, or this would export the customer identifiers
      the data map says this table must not hold.
 
    Note that neither alone covers everything: a `StartupGuards` failure throws and writes to
-   *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Until 2b
-   lands, read startup failures from the live stream, which is independent of the export path:
+   *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Since 2b
+   landed on 2026-09-26 those startup failures ARE exported, and can be queried from
+   `ContainerAppConsoleLogs` alongside everything else. The live stream below remains the way to watch
+   them in **real time** — it is independent of the export path, and does not wait on ingestion:
 
    ```bash
    az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
@@ -717,12 +728,12 @@ was actually done, so the collision is left in place and flagged rather than tid
 | 1 | audit reads by default | #139 / PR #140 | ✅ **done** 2026-09-17 |
 | 3 | logging configuration: noise + `HttpClient` PII | #143 | ✅ **done** 2026-09-21 |
 | **2a** | diagnostic setting for **`ContainerAppSystemLogs` only**; verify arrival; re-lock ingestion | #142 | ✅ **done** 2026-09-17 — and **still delivering**: 868 rows spanning 2026-09-17T18:25:09Z → 2026-09-22T11:38:18Z, re-checked 2026-09-22 |
-| **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | **ready** — 3 ✅ and 4 ✅ as of 2026-09-25. Not enabled yet, and NOT per-target: the setting is on the CAE both apps share, so a staging spin-up without `ApplicationInsights__ConnectionString` would export its unsuppressed console |
+| **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | ✅ **done** 2026-09-26 — all-time: production 1,510 rows / **152 breadcrumbs / zero** full audit records; staging 1,911 / 2 / zero. Staging's 2 are one call at enabling time, so its assurance rests on the direct console sample instead. Lands in the resource-specific table, so per-table retention is available to #93. ⚠️ NOT per-target and that outlives the enabling: the setting is on the CAE both apps share, so a staging spin-up without `ApplicationInsights__ConnectionString` exports that app's unsuppressed records |
 | **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
 | 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | ✅ **done** 2026-09-25 — switched on and verified by reading `VitallyToolCall` rows back out of `AppEvents` on **both** targets |
 | 5 | failure logging | #94 | **ready** — 3 done |
 | 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done |
-| 7 | routing and retention per tier | #93 | blocked on **2b**, **4**, measured volume (2a ✅) |
+| 7 | routing and retention per tier | #93 | **2b ✅ and 4 ✅** as of 2026-09-26 — remaining dependency is measured volume. Both categories land resource-specific, so per-table retention is available |
 | 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
 
 **3a in one line:** humans pass — 4 named IT administrators with elevated access PIM-gated, plus 2
@@ -747,12 +758,13 @@ served **stale** — `GraphGroupPermissionResolver` serves a retained set for up
 `LiveGroupStaleSeconds` when Graph fails, so a stale tier is a weaker claim than a fresh one and a
 record that cannot tell them apart overstates its own confidence.
 
-⚠️ **Console export is split out as 2b and gated, because the console stream carries customer
+⚠️ **Console export was split out as 2b and gated (✅ enabled 2026-09-26), because the console stream carried customer
 identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in
 succession: the first had 2 and 3 independent; the second gated 2 on 3, which is still not enough,
 because phase 3 is noise and `HttpClient` filtering only — `AuditLogger` keeps writing object ids and
-resource paths to stdout until **phase 4** moves it to `TrackEvent` and adds the
-`ConsoleLoggerProvider` suppression.
+resource paths to stdout until **phase 4** moves it off the console and adds the
+`ConsoleLoggerProvider` suppression. (Phase 4 shipped via the Azure Monitor OpenTelemetry exporter,
+**not** `TrackEvent` as this sentence originally said — see the routing decision above.)
 
 So exporting console logs any earlier puts customer identifiers into
 `ContainerAppConsoleLogs` — the table with the **shortest** retention and the **broadest** access, and

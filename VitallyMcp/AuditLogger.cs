@@ -66,7 +66,7 @@ namespace VitallyMcp;
 /// there is nothing to export to, the console suppression is not registered either, and these records
 /// stay on stdout exactly as before — the state of any deployment that has not set it, including a
 /// staging app stood up without it. Both targets were switched on 2026-09-25, so #142's console-log
-/// export is no longer gated on the audit data; it is simply not enabled yet. ⚠️ Its diagnostic
+/// export was un-gated and went LIVE on 2026-09-26. ⚠️ Its diagnostic
 /// setting lives on the CAE that both targets share and cannot be scoped per app, so a later staging
 /// spin-up that omits the connection string would have its unsuppressed console exported with it.
 /// </para>
@@ -385,8 +385,9 @@ public class AuditLogger
     /// <para>
     /// ⚠️ <b>Callers must pass nothing that identifies a customer.</b> Not the resource path, which
     /// carries record ids; not arguments; not returned ids. The console table is the one the data map
-    /// declares customer-data-free and #142's export is gated on that staying true — so the
-    /// breadcrumb proves a call happened and joins it to the full record, and stops there.
+    /// declares customer-data-free, and since 2026-09-26 #142 EXPORTS it — so anything added here
+    /// reaches that table for real, not hypothetically. The breadcrumb proves a call happened and
+    /// joins it to the full record, and stops there.
     /// </para>
     /// </remarks>
     private void Breadcrumb(ClaimsPrincipal? user, string detailTemplate, params object?[] detail)
@@ -425,8 +426,8 @@ public class AuditLogger
     /// <b>The tool name is caller-supplied.</b> It arrives in the caller's own <c>tools/call</c>
     /// params and the audit filter runs even for a tool that does not exist, so a client can name one
     /// anything — including a customer's name or record id. The console stream is the one the data map
-    /// declares customer-data-free and #142's export is gated on, so the console copy is restricted to
-    /// names this server actually registered.
+    /// declares customer-data-free and which #142 has EXPORTED since 2026-09-26, so the console copy
+    /// is restricted to names this server actually registered.
     /// <para>
     /// ⚠️ <b>Checked against the registered set, not a shape.</b> An earlier version matched
     /// <c>^[A-Za-z][A-Za-z0-9_]{0,63}$</c>, which does exclude an email and a hyphenated id — but

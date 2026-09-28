@@ -506,7 +506,8 @@ public class LoggingFilterTests
     {
         // Program.cs suppresses "VitallyMcp.AuditLogger" from the ConsoleLoggerProvider once the
         // Azure Monitor exporter is configured, which is what #142's ContainerAppConsoleLogs export
-        // is gated on. That filter is a STRING: rename the class or move its namespace and the
+        // was gated on — and that export has been LIVE since 2026-09-26, so this is no longer a
+        // precondition but the active control. That filter is a STRING: rename the class or move its namespace and the
         // suppression stops matching, silently, and customer identifiers go back to the console
         // stream — the table with the shortest retention and the broadest access.
         //

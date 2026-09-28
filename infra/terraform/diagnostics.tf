@@ -38,6 +38,12 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   # then store null. Reading the setting back from ARM is the only way to see that. Claiming it here
   # would document a property the live resource does not have.
   #
+  # RE-CONFIRMED 2026-09-26 while enabling ContainerAppConsoleLogs: the create was issued WITH
+  # --export-to-resource-specific true and its response said "Dedicated"; `diagnostic-settings show`
+  # immediately afterwards said null. The same call also returned "metrics": [] while ARM still held
+  # AllMetrics/false — so treat the create RESPONSE as untrustworthy for this resource generally, not
+  # only for the destination type, and read the setting back before recording anything from it.
+  #
   # It is implicit for this resource type — CONFIRMED 2026-09-17 against the live table once records
   # began flowing, rather than inferred from the documentation. ContainerAppSystemLogs has typed
   # columns (ContainerAppName, Reason, RevisionName, ReplicaName) with no "_s" suffixes, which is the
@@ -48,10 +54,35 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
   enabled_log {
     category = "ContainerAppSystemLogs"
   }
+
+  # Added 2026-09-26 (#142). See the block below for the verification and the standing constraint.
+  enabled_log {
+    category = "ContainerAppConsoleLogs"
+  }
 }
 
-# ⚠️ ContainerAppConsoleLogs is NOT ENABLED YET — this is phase 2b. It is no longer GATED: both of
-# its preconditions were met on 2026-09-25. It is unfinished work with one constraint attached, below.
+# ✅ ContainerAppConsoleLogs was ENABLED on 2026-09-26T09:20Z, completing phase 2b (#142).
+#
+# Verified all-time, over the whole table:
+#   ContainerAppConsoleLogs
+#     | summarize breadcrumbs = countif(Log contains 'Vitally audit breadcrumb:'),
+#                 fullRecords = countif(Log contains 'VitallyMcp.AuditLogger'), rows = count()
+#       by ContainerAppName
+#   production 1,510 rows / 152 breadcrumbs / 0 full records
+#   staging    1,911 rows /   2 breadcrumbs / 0 full records
+#
+# ⚠️ Count the MESSAGES, not rows matching 'breadcrumb'. The console logger writes each entry as two
+# rows — a header (info: VitallyMcp.AuditBreadcrumb[0]) and the indented message — and both match a
+# naive 'breadcrumb' filter, so it reports exactly double. An earlier version of this comment said
+# "308 breadcrumbs" for what is 154.
+#
+# The breadcrumb count is the load-bearing half: zero full records is ALSO what a broken export looks
+# like, so it means nothing until some of this application's own output is present in the table. That
+# inference is strong for PRODUCTION (152 breadcrumbs, 0 full records) and WEAK for staging, whose 2
+# breadcrumbs are one tool call made at enabling time. Staging's suppression rests instead on a direct
+# console sample taken 2026-09-26 (0 AuditLogger lines, 2 breadcrumbs, with traffic driven first), and
+# on both apps running the same image with the same conditional. Re-check staging here once it has
+# carried real traffic.
 #
 # It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
 # object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
@@ -59,7 +90,7 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 # then would have put that data into a table documented as customer-data-free, with the shortest
 # retention and the broadest access — the opposite of where the 2026-09-17 policy decision placed it.
 #
-# ⚠️ BOTH conditions are now MET ON BOTH TARGETS, so this is unfinished work rather than a blocked gate:
+# The two conditions it was gated on, both met on both targets before it was enabled:
 #   - #143 filters the HttpClient categories down to Warning in Program.cs — closed.
 #   - The audit reroute landed and was SWITCHED ON 2026-09-25. AuditLogger's records carry the
 #     microsoft.custom_event.name attribute and Program.cs suppresses the category from the console
@@ -70,20 +101,24 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 #     verified by reading VitallyToolCall rows back out of AppEvents; both consoles now carry only a
 #     customer-data-free breadcrumb.
 #
-# So this is unfinished work, not a blocked gate — it is simply not enabled yet.
+# Both were met before it was enabled on 2026-09-26.
 #
 # ⚠️ It is NOT per-target, and that outlives the enabling. This setting is attached to the shared
 # CAE, so it exports the console of EVERY app in the environment; there is no way to scope it to
-# production. Staging is an on-demand app and the variable does NOT survive a recreate, so once this
-# is enabled, a staging spin-up that omits ApplicationInsights__ConnectionString would carry that
-# app's unsuppressed audit records — caller object ids, tool arguments including free-text search
-# terms, record ids, against the production Vitally tenant — into the console table.
+# production, and it reaches Container Apps JOBS as well as apps: the Key Vault expiry scanner
+# (vitally-prod-secscan-uksouth) writes [scan] lines into this table with an EMPTY ContainerAppName
+# and its identity in JobName, so filtering by ContainerAppName alone silently omits it. Staging is an on-demand app and
+# the variable does NOT survive a recreate, so a staging spin-up that omits
+# ApplicationInsights__ConnectionString now carries that app's unsuppressed audit records — caller
+# object ids, tool arguments including free-text search terms, record ids, against the production
+# Vitally tenant — into the console table. Live consequence since 2026-09-26, not a future one.
 #
 # That is the same failure mode Authorization__ReadOnly already has, so the staging spin-up now has
 # two variables to set and containerapps-staging.tf carries both. Check them together.
 #
-# Until then, read startup failures — which reach stdout and so are NOT covered by the system-log
-# category above — from the live stream, which is independent of this export path:
+# Startup failures reach stdout and so are NOT covered by the system-log category; since 2026-09-26
+# they ARE covered by the console category above, which is one of the things enabling 2b bought. The
+# live stream remains useful for watching them in real time, and is independent of this export path:
 #
 #   az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
 #     --type console --tail 100

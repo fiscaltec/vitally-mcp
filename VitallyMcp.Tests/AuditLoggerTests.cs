@@ -546,7 +546,7 @@ public class AuditLoggerTests
         // The breadcrumb is the degraded form. It carries who, what and the correlation id — enough
         // to prove a call happened and to join it to the upstream records — and deliberately NO
         // arguments and NO record ids, because the console table is the one the data map declares
-        // customer-data-free and #142's export is gated on that staying true.
+        // customer-data-free and which #142 has exported since 2026-09-26.
         var factory = new CapturingFactory();
         var logger = new CapturingLogger<AuditLogger>();
         var accessor = new HttpContextAccessor
@@ -701,7 +701,7 @@ public class AuditLoggerTests
         // tool that does not exist — so a client can name one anything. Flatten stops it breaking the
         // line; it does nothing about the CONTENT. A tool named after a customer would therefore put
         // that identifier on the console stream, which is the one the data map declares
-        // customer-data-free and #142's export is gated on.
+        // customer-data-free and which #142 has exported since 2026-09-26.
         //
         // The full record in AppEvents keeps the name verbatim, where customer data is permitted and
         // access-controlled. Only the console copy is restricted.
