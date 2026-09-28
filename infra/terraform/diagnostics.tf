@@ -63,12 +63,26 @@ resource "azurerm_monitor_diagnostic_setting" "cae_system_logs" {
 
 # ✅ ContainerAppConsoleLogs was ENABLED on 2026-09-26T09:20Z, completing phase 2b (#142).
 #
-# Verified across everything exported since, a window anyone can reproduce rather than a relative one:
-#   ContainerAppConsoleLogs | where TimeGenerated > datetime(2026-09-26T09:20:00Z)
-#     3,394 rows, 308 breadcrumbs, ZERO full audit records
-#     (production 1,510 / 304 / 0   staging 1,881 / 4 / 0)
+# Verified all-time, over the whole table:
+#   ContainerAppConsoleLogs
+#     | summarize breadcrumbs = countif(Log contains 'Vitally audit breadcrumb:'),
+#                 fullRecords = countif(Log contains 'VitallyMcp.AuditLogger'), rows = count()
+#       by ContainerAppName
+#   production 1,510 rows / 152 breadcrumbs / 0 full records
+#   staging    1,911 rows /   2 breadcrumbs / 0 full records
+#
+# ⚠️ Count the MESSAGES, not rows matching 'breadcrumb'. The console logger writes each entry as two
+# rows — a header (info: VitallyMcp.AuditBreadcrumb[0]) and the indented message — and both match a
+# naive 'breadcrumb' filter, so it reports exactly double. An earlier version of this comment said
+# "308 breadcrumbs" for what is 154.
+#
 # The breadcrumb count is the load-bearing half: zero full records is ALSO what a broken export looks
-# like, so it means nothing until some of this application's own output is present in the table.
+# like, so it means nothing until some of this application's own output is present in the table. That
+# inference is strong for PRODUCTION (152 breadcrumbs, 0 full records) and WEAK for staging, whose 2
+# breadcrumbs are one tool call made at enabling time. Staging's suppression rests instead on a direct
+# console sample taken 2026-09-26 (0 AuditLogger lines, 2 breadcrumbs, with traffic driven first), and
+# on both apps running the same image with the same conditional. Re-check staging here once it has
+# carried real traffic.
 #
 # It was gated on the console stream carrying customer identifiers: AuditLogger wrote the caller's
 # object id and the Vitally resource path to stdout, and System.Net.Http.HttpClient logged outbound
