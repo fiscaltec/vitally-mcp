@@ -534,8 +534,10 @@ discards logs quietly.
      the data map says this table must not hold.
 
    Note that neither alone covers everything: a `StartupGuards` failure throws and writes to
-   *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Before 2b
-   lands, read startup failures from the live stream, which is independent of the export path:
+   *stdout*, so it lands in **console** logs, while a crash or OOM is a **platform** event. Since 2b
+   landed on 2026-09-26 those startup failures ARE exported, and can be queried from
+   `ContainerAppConsoleLogs` alongside everything else. The live stream below remains the way to watch
+   them in **real time** — it is independent of the export path, and does not wait on ingestion:
 
    ```bash
    az containerapp logs show -n vitally-prod-ca-uksouth -g vitally-prod-rg-uksouth \
