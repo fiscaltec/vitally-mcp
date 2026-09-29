@@ -200,7 +200,7 @@ Do all three, in this order, and understand what each does *not* cover:
 1. **Remove the correct group membership** (per the table above) — this is the control that actually
    stops them using the server, normally within ~60s.
 2. **Disable the Entra account** — stops new sign-ins and refreshes.
-3. **Revoke their sessions** — same effect, at whichever provider is live for that target, or both.
+3. **Revoke their Entra sessions** — same effect. Entra is the only identity provider on both targets.
 
 **None of these invalidates an access token they already hold.** This server validates bearer tokens
 locally against the provider's signing keys, so an issued token remains valid until it expires
@@ -240,13 +240,18 @@ az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analyti
 ```
 
 ⚠️ **An empty result is only "no stale serves" if the period you care about is covered.** It is
-also exactly what a window of `unknown` records produces. Check coverage first — a period with no
-`True`/`False` rows cannot answer the question either way:
+also exactly what a window of `unknown` records produces — and what a gap in the export produces,
+which is not far-fetched: a Graph outage and an Azure Monitor ingestion problem can be the same
+incident. Check coverage over the incident window first, in 15-minute bins, so a gap shows as a
+missing bin rather than disappearing inside a min/max range. A bin with no `True`/`False` rows cannot
+answer the question either way:
 
 ```bash
 az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
-  "AppEvents | where Name == 'VitallyToolCall' | summarize records=count(), earliest=min(TimeGenerated), latest=max(TimeGenerated) by stale=tostring(Properties.AuditTierServedStale), AppRoleName"
+  "AppEvents | where Name == 'VitallyToolCall' and TimeGenerated between (datetime(2026-09-29T00:00:00Z) .. datetime(2026-09-29T23:59:59Z)) | summarize records=count() by bin(TimeGenerated, 15m), stale=tostring(Properties.AuditTierServedStale), AppRoleName | order by TimeGenerated asc"
 ```
+
+Replace the two `datetime(...)` values with the incident window, in UTC.
 
 ## How it's set up (in brief)
 

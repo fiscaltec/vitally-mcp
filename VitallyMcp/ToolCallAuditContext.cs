@@ -114,8 +114,8 @@ public sealed class ToolCallAuditContext
         lock (_gate)
         {
             // First write wins. The authorizer runs several times per tool call — the SDK's admission
-            // check, then the VitallyService backstop for every upstream request, and a composite tool
-            // issues several. Last-write-wins would report whichever check ran last, so a membership
+            // check (which SDK 2.2.0 evaluates twice per tools/call), then the VitallyService backstop
+            // for every upstream request, and a composite tool issues several. Last-write-wins would report whichever check ran last, so a membership
             // change mid-call, or a later lookup served stale, would put a tier in the record that did
             // not admit the call. The invariant is "the tier the decision was made against", and the
             // decision is the first one.

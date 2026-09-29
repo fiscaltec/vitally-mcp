@@ -100,13 +100,13 @@ public class ToolCallAuditCompositionTests
     [Fact]
     public async Task TheRecordKeepsTheAdmissionDecisionsStaleness_WhenALaterCheckInTheSameCallIsServedStale()
     {
-        // The scenario above gives the admission check and the VitallyService backstop the SAME
-        // answer in every phase, so it cannot tell "the admission decision's staleness reached the
-        // record" from "whichever check ran last did" — or from the handler's authorizer writing into
-        // a different scope's context than the one the filter reads. This splits them inside one call:
-        // Graph answers the admission lookup, then goes down while the fresh window lapses, so the
-        // backstop is served the retained copy. The record must say False — the admission tier was
-        // confirmed. Last-write-wins, a scope split, or a dropped admission write each record True.
+        // The scenario above gives every check in a call the SAME answer, so it cannot tell "the
+        // admitting check's staleness reached the record" from "whichever check ran last did" — or
+        // from the handler's authorizer writing into a different scope's context than the one the
+        // filter reads. This splits them inside one call: Graph answers the first check, then goes
+        // down while the fresh window lapses, so every later check is served the retained copy. The
+        // record must say False. Last-write-wins, a scope split, or a dropped first write each
+        // record True.
         using var harness = new Harness(TwoOrganisations);
         harness.Graph.AfterRespond = () =>
         {
@@ -116,14 +116,23 @@ public class ToolCallAuditCompositionTests
         };
 
         var result = await harness.CallToolAsync("List_organizations");
-        result.Should().NotContain("\"error\"", "the backstop is admitted on the retained tier");
 
-        harness.Graph.FailedResponses.Should().BeGreaterThan(0,
-            "the backstop must actually have asked Graph and been refused, or this proves nothing");
+        // First, so a broken premise fails with its real cause rather than as a misleading denial
+        // below. Each lookup is ONE request, because only ReaderGroup is configured. And there are
+        // three lookups, not two — observed, not assumed: SDK 2.2.0 evaluates the [Authorize] policy
+        // twice per tools/call (ConfigureCallToolFilter, then ConfigureOrdinaryCallToolFilter) before
+        // the VitallyService backstop runs. So only the FIRST admission check is answered by Graph;
+        // the second and the backstop are both served the retained copy.
+        harness.Graph.Requests.Should().Be(3,
+            "two SDK admission checks and one backstop, one Graph request each");
+        harness.Graph.FailedResponses.Should().Be(2,
+            "only the first check was answered, or the split this test relies on did not happen");
+        result.Should().NotContain("\"error\"", "the later checks are admitted on the retained tier");
         harness.AuditRecords.Should()
             .ContainSingle(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
             .Subject.Message.Should().Contain("tierStale=False",
-                "the record documents the decision that admitted the call, and Graph confirmed that one");
+                "the record documents the first check that admitted the call, and Graph confirmed that "
+                + "one — so the caller was entitled per Graph at the moment of the call");
     }
 
     private sealed class Harness : IDisposable
@@ -336,8 +345,12 @@ public class ToolCallAuditCompositionTests
         /// <summary>How many lookups Graph refused — evidence the stale path was actually taken.</summary>
         public int FailedResponses { get; private set; }
 
+        /// <summary>Every request, answered or refused.</summary>
+        public int Requests { get; private set; }
+
         protected override HttpResponseMessage Respond(HttpRequestMessage request)
         {
+            Requests++;
             var response = Answer(request);
             AfterRespond?.Invoke();
             return response;

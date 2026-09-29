@@ -67,11 +67,11 @@ public sealed record ResolvedPermissions
     public bool ServedStale { get; }
 
     /// <summary>
-    /// How old the answer is, measured from when the lookup that confirmed it <i>began</i> —
-    /// deliberately an upper bound, since that start time is what the resolver stores ("erring old").
-    /// Zero for a lookup made by this call. For a stale serve it is measured to the moment the lookup
-    /// <i>failed</i>, so a slow failure is not under-reported. "Stale by 20 seconds" and "stale by 59
-    /// minutes" are different claims.
+    /// How old the answer is. Zero for a lookup made by this call. Otherwise it is measured from when
+    /// the lookup that confirmed it <i>began</i> — deliberately an upper bound, since that start time
+    /// is what the resolver stores ("erring old") — and, for a stale serve, up to the moment the
+    /// failing lookup <i>failed</i>, so a slow failure is not under-reported. "Stale by 20 seconds"
+    /// and "stale by 59 minutes" are different claims.
     /// </summary>
     public TimeSpan Age { get; }
 }
