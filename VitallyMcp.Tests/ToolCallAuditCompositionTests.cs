@@ -62,6 +62,10 @@ public class ToolCallAuditCompositionTests
 
         private readonly CapturingLoggerProvider _failures = new(ToolCallFailureLog.Category);
         private readonly CapturingLoggerProvider _service = new("VitallyMcp.VitallyService");
+        private readonly CapturingLoggerProvider _sdk = new("ModelContextProtocol", matchPrefix: true);
+
+        /// <summary>Records from the MCP SDK itself, whichever of its categories logged them.</summary>
+        public IReadOnlyList<(LogLevel Level, string Message)> SdkRecords => _sdk.Entries;
 
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
 
@@ -75,7 +79,8 @@ public class ToolCallAuditCompositionTests
             string vitallyBody,
             HttpStatusCode vitallyStatus = HttpStatusCode.OK,
             bool sabotageAudit = false,
-            Func<Exception>? vitallyThrows = null)
+            Func<Exception>? vitallyThrows = null,
+            string? failPathContaining = null)
         {
             // Process-wide, and read by Program.cs at composition time before test configuration is
             // injected — hence the collection this class belongs to.
@@ -97,6 +102,7 @@ public class ToolCallAuditCompositionTests
                     l.AddProvider(_audit);
                     l.AddProvider(_failures);
                     l.AddProvider(_service);
+                    l.AddProvider(_sdk);
                     if (sabotageAudit)
                     {
                         l.AddProvider(new ThrowingLoggerProvider("VitallyMcp.AuditLogger"));
@@ -118,7 +124,7 @@ public class ToolCallAuditCompositionTests
                     // Stub the upstream at the *primary* handler so the real VitallyService
                     // pipeline — the rate-limit handler included — still runs in front of it.
                     services.AddHttpClient<VitallyService>()
-                        .ConfigurePrimaryHttpMessageHandler(() => new VitallyHandler(vitallyBody, vitallyStatus, vitallyThrows));
+                        .ConfigurePrimaryHttpMessageHandler(() => new VitallyHandler(vitallyBody, vitallyStatus, vitallyThrows, failPathContaining));
                 }));
         }
 
@@ -155,11 +161,11 @@ public class ToolCallAuditCompositionTests
             return Unwrap(await response.Content.ReadAsStringAsync());
         }
 
-        public async Task<string> CallToolAsync(string toolName)
+        public async Task<string> CallToolAsync(string toolName, string argumentsJson = "{}")
         {
             using var client = _factory.CreateClient();
             var body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\""
-                + toolName + "\",\"arguments\":{}}}";
+                + toolName + "\",\"arguments\":" + argumentsJson + "}}";
             using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
@@ -188,6 +194,7 @@ public class ToolCallAuditCompositionTests
             _audit.Dispose();
             _failures.Dispose();
             _service.Dispose();
+            _sdk.Dispose();
 
             foreach (var name in new[]
             {
@@ -252,13 +259,29 @@ public class ToolCallAuditCompositionTests
         }
     }
 
-    private sealed class VitallyHandler(string body, HttpStatusCode status, Func<Exception>? throws = null)
+    private sealed class VitallyHandler(
+        string body, HttpStatusCode status, Func<Exception>? throws = null, string? failPathContaining = null)
         : RecordingHandler
     {
-        protected override HttpResponseMessage Respond(HttpRequestMessage request) =>
-            throws is not null
-                ? throw throws()
-                : new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        protected override HttpResponseMessage Respond(HttpRequestMessage request)
+        {
+            if (throws is not null)
+            {
+                throw throws();
+            }
+
+            // Fails one upstream path only, for the composite tools that absorb a failed sub-call.
+            if (failPathContaining is not null
+                && request.RequestUri!.AbsolutePath.Contains(failPathContaining, StringComparison.Ordinal))
+            {
+                return new(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("{\"message\":\"sub-call exploded\"}", Encoding.UTF8, "application/json")
+                };
+            }
+
+            return new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
     }
 
     /// <summary>
@@ -384,6 +407,7 @@ public class ToolCallAuditCompositionTests
         var correlation = Regex.Match(
             harness.AuditRecords.Single(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal)).Message,
             @"correlation=([0-9a-f]{32})").Groups[1].Value;
+        correlation.Should().NotBeEmpty("the tool-call audit record carries a correlation id");
 
         var failure = harness.FailureRecords.Should().ContainSingle().Subject;
         failure.Level.Should().Be(LogLevel.Error);
@@ -402,19 +426,72 @@ public class ToolCallAuditCompositionTests
         // No response at all, so SendAsync's non-2xx record never fires — the filter is the only
         // place this failure can be seen.
         using var harness = new Harness(TwoOrganisations,
-            vitallyThrows: () => new HttpRequestException("connection refused"));
+            vitallyThrows: () => new HttpRequestException(HttpRequestError.ConnectionError, "connection refused"));
 
         await harness.CallToolAsync("List_organizations");
 
-        harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error)
-            .Subject.Message.Should().Contain("HttpRequestException");
+        var failure = harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject.Message;
+        failure.Should().Contain("HttpRequestException").And.Contain("status=none");
+        failure.Should().Contain("ConnectionError",
+            "HttpRequestError is what tells DNS from a refused connection from TLS, and carries no customer data");
+        harness.ServiceRecords.Should().BeEmpty("with no response, SendAsync's non-2xx record cannot fire");
+    }
+
+    [Fact]
+    public async Task ACaller4xx_IsAWarning_NotAnError()
+    {
+        // A wrong id from the model is routine and is the caller's input, not a fault — logging it at
+        // Error would bury a real outage in noise once #159 alerts on that level.
+        using var harness = new Harness("{\"message\":\"not found\"}", HttpStatusCode.NotFound);
+
+        await harness.CallToolAsync("List_organizations");
+
+        harness.FailureRecords.Should().ContainSingle().Subject.Level.Should().Be(LogLevel.Warning);
+        harness.ServiceRecords.Should().ContainSingle().Subject.Level.Should().Be(LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task AnUnknownTool_NeverPutsTheCallersNameOnTheLog_AndIsNotAnError()
+    {
+        // The name in a tools/call is caller-controlled text, and this category stays on the console,
+        // which the data map declares customer-data-free. Same rule as the audit breadcrumb.
+        using var harness = new Harness(TwoOrganisations);
+
+        await harness.CallToolAsync("alice_at_example");
+
+        harness.FailureRecords.Should().NotContain(e => e.Message.Contains("alice_at_example", StringComparison.Ordinal));
+        harness.FailureRecords.Should().NotContain(e => e.Level >= LogLevel.Error,
+            "naming a tool that does not exist is a client error, not a server fault");
+    }
+
+    [Fact]
+    public async Task AnAbsorbedSubCallFailure_InTheSummary_IsLoggedAlthoughTheToolSucceeds()
+    {
+        // Get_organization_summary turns a failed section into `{error: ...}` inside a successful
+        // result, so the tool-call log never fires and the audit record says ok. These lines are the
+        // only server-side trace of it — which is why the upstream failure is logged per upstream
+        // call, not per tool call.
+        using var harness = new Harness(
+            "{\"id\":\"org-1\",\"name\":\"Acme\",\"results\":[]}", failPathContaining: "/resources/customObjects");
+
+        var result = await harness.CallToolAsync("Get_organization_summary", "{\"organizationId\":\"org-1\"}");
+        // Bare word: the summary is JSON-escaped inside the tool result's text content.
+        result.Should().Contain("goals", "the summary still returns");
+        result.Should().NotContain("\"isError\":true", "the tool itself succeeded");
+
+        harness.FailureRecords.Should().BeEmpty("the tool itself succeeded");
+        harness.ServiceRecords.Should().Contain(e => e.Level == LogLevel.Error
+            && e.Message.Contains("/resources/customObjects", StringComparison.Ordinal));
+        harness.ServiceRecords.Where(e => e.Level == LogLevel.Warning).Should().HaveCount(2,
+            "each absorbed section is recorded, so a failure the summary hid is still visible");
     }
 
     [Fact]
     public async Task AnUnexpectedException_IsLoggedAtError_AndStillLeftToTheSdk()
     {
-        // Not a surfaceable type, so the SDK keeps its generic message — but a Key Vault outage takes
-        // this path on every call, and it must not be silent.
+        // Not a surfaceable type, so the SDK keeps its generic message. The SDK ALSO logs this at Error
+        // itself, with the exception attached — pinned below, because the docs rest on it: ours adds
+        // the correlation id that joins it to the audit record, and the SDK's carries the stack trace.
         using var harness = new Harness(TwoOrganisations,
             vitallyThrows: () => new InvalidOperationException("internal detail"));
 
@@ -424,6 +501,8 @@ public class ToolCallAuditCompositionTests
         var failure = harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject;
         failure.Message.Should().Contain("InvalidOperationException");
         failure.Message.Should().NotContain("internal detail");
+        harness.SdkRecords.Should().Contain(e => e.Level == LogLevel.Error,
+            "the SDK logs an unhandled tool exception itself — CLAUDE.md counts on that");
     }
 
     [Fact]

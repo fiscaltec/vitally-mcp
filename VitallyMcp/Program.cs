@@ -67,11 +67,12 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warnin
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
 
-// Warning rather than None, so a failing outbound call still surfaces. This server's own Error
+// Warning rather than None, so a failing outbound call still surfaces. This server's own failure
 // records (#94) cover only the paths it owns — a failed tool call (ToolCallFailureLog), a non-2xx from
-// Vitally (VitallyService.SendAsync) and a Key Vault fetch (VitallyApiKeyProvider). Everything outside
-// those — hosting, routing, authentication plumbing — reports a fault only through these framework
-// categories, so silencing them entirely would still blind the server to a class of failure.
+// Vitally (VitallyService.SendAsync), a Key Vault fetch (VitallyApiKeyProvider) — plus the Warning
+// sites in the Graph and OIDC resolvers, the rate limiter and the authentication re-emit below.
+// Hosting and routing faults surface only through these framework categories, so silencing them
+// entirely would still blind the server to a class of failure.
 //
 // ⚠️ One exception, stated because an earlier version of this comment claimed otherwise and was
 // wrong: `Microsoft.AspNetCore.Authorization` logs its *failures* at Information, not Warning

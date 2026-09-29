@@ -94,17 +94,23 @@ public class VitallyService
         if (!response.IsSuccessStatusCode)
         {
             // The server-side record of the failure (#94). LogAction above already records the status
-            // in the audit trail; this is the operational one, at Error, where an operator looks.
+            // in the audit trail; this is the operational one, where an operator looks. Error or
+            // Warning by status band — a 404 from a mistyped id is the caller's, not a fault; see
+            // ToolCallFailureLog.LevelFor.
             //
-            // ⚠️ Status and path only. NOT the body, which is the whole reason this record was missing
-            // before: Vitally's failure bodies can carry customer data, and so can the query string
-            // (Search_users sends its term there), which ResourcePath strips. The correlation id joins
-            // this line to the audit records, which is where the detail lives. It is emitted per
-            // upstream call rather than per tool call on purpose: Get_organization_summary swallows a
-            // failed sub-call into its result, so the tool succeeds and only this line shows the fault.
-            _logger.LogError(
-                "Vitally upstream call failed: {Method} {ResourcePath} returned {StatusCode} correlation={CorrelationId}",
-                method.Method, AuditLogger.ResourcePath(url), (int)response.StatusCode,
+            // ⚠️ Status and resource TYPE only. NOT the body, which is the whole reason this record
+            // was missing before: Vitally's failure bodies can carry customer data. Not the query
+            // string either (Search_users sends its term there), and not the rest of the path: tools
+            // put caller strings into it unescaped, and a 404 is exactly when that segment is not a
+            // Vitally id but whatever the model typed. AuditLogger may record the full path because
+            // its records are kept off the console; this category is not. The correlation id joins
+            // this line to those records, which is where the detail lives.
+            //
+            // Emitted per upstream call rather than per tool call on purpose: Get_organization_summary
+            // absorbs a failed sub-call into a successful result, so only this line shows the fault.
+            _logger.Log(ToolCallFailureLog.LevelFor(response.StatusCode),
+                "Vitally upstream call failed: {Method} {ResourceType} returned {StatusCode} correlation={CorrelationId}",
+                method.Method, ResourceTypeOf(url), (int)response.StatusCode,
                 _auditContext?.CorrelationId ?? "none");
 
             // EnsureSuccessStatusCode discards the response body, but Vitally returns the
@@ -147,6 +153,24 @@ public class VitallyService
         }
 
         return body;
+    }
+
+    // `/resources/accounts/<caller text>/users` → `/resources/accounts/…`. Only the first segment after
+    // /resources/ is fixed by this code rather than by a caller, so it is the only one safe to log to
+    // the console. See the non-2xx record in SendAsync.
+    private static string ResourceTypeOf(string url)
+    {
+        var path = AuditLogger.ResourcePath(url);
+        const string prefix = "/resources/";
+        var start = path.IndexOf(prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return "(unrecognised path)";
+        }
+
+        var rest = path[(start + prefix.Length)..];
+        var slash = rest.IndexOf('/');
+        return slash < 0 ? prefix + rest : prefix + rest[..slash] + "/…";
     }
 
     private static string Truncate(string value, int max) =>
@@ -408,8 +432,8 @@ public class VitallyService
         // The two section fetches are independent; run them concurrently to save one round-trip.
         // Each is self-contained (catches its own failures and returns a node), so awaiting both
         // never throws and per-section error isolation is preserved.
-        var goalsTask = BuildInstanceSectionAsync(nameToId, goalsObjectName, organizationId, resolveError);
-        var productFeedbackTask = BuildInstanceSectionAsync(nameToId, productFeedbackObjectName, organizationId, resolveError);
+        var goalsTask = BuildInstanceSectionAsync("goals", nameToId, goalsObjectName, organizationId, resolveError);
+        var productFeedbackTask = BuildInstanceSectionAsync("productFeedback", nameToId, productFeedbackObjectName, organizationId, resolveError);
         var goals = await goalsTask;
         var productFeedback = await productFeedbackTask;
 
@@ -447,25 +471,40 @@ public class VitallyService
 
     // Produces one summary section: the organisation-scoped instances of the named custom object, or a
     // { "error": ... } node if the object name can't be resolved or the search fails.
+    //
+    // An absorbed failure is logged at Warning (#94), because the tool still succeeds and so neither
+    // the tool-call failure log nor the audit outcome shows it — a custom object renamed in Vitally
+    // would otherwise make every summary return an error section forever with nothing said
+    // server-side. Logged by the fixed SECTION label and a reason, never by the object name (which is
+    // caller-overridable) or the exception message (which carries it, or an upstream body).
     private async Task<JsonNode> BuildInstanceSectionAsync(
-        IReadOnlyDictionary<string, string> nameToId, string objectName, string organizationId, string? resolveError)
+        string section, IReadOnlyDictionary<string, string> nameToId, string objectName, string organizationId,
+        string? resolveError)
     {
+        var reason = "unknown";
         try
         {
             if (resolveError is not null)
             {
+                reason = "custom-object catalogue unavailable";
                 throw new InvalidOperationException($"could not resolve custom objects: {resolveError}");
             }
             if (!nameToId.TryGetValue(objectName, out var objectId))
             {
+                reason = "custom object not found";
                 throw new InvalidOperationException($"custom object '{objectName}' not found");
             }
+            reason = "instance search failed";
             var json = await SearchCustomObjectInstancesAsync(
                 objectId, new Dictionary<string, string> { ["organizationId"] = organizationId });
+            reason = "instance search returned an unreadable body";
             return JsonNode.Parse(json)!;
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(
+                "Organisation summary section {Section} absorbed a failure: {Reason} ({ExceptionType}) correlation={CorrelationId}",
+                section, reason, ex.GetType().Name, _auditContext?.CorrelationId ?? "none");
             return new JsonObject { ["error"] = ex.Message };
         }
     }

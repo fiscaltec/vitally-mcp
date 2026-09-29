@@ -26,7 +26,7 @@ public class FailureLoggingTests
     public async Task SendAsync_LogsAnErrorForANon2xx_WithStatusAndPath_ButNeverTheBodyOrQuery()
     {
         using var client = TestHelpers.CreateMockHttpClient(
-            "{\"message\":\"no user " + CustomerEmail + "\"}", HttpStatusCode.BadRequest);
+            "{\"message\":\"no user " + CustomerEmail + "\"}", HttpStatusCode.InternalServerError);
         var logger = new CapturingLogger<VitallyService>();
         var service = TestHelpers.BuildVitallyService(client, logger: logger);
 
@@ -38,9 +38,86 @@ public class FailureLoggingTests
         await act.Should().ThrowAsync<HttpRequestException>();
 
         var entry = logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject.Message;
-        entry.Should().Contain("400").And.Contain("GET").And.Contain("/resources/users/search");
+        entry.Should().Contain("500").And.Contain("GET").And.Contain("/resources/users");
         entry.Should().NotContain(CustomerEmail, "the upstream body may be customer data");
         entry.Should().NotContain(searchTerm, "the query string carries caller search terms");
+        logger.Exceptions.Should().AllSatisfy(e => e.Should().BeNull(
+            "nothing is attached — an exception's ToString() would carry the body the template omits"));
+    }
+
+    [Fact]
+    public async Task SendAsync_NeverLogsAPathSegmentTheCallerTyped()
+    {
+        // Tools put caller strings into the path unescaped (`accounts/{accountId}/users`), and a 404
+        // is exactly the case where that segment is NOT a Vitally id but whatever the model typed —
+        // a customer name, an email. This category stays on the console, unlike AuditLogger's, so
+        // only the resource type is logged; the correlation id leads to the full path in AppEvents.
+        const string typedId = "acmeholdingsltd";
+        using var client = TestHelpers.CreateMockHttpClient("{}", HttpStatusCode.NotFound);
+        var logger = new CapturingLogger<VitallyService>();
+        var service = TestHelpers.BuildVitallyService(client, logger: logger);
+
+        var act = () => service.GetRawAsync($"accounts/{typedId}/users");
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        var entry = logger.Entries.Should().ContainSingle().Subject.Message;
+        entry.Should().Contain("/resources/accounts");
+        entry.Should().NotContain(typedId);
+    }
+
+    public static TheoryData<int, LogLevel> StatusLevels => new()
+    {
+        // The caller's mistake: a wrong id, a missing field. Worth seeing, not worth paging for.
+        { 400, LogLevel.Warning }, { 404, LogLevel.Warning }, { 422, LogLevel.Warning },
+        // Ours or Vitally's: a bad or revoked shared key, the rate-limit budget, an outage.
+        { 401, LogLevel.Error }, { 403, LogLevel.Error }, { 429, LogLevel.Error },
+        { 500, LogLevel.Error }, { 503, LogLevel.Error },
+    };
+
+    [Theory]
+    [MemberData(nameof(StatusLevels))]
+    public async Task SendAsync_ChoosesTheLevelByStatus(int status, LogLevel expected)
+    {
+        using var client = TestHelpers.CreateMockHttpClient("{}", (HttpStatusCode)status);
+        var logger = new CapturingLogger<VitallyService>();
+        var service = TestHelpers.BuildVitallyService(client, logger: logger);
+
+        var act = () => service.GetResourcesAsync("organizations");
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        logger.Entries.Should().ContainSingle().Subject.Level.Should().Be(expected);
+    }
+
+    [Theory]
+    [MemberData(nameof(StatusLevels))]
+    public void ToolCallFailureLog_ChoosesTheLevelByStatus(int status, LogLevel expected)
+    {
+        var logger = new CapturingLogger<object>();
+
+        ToolCallFailureLog.Write(logger, "List_users",
+            new HttpRequestException("x", null, (HttpStatusCode)status), "corr", CancellationToken.None);
+
+        logger.Entries.Should().ContainSingle().Subject.Level.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task OrganizationSummary_LogsASectionItCouldNotResolve_WithoutTheCallersObjectName()
+    {
+        // A renamed custom object in Vitally makes every summary return an error section forever,
+        // and the tool still succeeds — so without this the drift is invisible server-side. The
+        // object name is caller-overridable, so the fixed SECTION label is logged, never the name.
+        using var client = TestHelpers.CreateMockHttpClient(
+            "{\"id\":\"org-1\",\"results\":[{\"id\":\"co-1\",\"name\":\"somethingElse\"}]}");
+        var logger = new CapturingLogger<VitallyService>();
+        var service = TestHelpers.BuildVitallyService(client, logger: logger);
+
+        await service.GetOrganizationSummaryAsync("org-1", null, "callerGoalsName", "callerFeedbackName");
+
+        logger.Entries.Should().HaveCount(2).And.OnlyContain(e => e.Level == LogLevel.Warning);
+        logger.Entries.Should().Contain(e => e.Message.Contains("goals", StringComparison.Ordinal));
+        logger.Entries.Should().Contain(e => e.Message.Contains("productFeedback", StringComparison.Ordinal));
+        logger.Entries.Should().NotContain(e => e.Message.Contains("callerGoalsName", StringComparison.Ordinal)
+            || e.Message.Contains("callerFeedbackName", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -69,6 +146,28 @@ public class FailureLoggingTests
         await act.Should().ThrowAsync<RequestFailedException>("the failure must still reach the caller");
         logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Error)
             .Subject.Message.Should().Contain("vitally-shared");
+        // The inverse of the tool-call rule, and deliberate: Azure's status and error code are what
+        // tell a missing role from an unreachable vault, and they carry no secret or customer data.
+        logger.Exceptions.Should().ContainSingle(e => e is RequestFailedException,
+            "the Key Vault error is the diagnosis, so it is attached");
+    }
+
+    [Fact]
+    public async Task ApiKeyProvider_LogsAKeyVaultTimeout()
+    {
+        // Azure.Core surfaces a timeout as TaskCanceledException with the CALLER's token not
+        // cancelled — a slow vault, which is the case most worth seeing. A gate on the exception type
+        // rather than the caller's token would silently drop it.
+        var secrets = new Mock<SecretClient>();
+        secrets.Setup(s => s.GetSecretAsync("vitally-shared", null, It.IsAny<SecretContentType?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TaskCanceledException("timed out"));
+        var logger = new CapturingLogger<VitallyApiKeyProvider>();
+        var provider = BuildProvider(secrets.Object, logger);
+
+        var act = () => provider.GetApiKeyAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<TaskCanceledException>();
+        logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Error);
     }
 
     [Fact]
@@ -146,6 +245,9 @@ public class FailureLoggingTests
         entry.Message.Should().Contain("List_users").And.Contain(ex.GetType().Name).And.Contain("corr-123");
         entry.Message.Should().NotContain(CustomerEmail,
             "exception messages carry upstream bodies and caller input, so only the type is logged");
+        // Attaching the exception would leak the same text by another route — the console formatter
+        // and the OTel exporter both render it — and the message assertion above cannot see that.
+        logger.Exceptions.Single().Should().BeNull("the exception is never attached to a tool-call failure");
     }
 
     [Fact]
@@ -182,6 +284,21 @@ public class FailureLoggingTests
             new InvalidOperationException(), "corr", CancellationToken.None);
 
         act.Should().NotThrow("a failing log sink must not replace the tool's own result");
+    }
+
+    [Fact]
+    public void ToolCallFailureLog_NeverThrows_WhenResolvingItsServicesDoes()
+    {
+        // The filter calls this on the way to returning the tool's own error result. A throw here — a
+        // disposed request scope, say — would escape the filter and replace that result with the SDK's
+        // generic message, which is the one thing this log must never do.
+        var services = new Mock<IServiceProvider>();
+        services.Setup(s => s.GetService(It.IsAny<Type>())).Throws(new ObjectDisposedException("scope"));
+
+        var act = () => ToolCallFailureLog.Write(services.Object, "List_users",
+            new InvalidOperationException(), CancellationToken.None);
+
+        act.Should().NotThrow();
     }
 
     private static VitallyApiKeyProvider BuildProvider(SecretClient secrets, ILogger<VitallyApiKeyProvider> logger) =>

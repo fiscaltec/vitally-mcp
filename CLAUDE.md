@@ -768,29 +768,68 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > should redaction ever be turned off. Path segments are *not* redacted, but they carry record ids,
 > which `AuditLogger` deliberately records anyway.
 > Four `Microsoft.AspNetCore.*` noise filters sit beside it, all `Warning` rather than `None` so
-> framework *warnings* still surface. The application's own `Error` records (#94) cover only the
-> paths it owns — a failed tool call (`ToolCallFailureLog`, category `VitallyMcp.ToolCallFailures`),
-> a non-2xx from Vitally (`VitallyService.SendAsync`) and a Key Vault fetch
-> (`VitallyApiKeyProvider`) — so outside those, framework warnings are still the only fault report.
-> Until #94 there was exactly **one** `LogError` call site, and a failed tool call left no
-> server-side trace at all.
+> framework *warnings* still surface: the application's own fault reports cover the paths it owns
+> and nothing else, so hosting and routing faults surface only through those categories.
 >
-> ⚠️ **Those failure records log the exception _type_, status and resource path — never the
-> exception message.** The message is what the client is shown, and it carries a truncated upstream
-> body (`HttpRequestException`) or the caller's own input (`ArgumentException`), either of which can
-> be customer data — and unlike `VitallyMcp.AuditLogger`, these categories stay on the console. The
-> correlation id joins each one to the tool-call audit record, which holds the detail under the audit
-> table's access control. Do not "improve" a failure record by adding `ex.Message`. The Key Vault
-> record is the one that attaches the exception, because Azure's error carries its status and code,
-> never the secret or customer data.
+> **The application's own failure records (#94).** Until #94 there was exactly one `LogError` call
+> site (`ToolAuthorizer`, no resolver registered), and a *surfaceable* tool failure — a Vitally
+> error, a rejected argument — reached the client and left no server-side trace at all:
 >
-> Levels: an upstream or unexpected failure is `Error`; a rejected argument is `Warning` (the
-> caller's input, not a fault); an RBAC denial is not logged here at all, because `LogDenied` already
-> records it; a cancelled caller is skipped, but an `HttpClient` **timeout** is logged — both are
-> `OperationCanceledException`, so the test is the caller's token, not the type. One upstream failure
-> therefore produces **two** `Error` lines, the tool's and the upstream call's — by design, since
-> `Get_organization_summary` absorbs a failed sub-call into a successful result and only the
-> upstream line shows it. Count one category when alerting (#159), not both.
+> | Record | Category | Fires on |
+> |---|---|---|
+> | Tool-call failure | `VitallyMcp.ToolCallFailures` (`ToolCallFailureLog`) | any failed `tools/call` that reaches the filter pipeline |
+> | Upstream non-2xx | `VitallyMcp.VitallyService` | every non-2xx from Vitally, per upstream call |
+> | Absorbed summary section | `VitallyMcp.VitallyService` | a `Get_organization_summary` section that became `{error: …}` inside a successful result |
+> | Key Vault fetch | `VitallyMcp.VitallyApiKeyProvider` | a failed or valueless `vitally-shared` fetch |
+>
+> Alongside them, and not replaced: the `Warning` sites in `GraphGroupPermissionResolver`,
+> `UpstreamOidcMetadata`, `VitallyRateLimitHandler` and the `VitallyMcp.Authentication` re-emit
+> below. **The MCP SDK also logs** any exception our filter does not convert — under
+> `ModelContextProtocol.Server.*`, at `Error`, *with the exception attached*. Pinned by
+> `AnUnexpectedException_IsLoggedAtError_AndStillLeftToTheSdk`, because the counts below rest on it.
+>
+> ⚠️ **Our records log the exception _type_, the status and the resource _type_ — never the
+> exception message, never an attached exception, never the rest of the path.** The message is what
+> the client is shown, and it carries a truncated upstream body (`HttpRequestException`) or the
+> caller's own input (`ArgumentException`); an attached exception leaks the same text, since the
+> console formatter and the exporter both render it. The path is cut to `/resources/<type>/…` because
+> tools put caller strings into it unescaped, and a 404 is exactly when that segment is not a Vitally
+> id but whatever the model typed. An invented tool name is logged as `unrecognised`, checked against
+> `KnownToolNames` as the audit breadcrumb is. These categories stay on the console, unlike
+> `VitallyMcp.AuditLogger`, which is why they may carry less than it does; the correlation id joins
+> each to the audit record, which holds the detail under the audit table's access control. **Do not
+> "improve" a failure record with `ex.Message`, `LogError(ex, …)` or the full path** —
+> `CapturingLogger.Exceptions` exists so the tests can see the second of those.
+>
+> The **Key Vault record is the deliberate exception**: it attaches the exception, because Azure's
+> error carries its status and code — the difference between a missing role and an unreachable vault
+> — and never the secret or customer data.
+>
+> ⚠️ **The SDK's own line does not follow these rules**, and is not ours to change here: it carries
+> the exception message and stack, and on an unknown tool it logs the caller's invented name at
+> `Error`. Today the exceptions that reach it (`RequestFailedException`, `JsonException`,
+> `InvalidOperationException`) do not carry customer data, but the console is only as clean as that
+> remains true.
+>
+> **Levels.** `Error` for what is ours or Vitally's to fix: a 5xx, a 401/403 (the shared key), a 429
+> (the budget), no response at all (with `HttpRequestError` saying which of DNS, refused or TLS), or
+> an unexpected exception. `Warning` for the caller's input: any other 4xx, a rejected argument, a
+> protocol refusal such as an unknown tool, and an absorbed summary section. **Not logged:** an RBAC
+> denial (`LogDenied` records it, when `Audit:Enabled`), and a cancelled caller — but an `HttpClient`
+> **timeout** *is* logged: both are `OperationCanceledException`, so the test is the caller's token,
+> not the type. `ToolCallFailureLog.LevelFor` is the one mapping, shared by both upstream records.
+>
+> **`Error` lines per event**, so #159 alerts knowingly — count **one** category, not all:
+>
+> | Event | `Error` lines |
+> |---|---|
+> | Vitally 5xx / 401 / 403 / 429 | 2 — `ToolCallFailures` + `VitallyService` |
+> | No response (transport, timeout) | 1 — `ToolCallFailures` |
+> | Unexpected exception | 2 — `ToolCallFailures` + the SDK |
+> | Key Vault outage | 3 — `VitallyApiKeyProvider` + `ToolCallFailures` + the SDK |
+> | A summary sub-call 5xx | 1 — `VitallyService`, plus a `Warning` per absorbed section; the tool succeeds |
+>
+> That last row is why the upstream record is per upstream call rather than per tool call.
 >
 > ⚠️ **But two framework signals are logged at `Information`, and these filters do suppress them.**
 > An earlier version of this note claimed all faults stay visible; that was wrong, and the exception
@@ -866,7 +905,7 @@ This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache exp
 
 Scoped via `AddHttpClient<VitallyService>()`. Per-request auth: the constructor takes the per-request `VitallyApiKeyProvider`, and the private `SendAsync(method, url, content?)` helper builds each `HttpRequestMessage`, fetches the API key from the provider, sets the `Authorization: Basic` header on the message, and dispatches via `_httpClient.SendAsync`. The shared `HttpClient` is *not* mutated — there's no `DefaultRequestHeaders.Authorization`, so multi-user safety is preserved.
 
-On non-2xx responses `SendAsync` reads the response body, disposes the response, and throws `HttpRequestException` with `StatusCode` set and a message that includes a truncated copy of the response body. This deliberately replaces `EnsureSuccessStatusCode()` because Vitally returns the actual failure reason (e.g. `{"message":"externalId is required"}`) in the body, and surfacing it gives the LLM something concrete to act on. The MCP SDK only forwards an exception's own message to the client when it is an `McpException`, so a CallTool request filter (`ToolErrorResult` + `AddCallToolFilter` in `Program.cs`) is what actually delivers this body — and the read-only/RBAC denial and `ArgumentException` validation messages — to the client; other (unexpected) exceptions still yield the SDK's generic error. Before returning, it also logs the failure server-side (#94) — and so does `SendAsync` itself, with the status and path — but never the body or the message; see the log-levels note under *Configuration*.
+On non-2xx responses `SendAsync` reads the response body, disposes the response, and throws `HttpRequestException` with `StatusCode` set and a message that includes a truncated copy of the response body. This deliberately replaces `EnsureSuccessStatusCode()` because Vitally returns the actual failure reason (e.g. `{"message":"externalId is required"}`) in the body, and surfacing it gives the LLM something concrete to act on. The MCP SDK only forwards an exception's own message to the client when it is an `McpException`, so a CallTool request filter (`ToolErrorResult` + `AddCallToolFilter` in `Program.cs`) is what actually delivers this body — and the read-only/RBAC denial and `ArgumentException` validation messages — to the client; other (unexpected) exceptions still yield the SDK's generic error. Before returning, it also logs the failure server-side (#94) — and so does `SendAsync` itself, with the status and the resource type — but never the body, the message or the rest of the path; see the log-levels note under *Configuration*.
 
 Standard methods (apply field/trait filtering and the `{results, next}` envelope):
 - `GetResourcesAsync` — list with pagination, sorting, filtering
@@ -1085,6 +1124,7 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 - `OAuthProxyResourceTerminationTests` — the proxy in the Entra posture (`OAuth:UpstreamResourceScope` set): `resource` dropped whatever its casing, still rejected when unpublished, the API scope merged into `scope` on both endpoints without duplicating or displacing the client's own, and advertised in both metadata documents. A separate fixture from the sibling proxy classes because the switch is composition-time and **both** postures must stay pinned — the relay is what a rollback returns to
 - `StaleEntitlementCompositionTests` — the serve-stale-on-Graph-failure path through a composed host, across an outage that starts, is survived and then outlasts its window; also pins that a token claim cannot authorise once the live check is on
 - `UpstreamOidcMetadataTests` / `UpstreamOidcStartupFailFastTests` — the OIDC-discovery resolver (all four endpoints, cache reuse, last-known-good on a failed refresh, rejection of an incomplete or malformed document) and the startup fail-fast wired into `Program.cs`
+- `FailureLoggingTests` — the #94 failure records: level by status band and exception kind, and that none of them carries a body, a query string, a caller-typed path segment, an exception message or an attached exception (the Key Vault record is the one that must attach it). The composed half is in `ToolCallAuditCompositionTests`, which proves the correlation id joins each record to the audit trail and that the SDK logs unhandled tool exceptions itself
 - `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
 
 **When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
