@@ -23,6 +23,7 @@ namespace VitallyMcp.Tests;
 /// in <c>Program.cs</c> is what lets this server front another provider without a code change
 /// (#156).
 /// </remarks>
+[Collection(IntegrationTestCollection.Name)]
 public class OAuthProxyResourceTerminationTests : IClassFixture<OAuthProxyResourceTerminationTests.Factory>
 {
     /// <summary>The App ID URI + exposed scope, in the shape Entra requires on a custom API.</summary>

@@ -12,6 +12,7 @@ namespace VitallyMcp.Tests;
 /// lose: the guard sits between <c>builder.Build()</c> and <c>app.Run()</c>, where a refactor can
 /// silently drop it while every other test still passes. These drive the real Program.cs.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class UpstreamOidcStartupFailFastTests
 {
     [Fact]

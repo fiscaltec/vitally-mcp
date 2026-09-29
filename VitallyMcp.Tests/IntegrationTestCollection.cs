@@ -11,8 +11,21 @@ namespace VitallyMcp.Tests;
 /// <para>
 /// Member classes: <see cref="ReadOnlyToolsListTests"/>, <see cref="ToolsListCachingTests"/>,
 /// <see cref="AuthorizationFilterToolsListTests"/>, <see cref="ResourceMetadataDiscoveryTests"/>,
-/// <see cref="ServerInstructionsInitializeTests"/>, <see cref="StaleEntitlementCompositionTests"/>
-/// and <see cref="LoggingFilterTests"/>. Keep this list complete — it is what a future
+/// <see cref="ServerInstructionsInitializeTests"/>, <see cref="StaleEntitlementCompositionTests"/>,
+/// <see cref="LoggingFilterTests"/>, <see cref="ToolCallAuditCompositionTests"/>, and the classes
+/// that compose a host WITHOUT setting environment variables themselves:
+/// <see cref="OAuthProxyEndpointsTests"/>, <see cref="OAuthProxyPublicOriginTests"/>,
+/// <see cref="OAuthProxyResourceTerminationTests"/>, <see cref="OAuthTokenProxyForwardTests"/> and
+/// <see cref="UpstreamOidcStartupFailFastTests"/>.
+/// <para>
+/// ⚠️ <b>A class that only READS configuration needs to be here too</b>, which is the non-obvious
+/// half. Those five inject in-memory configuration and never touch the environment — but they omit
+/// keys a sibling sets as an environment variable, so a concurrently running sibling's value leaks
+/// in. <see cref="ResourceMetadataDiscoveryTests"/> sets <c>OAuth__PublicBaseUrl</c>, and nine proxy
+/// tests failed on <c>https://example.test</c> in Release builds once #94's additions lengthened the
+/// collection enough to overlap them. Latent before that, not introduced by it.
+/// </para>
+/// Keep this list complete — it is what a future
 /// author reads when deciding whether a new environment-variable-mutating class needs to join, and
 /// an incomplete list makes the collection look narrower in purpose than it is.
 /// <see cref="ServerInstructionsInitializeTests"/> is the sharpest illustration
