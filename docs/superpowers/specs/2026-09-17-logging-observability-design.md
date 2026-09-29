@@ -773,7 +773,9 @@ that at the time?"*. It is cheap while the record is being written and impossibl
 is why it is called out here rather than left in an issue. Record alongside it whether the tier was
 served **stale** — `GraphGroupPermissionResolver` serves a retained set for up to
 `LiveGroupStaleSeconds` when Graph fails, so a stale tier is a weaker claim than a fresh one and a
-record that cannot tell them apart overstates its own confidence.
+record that cannot tell them apart overstates its own confidence. (✅ Reported since #161: the
+resolver returns `ServedStale` alongside the permissions, so the record reads `True`/`False` on the
+live path; records written before that deployed read `unknown`.)
 
 ⚠️ **Console export was split out as 2b and gated (✅ enabled 2026-09-26), because the console stream carried customer
 identifiers until the audit records are rerouted off it.** Two earlier drafts got this wrong in

@@ -64,9 +64,9 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
     }
 
     /// <summary>A successful lookup plus when it was resolved, so its age drives both windows.</summary>
-    private sealed record ResolvedPermissions(IReadOnlySet<string> Permissions, DateTimeOffset ResolvedAt);
+    private sealed record CachedPermissions(IReadOnlySet<string> Permissions, DateTimeOffset ResolvedAt);
 
-    public async Task<IReadOnlySet<string>?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
+    public async Task<ResolvedPermissions?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(userObjectId))
         {
@@ -76,12 +76,21 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         // The entry is keyed per user. That is load-bearing rather than tidy: it is what stops one
         // caller's retained tier ever being served to another during an outage.
         var cacheKey = $"live-perms::{userObjectId}";
-        _cache.TryGetValue<ResolvedPermissions>(cacheKey, out var lastKnownGood);
+        _cache.TryGetValue<CachedPermissions>(cacheKey, out var lastKnownGood);
         var now = _timeProvider.GetUtcNow();
 
         if (lastKnownGood is not null && IsWithin(lastKnownGood, now, _options.LiveGroupCacheSeconds))
         {
-            return lastKnownGood.Permissions;
+            // Not stale: inside the fresh window is the live check working as designed. Its age is
+            // still reported, because it is not zero.
+            //
+            // ⚠️ Reporting this as Confirmed is honest ONLY because the cache holds nothing but
+            // successful lookups: the stale branch below never writes back. Re-caching a stale serve
+            // (say, to damp retries during an outage) with a fresh ResolvedAt would bring it back
+            // through here labelled Confirmed — recording out-of-date data as checked, and stretching
+            // the fresh window past a revocation. Pinned by
+            // ReportsServedStale_OnEveryCall_ThroughAnOutage_NotOnlyTheFirst.
+            return ResolvedPermissions.Confirmed(lastKnownGood.Permissions, now - lastKnownGood.ResolvedAt);
         }
 
         var groupIds = _options.ConfiguredGroupIds.ToArray();
@@ -109,8 +118,8 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             // silently extend the fresh window by the call duration — delaying revocation
             // propagation, which is the whole reason the live check exists. Erring old is the safe
             // direction; erring young is not.
-            _cache.Set(cacheKey, new ResolvedPermissions(permissions, now), TimeSpan.FromSeconds(retentionSeconds));
-            return permissions;
+            _cache.Set(cacheKey, new CachedPermissions(permissions, now), TimeSpan.FromSeconds(retentionSeconds));
+            return ResolvedPermissions.Confirmed(permissions, TimeSpan.Zero);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -134,15 +143,22 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             if (lastKnownGood is not null && _options.LiveGroupStaleSeconds > 0
                 && IsWithin(lastKnownGood, failedAt, _options.LiveGroupStaleSeconds))
             {
+                var age = failedAt - lastKnownGood.ResolvedAt;
+
                 // One warning, not two: an outage should read as a single line per call. Subject id
                 // only — never the caller's email, per the audit rules.
                 _logger.LogWarning(
                     ex,
                     "Live group permission lookup failed for {UserObjectId}; serving the last known-good permission set, stale by {StaleSeconds}s (limit {StaleLimitSeconds}s).",
                     userObjectId,
-                    (long)(failedAt - lastKnownGood.ResolvedAt).TotalSeconds,
+                    (long)age.TotalSeconds,
                     _options.LiveGroupStaleSeconds);
-                return lastKnownGood.Permissions;
+
+                // Reported to the caller as well as logged (#161): the audit record has to be able
+                // to say this decision was made on data known to be out of date, and this branch is
+                // the only place that knows it was taken. The same `age` feeds both, so the log line
+                // and the returned value cannot disagree.
+                return ResolvedPermissions.Retained(lastKnownGood.Permissions, age);
             }
 
             // Deliberately does NOT say "falling back to the token claim". It used to, and that became
@@ -162,7 +178,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
     }
 
     // A window of 0 means "off" rather than "expires instantly", so it is never treated as a hit.
-    private static bool IsWithin(ResolvedPermissions entry, DateTimeOffset now, int windowSeconds) =>
+    private static bool IsWithin(CachedPermissions entry, DateTimeOffset now, int windowSeconds) =>
         windowSeconds > 0 && (now - entry.ResolvedAt).TotalSeconds <= windowSeconds;
 
     // Determine which of the configured groups the user belongs to, checking from the group side

@@ -200,7 +200,7 @@ Do all three, in this order, and understand what each does *not* cover:
 1. **Remove the correct group membership** (per the table above) — this is the control that actually
    stops them using the server, normally within ~60s.
 2. **Disable the Entra account** — stops new sign-ins and refreshes.
-3. **Revoke their sessions** — same effect, at whichever provider is live for that target, or both.
+3. **Revoke their Entra sessions** — same effect. Entra is the only identity provider on both targets.
 
 **None of these invalidates an access token they already hold.** This server validates bearer tokens
 locally against the provider's signing keys, so an issued token remains valid until it expires
@@ -226,6 +226,38 @@ acceptable, escalate — but pick the right lever, because the two cases differ:
 
 **Do not reach for "scale to zero".** A Container App with HTTP ingress scales back up on the next
 request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is not a halt.
+
+**Afterwards, the audit trail can tell you whether the stale window was used.** Each tool-call record
+carries `AuditTierServedStale`: `True` means the tier that admitted the call came from the retained
+copy rather than from Graph (#161). It describes the check that *admitted* the call: a call admitted
+on a Graph-confirmed tier reads `False` even if a later check inside it was served stale. Records
+written before that change was deployed carry `unknown` — the field existed but nothing reported
+it — so they cannot answer the question.
+
+Set the revoked user's Entra object id and the incident window (UTC) once; both queries below read
+them. Scope to the user and the window deliberately: an unrelated stale serve from another user or
+another outage would otherwise answer "yes" to a question about this one.
+
+```bash
+OID=00000000-0000-0000-0000-000000000000   # the revoked user's Entra object id
+FROM=2026-09-29T00:00:00Z                  # incident window start, UTC
+TO=2026-09-29T23:59:59Z                    # incident window end, UTC
+
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
+  "AppEvents | where Name == 'VitallyToolCall' and TimeGenerated between (datetime($FROM) .. datetime($TO)) and tostring(Properties.AuditUserId) == '$OID' and tostring(Properties.AuditTierServedStale) == 'True' | project TimeGenerated, AppRoleName, tool=tostring(Properties.McpToolName), tier=tostring(Properties.AuditPermissionTier), correlation=tostring(Properties.AuditCorrelationId)"
+```
+
+⚠️ **An empty result is only "no stale serves" if the window is covered.** It is also exactly what
+a window of `unknown` records produces — and what a gap in the export produces, which is not
+far-fetched: a Graph outage and an Azure Monitor ingestion problem can be the same incident. So
+check coverage over the same window, in 15-minute bins across **all** callers, so a gap shows as a
+missing bin rather than disappearing inside a min/max range. A bin with no `True`/`False` rows cannot
+answer the question either way:
+
+```bash
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
+  "AppEvents | where Name == 'VitallyToolCall' and TimeGenerated between (datetime($FROM) .. datetime($TO)) | summarize records=count() by bin(TimeGenerated, 15m), stale=tostring(Properties.AuditTierServedStale), AppRoleName | order by TimeGenerated asc"
+```
 
 ## How it's set up (in brief)
 

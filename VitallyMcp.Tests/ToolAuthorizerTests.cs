@@ -13,13 +13,17 @@ public class ToolAuthorizerTests
     private const string ReaderGroup = "71451cc9-f5df-44ee-8ed1-3acc41a911eb";
     private const string CallerOid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
 
-    private sealed class StubResolver(IReadOnlySet<string>? result) : IGroupPermissionResolver
+    private sealed class StubResolver(IReadOnlySet<string>? result, bool servedStale = false) : IGroupPermissionResolver
     {
         public string? LastObjectId { get; private set; }
-        public Task<IReadOnlySet<string>?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
+        public Task<ResolvedPermissions?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
         {
             LastObjectId = userObjectId;
-            return Task.FromResult(result);
+            return Task.FromResult(result is null
+                ? null
+                : servedStale
+                    ? ResolvedPermissions.Retained(result, TimeSpan.FromSeconds(90))
+                    : ResolvedPermissions.Confirmed(result, TimeSpan.Zero));
         }
     }
 
@@ -363,6 +367,60 @@ public class ToolAuthorizerTests
         await authorizer.HasEffectivePermissionAsync(UserWithOid("675ebdda-7590-4d79-8ec3-a2d17ab029ba"), "vitally:read");
 
         context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HasEffectivePermissionAsync_RecordsWhetherTheTierWasServedStale(bool servedStale)
+    {
+        // #161. The resolver is the only component that knows whether it served the retained copy,
+        // and the audit record must carry its answer — both ways round. `false` is recorded only
+        // because the resolver reported it: that is a checked claim, unlike the default it replaces.
+        var resolver = new StubResolver(new HashSet<string> { "vitally:read" }, servedStale);
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = true },
+            resolver: resolver,
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(UserWithOid(CallerOid), "vitally:read");
+
+        context.Summarise().TierServedStale.Should().Be(servedStale);
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_StillDenies_WhenTheResolverReturnsNothing_AndRecordsNoTier()
+    {
+        // The widened return must not have softened the fail-closed rule: null is still a denial,
+        // and a denial resolved no tier, so the record must not claim one — stale or otherwise.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = true },
+            resolver: new StubResolver(null),
+            auditContext: context);
+
+        var allowed = await authorizer.HasEffectivePermissionAsync(UserWithOid(CallerOid), "vitally:read");
+
+        allowed.Should().BeFalse();
+        var summary = context.Summarise();
+        summary.PermissionTier.Should().Be("unresolved");
+        summary.TierServedStale.Should().BeNull("nothing was resolved, so nothing was checked");
+    }
+
+    [Fact]
+    public async Task HasEffectivePermissionAsync_LeavesStalenessUnknown_OnTheClaimPath()
+    {
+        // The claim path has no retained copy and no Graph lookup, so "was it fresh?" has no answer
+        // there. Recording false would assert a check that never happened.
+        var context = new ToolCallAuditContext();
+        var authorizer = Build(
+            options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = false },
+            auditContext: context);
+
+        await authorizer.HasEffectivePermissionAsync(UserWithPermissions("vitally:read"), "vitally:read");
+
+        context.Summarise().TierServedStale.Should().BeNull();
     }
 
     [Fact]

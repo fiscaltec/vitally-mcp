@@ -20,10 +20,12 @@ namespace VitallyMcp.Tests;
 /// <para>
 /// ⚠️ <b>A class that only READS configuration needs to be here too</b>, which is the non-obvious
 /// half. Those five inject in-memory configuration and never touch the environment — but they omit
-/// keys a sibling sets as an environment variable, so a concurrently running sibling's value leaks
-/// in. <see cref="ResourceMetadataDiscoveryTests"/> sets <c>OAuth__PublicBaseUrl</c>, and nine proxy
-/// tests failed on <c>https://example.test</c> in Release builds once #94's additions lengthened the
-/// collection enough to overlap them. Latent before that, not introduced by it.
+/// keys a sibling sets as an environment variable, so a sibling running concurrently leaks its value
+/// in. Serialising prevents that; it does <b>not</b> prevent a fixture that never clears its
+/// variables from leaking them into whichever class runs next, which is why every fixture here must
+/// reset what it set on dispose. <see cref="ResourceMetadataDiscoveryTests"/> did not, and nine proxy
+/// tests failed on its <c>https://example.test</c> in Release builds once #94's added tests shifted
+/// the order to put them after it — latent on <c>main</c>, found and fixed in #94.
 /// </para>
 /// Keep this list complete — it is what a future
 /// author reads when deciding whether a new environment-variable-mutating class needs to join, and

@@ -154,8 +154,8 @@ public class ToolAuthorizer
                 return false;
             }
 
-            var live = await _groupResolver.TryResolvePermissionsAsync(objectId, cancellationToken);
-            if (live is null)
+            var resolved = await _groupResolver.TryResolvePermissionsAsync(objectId, cancellationToken);
+            if (resolved is null)
             {
                 // The resolver had neither a fresh result nor a usable stale one — it has already
                 // considered and declined the stale window by this point, and logged the underlying
@@ -176,20 +176,19 @@ public class ToolAuthorizer
             // disagrees with the decision it documents — and, because entitlement is resolved live,
             // nothing could afterwards say which was right.
             //
-            // Staleness is deliberately not passed: GraphGroupPermissionResolver serves a retained
-            // copy internally and logs it, but does not report it back through
-            // IGroupPermissionResolver, so nothing here knows. Passing `false` would assert the tier
-            // was fresh when nothing checked.
-            _auditContext?.RecordResolvedTier(live);
+            // Staleness travels with it, from the resolver's own answer (#161). It is the resolver's
+            // to report because only the resolver knows which branch it took: `false` here means
+            // Graph confirmed the tier, not that nobody looked. Never substitute a literal.
+            _auditContext?.RecordResolvedTier(resolved.Permissions, resolved.ServedStale);
 
             // Authoritative when the live lookup succeeds (empty set => deny).
-            return live.Contains(required);
+            return resolved.Permissions.Contains(required);
         }
 
         // The claim path is inert on every deployed target (#108/#156), but it is the supported
         // local-dev mode and the audit record promises "the tier the caller resolved to" — leaving it
         // unresolved here makes the field look broken to anyone reading their own dev output.
-        _auditContext?.RecordResolvedTier(ClaimedPermissions(user, _options.CustomPermissionsClaim));
+        _auditContext?.RecordResolvedTier(ClaimedPermissions(user, _options.CustomPermissionsClaim), servedStale: null);
 
         return HasPermission(user, required, _options.CustomPermissionsClaim);
     }
