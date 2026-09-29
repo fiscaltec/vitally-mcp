@@ -63,7 +63,7 @@ public static class ToolCallFailureLog
             WriteCore(logger, safeName, ex,
                 services?.GetService<ToolCallAuditContext>()?.CorrelationId ?? "none", cancellationToken);
         }
-        catch (Exception logFailure) when (logFailure is not OperationCanceledException)
+        catch (Exception)
         {
             // Deliberately ignored. See the overload below.
         }
@@ -76,11 +76,15 @@ public static class ToolCallFailureLog
         // Never the reason a call fails: this runs on the way to returning the tool's own result, and
         // a telemetry sink refusing writes is the sort of thing that happens during an incident. The
         // same rule as the audit filter, for the same reason.
+        //
+        // EVERY exception, cancellation included. The caller cancelling is decided inside WriteCore,
+        // on the caller's token; an OperationCanceledException reaching here came from the sink or
+        // from resolving a service, and letting it through would replace the tool's own result.
         try
         {
             WriteCore(logger, toolName, ex, correlationId ?? "none", cancellationToken);
         }
-        catch (Exception logFailure) when (logFailure is not OperationCanceledException)
+        catch (Exception)
         {
             // Deliberately ignored.
         }

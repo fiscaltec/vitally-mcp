@@ -378,11 +378,83 @@ public class FailureLoggingTests
     private static VitallyApiKeyProvider BuildProvider(SecretClient secrets, ILogger<VitallyApiKeyProvider> logger) =>
         new(Options.Create(new VitallyServerOptions()), new MemoryCache(new MemoryCacheOptions()), logger, secrets);
 
+    [Fact]
+    public void ToolCallFailureLog_NeverThrows_WhenTheLoggerThrowsACancellation()
+    {
+        // Caught by type in an earlier version, and so let through: a cancellation from the SINK is not
+        // the caller cancelling — that case is decided inside WriteCore, on the caller's token — so
+        // excluding the type from the guard only let a logging failure replace the tool's result.
+        var logger = new ThrowingLogger<object>(() => new OperationCanceledException("sink"));
+
+        var viaLogger = () => ToolCallFailureLog.Write(logger, "List_users",
+            new InvalidOperationException(), "corr", CancellationToken.None);
+        viaLogger.Should().NotThrow();
+
+        var services = new Mock<IServiceProvider>();
+        services.Setup(s => s.GetService(It.IsAny<Type>())).Throws(new OperationCanceledException("scope"));
+        var viaServices = () => ToolCallFailureLog.Write(services.Object, "List_users",
+            new InvalidOperationException(), CancellationToken.None);
+        viaServices.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task SendAsync_StillThrowsTheUpstreamFailure_WhenItsLoggerThrows()
+    {
+        // The HttpRequestException carries the Vitally body the client is shown. A throwing sink must
+        // not replace it with its own exception, which the filter would not surface.
+        using var client = TestHelpers.CreateMockHttpClient("{\"message\":\"externalId is required\"}",
+            HttpStatusCode.BadRequest);
+        var service = TestHelpers.BuildVitallyService(client, logger: new ThrowingLogger<VitallyService>());
+
+        var act = () => service.GetResourcesAsync("organizations");
+
+        (await act.Should().ThrowAsync<HttpRequestException>()).WithMessage("*externalId is required*");
+    }
+
+    [Fact]
+    public async Task OrganizationSummary_KeepsItsSectionIsolation_WhenItsLoggerThrows()
+    {
+        // A section failure is absorbed into `{error: ...}` by design. Logging it must not undo that by
+        // turning an absorbed error into a failed summary.
+        var (client, _) = TestHelpers.CreateMockHttpClientPaged(
+            "{\"id\":\"org-1\",\"name\":\"Acme\"}",
+            "{\"results\":[{\"id\":\"co-1\",\"name\":\"somethingElse\"}]}");
+        using var _client = client;
+        var service = TestHelpers.BuildVitallyService(client, logger: new ThrowingLogger<VitallyService>());
+
+        var result = await service.GetOrganizationSummaryAsync("org-1", null, "goals", "feedback");
+
+        result.Should().Contain("\"organization\"").And.Contain("not found");
+    }
+
+    [Fact]
+    public async Task ApiKeyProvider_StillThrowsTheKeyVaultFailure_WhenItsLoggerThrows()
+    {
+        var secrets = new Mock<SecretClient>();
+        secrets.Setup(s => s.GetSecretAsync("vitally-shared", null, It.IsAny<SecretContentType?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RequestFailedException(403, "Forbidden"));
+        var provider = BuildProvider(secrets.Object, new ThrowingLogger<VitallyApiKeyProvider>());
+
+        var act = () => provider.GetApiKeyAsync();
+
+        await act.Should().ThrowAsync<RequestFailedException>("Azure's error is the diagnosis, not the sink's");
+    }
+
     private sealed class ThrowingLogger : ILogger
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) => throw new InvalidOperationException("sink down");
+    }
+
+    /// <summary>A sink refusing writes, for the components that take a typed logger.</summary>
+    private sealed class ThrowingLogger<T>(Func<Exception>? throws = null) : ILogger<T>
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw (throws?.Invoke() ?? new InvalidOperationException("sink down"));
     }
 }

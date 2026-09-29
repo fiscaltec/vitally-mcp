@@ -108,10 +108,10 @@ public class VitallyService
             //
             // Emitted per upstream call rather than per tool call on purpose: Get_organization_summary
             // absorbs a failed sub-call into a successful result, so only this line shows the fault.
-            _logger.Log(ToolCallFailureLog.LevelFor(response.StatusCode),
+            LogBestEffort(() => _logger.Log(ToolCallFailureLog.LevelFor(response.StatusCode),
                 "Vitally upstream call failed: {Method} {ResourceType} returned {StatusCode} correlation={CorrelationId}",
                 method.Method, ResourceTypeOf(url), (int)response.StatusCode,
-                _auditContext?.CorrelationId ?? "none");
+                _auditContext?.CorrelationId ?? "none"));
 
             // EnsureSuccessStatusCode discards the response body, but Vitally returns the
             // actual failure reason in the body (e.g. {"message": "externalId is required"}).
@@ -190,6 +190,23 @@ public class VitallyService
         }
 
         return end >= 0 && rest[end] == '/' ? $"/resources/{segment}/…" : $"/resources/{segment}";
+    }
+
+    // A failure log must never change what the call returns (#94). Both call sites sit on a failure
+    // path — before the HttpRequestException that carries the Vitally body to the client, and inside
+    // the summary's per-section catch — so a sink throwing there would replace that exception, or
+    // turn an absorbed section error into a failed summary. Every exception is swallowed, the same
+    // rule as ToolCallFailureLog and AuditLogger.Emit.
+    private static void LogBestEffort(Action write)
+    {
+        try
+        {
+            write();
+        }
+        catch (Exception)
+        {
+            // Deliberately ignored.
+        }
     }
 
     private static string Truncate(string value, int max) =>
@@ -524,9 +541,9 @@ public class VitallyService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
+            LogBestEffort(() => _logger.LogWarning(
                 "Organisation summary section {Section} absorbed a failure: {Reason} ({ExceptionType}) correlation={CorrelationId}",
-                section, reason, ex.GetType().Name, _auditContext?.CorrelationId ?? "none");
+                section, reason, ex.GetType().Name, _auditContext?.CorrelationId ?? "none"));
             return new JsonObject { ["error"] = ex.Message };
         }
     }

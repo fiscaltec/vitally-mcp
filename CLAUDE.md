@@ -811,6 +811,13 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > record with `ex.Message`, `LogError(ex, …)` or the full path** — `CapturingLogger.Exceptions`
 > exists so the tests can see the second of those.
 >
+> **Every one of these writes is best-effort and swallows _every_ exception, cancellation
+> included** — a throwing sink must not replace the tool's result, the `HttpRequestException` that
+> carries Vitally's body, Azure's Key Vault error, or a summary's per-section isolation. Do not add
+> `when (ex is not OperationCanceledException)` to those guards: the caller cancelling is decided
+> on the caller's token inside `ToolCallFailureLog`, so a cancellation reaching a guard came from the
+> sink (Copilot on #177).
+>
 > The **Key Vault record is the deliberate exception**: it attaches the exception, because Azure's
 > error carries its status and code — the difference between a missing role and an unreachable vault
 > — and never the secret or customer data. (A transport-level failure carries neither, only the
