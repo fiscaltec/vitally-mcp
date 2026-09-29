@@ -97,19 +97,41 @@ public class ToolCallAuditContextTests
     }
 
     [Fact]
-    public void Summarise_CarriesTheTierTheAuthorizerResolved_AndLeavesStalenessUnknownUntilItIsKnown()
+    public void Summarise_CarriesTheTierTheAuthorizerResolved_AndLeavesStalenessUnknownWhenNothingChecked()
     {
         // The tier has to come from the component that made the decision, not from a second lookup —
         // or the record could disagree with the decision it purports to document.
         var context = new ToolCallAuditContext();
 
-        context.RecordResolvedTier(new HashSet<string> { "vitally:write", "vitally:read" });
+        context.RecordResolvedTier(new HashSet<string> { "vitally:write", "vitally:read" }, servedStale: null);
 
         var summary = context.Summarise();
         summary.PermissionTier.Should().Be("vitally:read,vitally:write", "sorted, so records compare");
         summary.TierServedStale.Should().BeNull(
-            "GraphGroupPermissionResolver does not yet report whether it served a retained copy, and "
-            + "recording false would assert the tier was fresh when nothing checked");
+            "a caller that did not check freshness says so, and recording false would assert the tier "
+            + "was fresh when nothing checked");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Summarise_CarriesTheStalenessTheAuthorizerReported(bool servedStale)
+    {
+        var context = new ToolCallAuditContext();
+
+        context.RecordResolvedTier(new HashSet<string> { "vitally:read" }, servedStale);
+
+        context.Summarise().TierServedStale.Should().Be(servedStale);
+    }
+
+    [Fact]
+    public void Summarise_IsUnresolvedAndUnknown_WhenNoTierWasRecorded()
+    {
+        // A call denied before any tier resolved must not read as a fresh one.
+        var summary = new ToolCallAuditContext().Summarise();
+
+        summary.PermissionTier.Should().Be("unresolved");
+        summary.TierServedStale.Should().BeNull();
     }
 
     [Fact]
@@ -161,10 +183,14 @@ public class ToolCallAuditContextTests
         // report a tier that did NOT admit the call, contradicting the one invariant this field has.
         var context = new ToolCallAuditContext();
 
-        context.RecordResolvedTier(new HashSet<string> { "vitally:read", "vitally:write" });
-        context.RecordResolvedTier(new HashSet<string> { "vitally:read" });
+        context.RecordResolvedTier(new HashSet<string> { "vitally:read", "vitally:write" }, servedStale: false);
+        context.RecordResolvedTier(new HashSet<string> { "vitally:read" }, servedStale: true);
 
-        context.Summarise().PermissionTier.Should().Be("vitally:read,vitally:write",
+        var summary = context.Summarise();
+        summary.PermissionTier.Should().Be("vitally:read,vitally:write",
             "the admission decision is the one the record documents");
+        summary.TierServedStale.Should().BeFalse(
+            "and its staleness travels with it — a later backstop check served stale must not relabel "
+            + "a tier that Graph confirmed");
     }
 }

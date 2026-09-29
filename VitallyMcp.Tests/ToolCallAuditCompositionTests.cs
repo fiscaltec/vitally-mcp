@@ -30,6 +30,9 @@ public class ToolCallAuditCompositionTests
     private const string ReaderGroup = "71451cc9-f5df-44ee-8ed1-3acc41a911eb";
     private const string UserOid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
 
+    private const int FreshSeconds = 60;
+    private const int StaleSeconds = 3600;
+
     private const string TwoOrganisations =
         "{\"results\":[{\"id\":\"org-1\",\"name\":\"Acme\"},{\"id\":\"org-2\",\"name\":\"Globex\"}]}";
 
@@ -54,6 +57,84 @@ public class ToolCallAuditCompositionTests
         record.Should().Contain("outcome=ok");
     }
 
+    [Fact]
+    public async Task TheRecordSaysWhetherTheTierWasServedStale_AcrossAGraphOutage()
+    {
+        // #161, through the real wiring. The unit tests prove each hop — resolver reports it, the
+        // authorizer passes it on, the context keeps it, the logger renders it — but a record only
+        // carries the truth if the SAME answer the admission decision used is the one that lands in
+        // the scoped context the filter reads. One scenario in one host, because the stale path only
+        // engages after a success: the retained copy is the state linking the three phases.
+        using var harness = new Harness(TwoOrganisations);
+
+        await harness.CallToolAsync("List_organizations");
+
+        // Past the fresh window, so this call must ask Graph — and Graph is down.
+        harness.Graph.Status = HttpStatusCode.ServiceUnavailable;
+        harness.Clock.Advance(TimeSpan.FromSeconds(FreshSeconds + 1));
+        var duringOutage = await harness.CallToolAsync("List_organizations");
+        duringOutage.Should().NotContain("\"error\"", "the retained tier still admits the call");
+
+        // Past the stale window as well: nothing left to serve, so the call must be refused.
+        harness.Clock.Advance(TimeSpan.FromSeconds(StaleSeconds + 1));
+        await harness.CallToolAsync("List_organizations");
+
+        var calls = harness.AuditRecords
+            .Where(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
+            .Select(e => e.Message)
+            .ToList();
+        calls.Should().HaveCount(2, "the two admitted calls each leave a record; the refused one does not");
+
+        calls[0].Should().Contain("tier=vitally:read").And.Contain("tierStale=False",
+            "Graph answered, so the resolver can say the tier was fresh — a checked claim");
+        calls[1].Should().Contain("tier=vitally:read").And.Contain("tierStale=True",
+            "the tier came from the retained copy, and the record must say so");
+        calls.Should().NotContain(m => m.Contains("tierStale=unknown", StringComparison.Ordinal),
+            "on the live path the resolver always knows which branch it took");
+
+        harness.AuditRecords.Should().Contain(
+            e => e.Message.Contains("DENIED tools/call List_organizations", StringComparison.Ordinal),
+            "null from the resolver still means deny — the widened return must not have softened it");
+    }
+
+    [Fact]
+    public async Task TheRecordKeepsTheAdmissionDecisionsStaleness_WhenALaterCheckInTheSameCallIsServedStale()
+    {
+        // The scenario above gives every check in a call the SAME answer, so it cannot tell "the
+        // admitting check's staleness reached the record" from "whichever check ran last did" — or
+        // from the handler's authorizer writing into a different scope's context than the one the
+        // filter reads. This splits them inside one call: Graph answers the first check, then goes
+        // down while the fresh window lapses, so every later check is served the retained copy. The
+        // record must say False. Last-write-wins, a scope split, or a dropped first write each
+        // record True.
+        using var harness = new Harness(TwoOrganisations);
+        harness.Graph.AfterRespond = () =>
+        {
+            harness.Graph.AfterRespond = null;
+            harness.Graph.Status = HttpStatusCode.ServiceUnavailable;
+            harness.Clock.Advance(TimeSpan.FromSeconds(FreshSeconds + 1));
+        };
+
+        var result = await harness.CallToolAsync("List_organizations");
+
+        // First, so a broken premise fails with its real cause rather than as a misleading denial
+        // below. Each lookup is ONE request, because only ReaderGroup is configured. And there are
+        // three lookups, not two — observed, not assumed: SDK 2.2.0 evaluates the [Authorize] policy
+        // twice per tools/call (ConfigureCallToolFilter, then ConfigureOrdinaryCallToolFilter) before
+        // the VitallyService backstop runs. So only the FIRST admission check is answered by Graph;
+        // the second and the backstop are both served the retained copy.
+        harness.Graph.Requests.Should().Be(3,
+            "two SDK admission checks and one backstop, one Graph request each");
+        harness.Graph.FailedResponses.Should().Be(2,
+            "only the first check was answered, or the split this test relies on did not happen");
+        result.Should().NotContain("\"error\"", "the later checks are admitted on the retained tier");
+        harness.AuditRecords.Should()
+            .ContainSingle(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
+            .Subject.Message.Should().Contain("tierStale=False",
+                "the record documents the first check that admitted the call, and Graph confirmed that "
+                + "one — so the caller was entitled per Graph at the moment of the call");
+    }
+
     private sealed class Harness : IDisposable
     {
         private readonly WebApplicationFactory<Program> _baseFactory;
@@ -61,6 +142,17 @@ public class ToolCallAuditCompositionTests
         private readonly CapturingLoggerProvider _audit = new("VitallyMcp.AuditLogger");
 
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
+
+        /// <summary>
+        /// The clock the resolver's freshness and staleness windows are measured against. Shared with
+        /// the host rather than left on the system clock so a test can walk a caller through a Graph
+        /// outage — <c>IMemoryCache</c> expiry cannot be wound forward, the same constraint
+        /// <see cref="StaleEntitlementCompositionTests"/> works around this way.
+        /// </summary>
+        public FakeClock Clock { get; } = new(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero));
+
+        /// <summary>One instance for the host's lifetime, so a test can take Graph down mid-scenario.</summary>
+        public GraphHandler Graph { get; } = new(ReaderGroup);
 
         public Harness(
             string vitallyBody,
@@ -77,6 +169,8 @@ public class ToolCallAuditCompositionTests
             Environment.SetEnvironmentVariable("OAuth__Audience", "https://example.test/");
             Environment.SetEnvironmentVariable("Authorization__LiveGroupCheck", "true");
             Environment.SetEnvironmentVariable("Authorization__ReaderGroupId", ReaderGroup);
+            Environment.SetEnvironmentVariable("Authorization__LiveGroupCacheSeconds", FreshSeconds.ToString());
+            Environment.SetEnvironmentVariable("Authorization__LiveGroupStaleSeconds", StaleSeconds.ToString());
             Environment.SetEnvironmentVariable("Audit__Enabled", "true");
             Environment.SetEnvironmentVariable("Audit__IncludeReads", "true");
 
@@ -100,8 +194,9 @@ public class ToolCallAuditCompositionTests
                             .RequireAuthenticatedUser().Build());
 
                     services.AddSingleton<TokenCredential>(new StubTokenCredential());
+                    services.AddSingleton<TimeProvider>(Clock);
                     services.AddHttpClient<IGroupPermissionResolver, GraphGroupPermissionResolver>()
-                        .ConfigurePrimaryHttpMessageHandler(() => new GraphHandler(ReaderGroup));
+                        .ConfigurePrimaryHttpMessageHandler(() => Graph);
 
                     // Stub the upstream at the *primary* handler so the real VitallyService
                     // pipeline — the rate-limit handler included — still runs in front of it.
@@ -174,12 +269,16 @@ public class ToolCallAuditCompositionTests
             _factory.Dispose();
             _baseFactory.Dispose();
             _audit.Dispose();
+            // Handed to the host as an instance, so the host does not own it. Idempotent if the
+            // client factory disposed it on handler rotation first.
+            Graph.Dispose();
 
             foreach (var name in new[]
             {
                 "OAuth__NoAuth", "Authorization__ReadOnly", "Vitally__DevelopmentApiKey", "Vitally__Region",
                 "OAuth__Authority", "OAuth__Audience", "Authorization__LiveGroupCheck",
-                "Authorization__ReaderGroupId", "Audit__Enabled", "Audit__IncludeReads"
+                "Authorization__ReaderGroupId", "Authorization__LiveGroupCacheSeconds",
+                "Authorization__LiveGroupStaleSeconds", "Audit__Enabled", "Audit__IncludeReads"
             })
             {
                 Environment.SetEnvironmentVariable(name, null);
@@ -211,6 +310,13 @@ public class ToolCallAuditCompositionTests
         }
     }
 
+    private sealed class FakeClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private sealed class StubTokenCredential : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
@@ -226,8 +332,41 @@ public class ToolCallAuditCompositionTests
     /// </summary>
     private sealed class GraphHandler(string memberGroupId) : RecordingHandler
     {
+        /// <summary>Mutable because the stale path only engages after an earlier success.</summary>
+        public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
+
+        /// <summary>
+        /// Runs after each response is produced. Lets a test change the world <i>between</i> two
+        /// lookups inside one tool call, which is the only way to give the admission check and the
+        /// backstop different answers.
+        /// </summary>
+        public Action? AfterRespond { get; set; }
+
+        /// <summary>How many lookups Graph refused — evidence the stale path was actually taken.</summary>
+        public int FailedResponses { get; private set; }
+
+        /// <summary>Every request, answered or refused.</summary>
+        public int Requests { get; private set; }
+
         protected override HttpResponseMessage Respond(HttpRequestMessage request)
         {
+            Requests++;
+            var response = Answer(request);
+            AfterRespond?.Invoke();
+            return response;
+        }
+
+        private HttpResponseMessage Answer(HttpRequestMessage request)
+        {
+            if (Status != HttpStatusCode.OK)
+            {
+                FailedResponses++;
+                return new HttpResponseMessage(Status)
+                {
+                    Content = new StringContent("{\"error\":\"graph is down\"}", Encoding.UTF8, "application/json")
+                };
+            }
+
             var isMember = request.RequestUri!.ToString()
                 .Contains(memberGroupId, StringComparison.OrdinalIgnoreCase);
             var body = isMember ? "{\"value\":[{\"id\":\"" + UserOid + "\"}]}" : "{\"value\":[]}";

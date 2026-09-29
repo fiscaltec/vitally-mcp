@@ -100,22 +100,22 @@ public sealed class ToolCallAuditContext
     /// ⚠️ <b>Unbackfillable.</b> Entitlement comes from live Entra group membership, so once someone
     /// leaves a group nothing can reconstruct what they were entitled to at a past moment.
     /// </para>
-    /// <param name="servedStale">
-    /// Whether the tier came from a retained copy during a Graph outage. <c>null</c> means
-    /// <i>not known</i>, which is the current state:
-    /// <see cref="GraphGroupPermissionResolver"/> serves stale internally and logs it, but does not
-    /// report it back through <see cref="IGroupPermissionResolver"/>. Recording <c>false</c> here
-    /// would assert the tier was fresh when nothing checked — a weaker claim dressed as a stronger
-    /// one, which is the opposite of what this field is for.
-    /// </param>
     /// </remarks>
-    public void RecordResolvedTier(IReadOnlySet<string> permissions, bool? servedStale = null)
+    /// <param name="servedStale">
+    /// Whether the tier came from a retained copy during a Graph outage — pass
+    /// <see cref="ResolvedPermissions.ServedStale"/> exactly as the resolver reported it. <c>null</c>
+    /// means <i>not known</i>, and is what a caller that did not consult the resolver must pass (the
+    /// claim path). Deliberately required rather than defaulted, so a new call site has to say which
+    /// it is. Recording <c>false</c> where nothing checked would assert the tier was fresh — a weaker
+    /// claim dressed as a stronger one, which is the opposite of what this field is for.
+    /// </param>
+    public void RecordResolvedTier(IReadOnlySet<string> permissions, bool? servedStale)
     {
         lock (_gate)
         {
             // First write wins. The authorizer runs several times per tool call — the SDK's admission
-            // check, then the VitallyService backstop for every upstream request, and a composite tool
-            // issues several. Last-write-wins would report whichever check ran last, so a membership
+            // check (which SDK 2.2.0 evaluates twice per tools/call), then the VitallyService backstop
+            // for every upstream request, and a composite tool issues several. Last-write-wins would report whichever check ran last, so a membership
             // change mid-call, or a later lookup served stale, would put a tier in the record that did
             // not admit the call. The invariant is "the tier the decision was made against", and the
             // decision is the first one.

@@ -20,9 +20,14 @@ namespace VitallyMcp;
 /// Graph outage rather than a fresh lookup. A stale tier is a weaker claim than a fresh one, and a
 /// record that cannot tell them apart overstates its own confidence.
 /// <para>
-/// <c>null</c> means <b>not known</b>, and that is what it holds today: the resolver serves stale
-/// internally and logs it, but does not report it back through <c>IGroupPermissionResolver</c>.
-/// Recording <c>false</c> would assert the tier was fresh when nothing checked.
+/// Tri-state on purpose. <c>true</c>/<c>false</c> are reported by the resolver itself through
+/// <see cref="ResolvedPermissions.ServedStale"/> (#161), so on the live path they are checked facts.
+/// <c>null</c> means <b>not known</b> — the claim path, and a call admitted with RBAC bypassed
+/// (<c>Authorization:Enabled=false</c> or <c>OAuth:NoAuth</c>), where the tier is <c>unresolved</c>
+/// too. A call denied before any tier resolved never reaches this record: the SDK checkpoint refuses
+/// it and only <c>LogToolCallDenied</c> is written.
+/// It must never be collapsed into <c>false</c>: that would assert the tier was fresh when nothing
+/// checked, a weaker claim dressed as a stronger one.
 /// </para>
 /// </param>
 /// <param name="McpClient">
