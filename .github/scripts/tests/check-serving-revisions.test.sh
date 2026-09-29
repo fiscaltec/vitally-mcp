@@ -8,7 +8,7 @@
 # Run:  bash .github/scripts/tests/check-serving-revisions.test.sh
 #
 # Exit codes asserted, as documented in the script:
-#   0 = every traffic-bearing revision satisfies every assertion
+#   0 = every serving (active or traffic-bearing) revision satisfies every assertion
 #   1 = at least one assertion definitely failed (and nothing was unassessable)
 #   2 = NOT ASSESSED -- something could not be read, so no verdict is possible
 #  64 = usage error
@@ -175,7 +175,7 @@ rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"false"}]'
 printf 'ERROR: boom\n' > "$FAKE_AZ_DIR/show-r2.fail"
 run app rg --env Authorization__ReadOnly --equals true
 check "NOT ASSESSED outranks a definite failure elsewhere" '[ "$RC" -eq 2 ]'
-check "...while still reporting the definite failure" 'grep -q "Authorization__ReadOnly=false" <<< "$OUT"'
+check "...while still reporting the definite failure" 'grep -qF "Authorization__ReadOnly=\"false\"" <<< "$OUT"'
 
 new_case
 list_fixture r1:100
@@ -277,6 +277,67 @@ rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":true}]'
 run app rg --env Authorization__ReadOnly --equals true
 check "a non-string value is NOT ASSESSED rather than <unset>" '[ "$RC" -eq 2 ]'
 
+# .NET's environment configuration provider matches keys case-insensitively and reads `:` and `__`
+# as the same separator, so these are all the same setting to the app -- and which one it honours is
+# not ours to guess.
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true"},{"name":"authorization__readonly","value":"false"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a case-variant duplicate is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true"},{"name":"Authorization:ReadOnly","value":"false"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a colon-separated duplicate is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"authorization__readonly","value":"true"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a single case-variant entry is the setting the app reads, so it is checked" '[ "$RC" -eq 0 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":5,"value":"x"},{"name":"Authorization__ReadOnly","value":"true"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "an env entry with no string name is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+printf '{"name":"other","properties":{"template":{"containers":[{"name":"a","image":"x","env":[{"name":"Authorization__ReadOnly","value":"true"}]}]}}}\n' > "$FAKE_AZ_DIR/show-r1.json"
+run app rg --env Authorization__ReadOnly --equals true
+check "a revision show that answers for a different revision is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"r1\\n","properties":{"trafficWeight":100,"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "a revision name with a trailing newline is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+# Exact means exact. The comparison happens inside jq, because a value carried out through `$(…)`
+# loses its trailing newlines and, through the CR strip, its embedded CRs -- `true\n` and `tr\rue`
+# would then compare equal to `true`.
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true\n"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a value with a trailing newline does not equal the value without it" '[ "$RC" -eq 1 ]'
+check "...and is printed escaped, so the difference is visible" 'grep -qF "Authorization__ReadOnly=\"true\\n\"" <<< "$OUT"'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"tr\rue"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a value with an embedded CR does not equal the value without it" '[ "$RC" -eq 1 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true "}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a value with trailing whitespace does not equal the value without it" '[ "$RC" -eq 1 ]'
+
 new_case
 list_fixture r1:100
 rev_fixture r1 "$IMG" '[{"name":"ApplicationInsights__ConnectionString","value":"   "}]'
@@ -360,6 +421,14 @@ check "--equals with an empty value can never pass, so is a usage error" '[ "$RC
 new_case
 run app --image --image
 check "a resource group that looks like an option is a usage error" '[ "$RC" -eq 64 ]'
+
+new_case
+run app rg --env A --equals --image
+check "an option-shaped --equals value is a usage error, not a swallowed --image" '[ "$RC" -eq 64 ]'
+
+new_case
+run app rg --env -A
+check "an option-shaped --env name is a usage error" '[ "$RC" -eq 64 ]'
 
 echo
 echo "check-serving-revisions: $pass passed, $fail failed"

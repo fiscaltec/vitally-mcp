@@ -8,8 +8,10 @@
 #
 #   --env NAME               NAME is set: a non-blank value, or a secretRef. The value is never
 #                            printed, only `set` / `<unset>`, so it is safe for connection strings.
-#   --env NAME --equals V    NAME's value is exactly V, and is printed. A secretRef cannot be
-#                            compared, so it is NOT ASSESSED rather than a pass or a fail.
+#   --env NAME --equals V    NAME's value is exactly V -- byte for byte, so `true\n` is not `true`.
+#                            A match prints V; a mismatch prints the actual value JSON-encoded, so
+#                            a stray newline or CR is visible. A secretRef cannot be compared, so it
+#                            is NOT ASSESSED rather than a pass or a fail.
 #   --image                  the image is readable, and is printed. There is no expected value --
 #                            compare it yourself. Revisions on different images are called out.
 #
@@ -54,8 +56,11 @@
 #     -- be told apart from "the template is not the shape expected" -- no answer.
 #   * A secretRef entry has NO `value` key, so reading `.value` alone renders a set variable as
 #     absent. `--env NAME` treats a secretRef as set.
-#   * A name that appears twice in `env` is NOT ASSESSED. Which entry the runtime honours is not
-#     this script's to guess, and guessing the first would pass `true` beside a later `false`.
+#   * A name that appears twice in `env` is NOT ASSESSED -- matched as .NET configuration matches
+#     it, case-insensitively and with `:` equal to `__`, so `authorization__readonly` and
+#     `Authorization:ReadOnly` are duplicates of `Authorization__ReadOnly`. Which entry the app
+#     honours is not this script's to guess, and guessing would pass `true` beside a `false`.
+#   * The revision `show` answers for is checked to be the one asked for.
 #   * CR is stripped from jq's output. jq.exe on Windows writes CR LF, and although Git Bash's `$(…)`
 #     drops a CR from a single `az -o tsv` value, it does not save this script: with the strip
 #     removed, four cases in the test suite fail on Windows (measured 2026-09-29).
@@ -81,14 +86,16 @@ CHECK_IMAGE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --env)
-      [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ] || usage
+      [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#-}" = "$2" ] || usage
       ENV_NAMES+=("$2"); ENV_VALUES+=(""); ENV_HAS_VALUE+=(0)
       shift 2 ;;
     --equals)
       # An empty expected value can never pass -- an empty value is treated as unset -- so it is a
-      # mistake in the invocation, not a check.
+      # mistake in the invocation, not a check. So is an option-shaped one: `--equals --image` would
+      # otherwise swallow the --image and silently drop that assertion.
       n=${#ENV_NAMES[@]}
-      [ $# -ge 2 ] && [ -n "$2" ] && [ "$n" -gt 0 ] && [ "${ENV_HAS_VALUE[$((n - 1))]}" = 0 ] || usage
+      [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ] && [ "$n" -gt 0 ] \
+        && [ "${ENV_HAS_VALUE[$((n - 1))]}" = 0 ] || usage
       ENV_VALUES[$((n - 1))]="$2"; ENV_HAS_VALUE[$((n - 1))]=1
       shift 2 ;;
     --image)
@@ -123,7 +130,7 @@ if ! REVS=$(printf '%s' "$LISTING" | jqr -r -s '
     if length != 1 then error("expected exactly one JSON document") else .[0] end
     | if type != "array" then error("the listing is not an array") else . end
     | map(
-        if (.name | type) != "string" or (.name | test("^[a-z0-9][a-z0-9-]*$") | not)
+        if (.name | type) != "string" or (.name | test("\\A[a-z0-9][a-z0-9-]*\\z") | not)
           then error("a revision has no valid name")
         elif (.properties.trafficWeight | type) != "number"
           then error("revision \(.name) has no numeric trafficWeight")
@@ -134,7 +141,8 @@ if ! REVS=$(printf '%s' "$LISTING" | jqr -r -s '
   not_assessed "the listing of $APP in $RG was not the shape expected: $REVS"
   exit 2
 fi
-mapfile -t REV_LIST <<< "$REVS"
+REV_LIST=()
+mapfile -t REV_LIST <<< "$REVS" || { not_assessed "could not read the revision names (bash without mapfile?)"; exit 2; }
 [ -n "$REVS" ] && [ ${#REV_LIST[@]} -gt 0 ] || {
   not_assessed "no active or traffic-bearing revisions of $APP in $RG"
   exit 2
@@ -156,14 +164,17 @@ for REV in "${REV_LIST[@]}"; do
   # Exactly one JSON document holding exactly one container, or no assertion here means anything:
   # every copy this replaced read containers[0], and on a second container the variable may sit on
   # the other one.
-  if ! C=$(printf '%s' "$DOC" | jqr -c -s '
+  if ! C=$(printf '%s' "$DOC" | jqr -c -s --arg rev "$REV" '
       if length != 1 then error("expected exactly one JSON document") else .[0] end
+      | if .name != $rev then error("asked for \($rev) but az answered for \(.name | tojson)") else . end
       | .properties.template.containers
       | if type != "array" then error("the revision template has no containers array")
         elif length != 1 then error("expected exactly one container, found \(length)")
         else .[0] end
       | if (.env == null) or ((.env | type) == "array") then .
-        else error("the container env is not an array") end' 2>&1); then
+        else error("the container env is not an array") end
+      | if any((.env // [])[]; (.name | type) != "string") then error("an env entry has no string name")
+        else . end' 2>&1); then
     echo "$REV  NOT ASSESSED — $C"
     note 2; continue
   fi
@@ -172,28 +183,41 @@ for REV in "${REV_LIST[@]}"; do
   line="$REV"
   for i in "${!ENV_NAMES[@]}"; do
     name="${ENV_NAMES[$i]}"
-    # One of: value:<v>  secretref  unset. A blank value is unset -- the app reads its settings
-    # with IsNullOrWhiteSpace, so to it blank means "not configured".
-    if ! state=$(printf '%s' "$C" | jqr -r --arg n "$name" '
-        [(.env // [])[] | select(.name == $n)]
+    # One of: eq  ne:<json>  set  secretref  unset. A blank value is unset -- the app reads its
+    # settings with IsNullOrWhiteSpace, so to it blank means "not configured".
+    #
+    # The --equals comparison is made HERE, inside jq, never on a value carried out into the shell:
+    # `$(…)` drops trailing newlines and the CR strip drops embedded CRs, so `true\n` and `tr\rue`
+    # would compare equal to `true` out there. A mismatch comes back JSON-encoded for the same reason
+    # -- printed as `"true\n"`, so the difference is visible rather than looking like a match.
+    if ! state=$(printf '%s' "$C" | jqr -r --arg n "$name" --arg want "${ENV_VALUES[$i]}" \
+        --argjson compare "${ENV_HAS_VALUE[$i]}" '
+        # The key as .NET configuration sees it: case-insensitive, with `:` and `__` the same
+        # separator. A match on the literal name alone would pass `true` beside a later
+        # `authorization__readonly=false`, which the app may well be the one it honours.
+        def k: ascii_downcase | gsub(":"; "__");
+        [(.env // [])[] | select((.name | k) == ($n | k))]
         | if length > 1 then error("\($n) appears \(length) times")
           elif length == 0 then "unset"
           else .[0]
             | if (.secretRef // "") != "" then "secretref"
               elif .value == null then "unset"
               elif (.value | type) != "string" then error("\($n) has a non-string value")
-              elif (.value | test("\\S")) then "value:" + .value
-              else "unset" end
+              elif (.value | test("\\S") | not) then "unset"
+              elif $compare != 1 then "set"
+              elif .value == $want then "eq"
+              else "ne:" + (.value | tojson) end
           end' 2>&1); then
       line="$line  $name=<NOT ASSESSED: $state>"
       note 2; continue
     fi
     if [ "${ENV_HAS_VALUE[$i]}" = 1 ]; then
       case "$state" in
-        value:*)
-          v="${state#value:}"
-          line="$line  $name=$v"
-          [ "$v" = "${ENV_VALUES[$i]}" ] || note 1 ;;
+        eq)
+          line="$line  $name=${ENV_VALUES[$i]}" ;;
+        ne:*)
+          line="$line  $name=${state#ne:}"
+          note 1 ;;
         secretref)
           line="$line  $name=<secretRef: value not readable, NOT ASSESSED>"
           note 2 ;;
@@ -203,7 +227,7 @@ for REV in "${REV_LIST[@]}"; do
       esac
     else
       case "$state" in
-        value:*|secretref) line="$line  $name=set" ;;
+        set|secretref) line="$line  $name=set" ;;
         *)                 line="$line  $name=<unset>"; note 1 ;;
       esac
     fi
