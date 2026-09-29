@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# A stand-in for `az`, put first on PATH by check-serving-revisions.test.sh. It answers only the two
+# calls check-serving-revisions.sh makes, from fixture files in $FAKE_AZ_DIR:
+#
+#   az containerapp revision list -n <app> -g <rg> -o json           -> list.json
+#   az containerapp revision show -n <app> -g <rg> --revision <r> -o json  -> show-<r>.json
+#
+# A fixture named <name>.fail instead makes that call exit 1 with its contents on stderr, which is
+# how a lapsed login, a missing role or a wrong subscription context presents. Every invocation is
+# appended to $FAKE_AZ_DIR/calls so a test can assert on the arguments.
+#
+# Anything else exits 99, so a change to the calls the script makes fails loudly here rather than
+# being answered by a stub that has quietly stopped modelling Azure.
+set -euo pipefail
+
+dir="${FAKE_AZ_DIR:?FAKE_AZ_DIR not set}"
+printf '%s\n' "$*" >> "$dir/calls"
+
+answer() {  # $1 = fixture basename
+  if [ -f "$dir/$1.fail" ]; then
+    cat "$dir/$1.fail" >&2
+    exit 1
+  fi
+  if [ -f "$dir/$1.json" ]; then
+    # FAKE_AZ_CRLF=1 reproduces the Windows CLI, whose output carries CR LF line endings. Git
+    # Bash's `$(…)` drops the CR, but the script must not depend on which shell runs it.
+    if [ "${FAKE_AZ_CRLF:-}" = "1" ]; then
+      sed 's/$/\r/' "$dir/$1.json"
+    else
+      cat "$dir/$1.json"
+    fi
+    exit 0
+  fi
+  echo "fake-az: no fixture for $1" >&2
+  exit 98
+}
+
+if [ "${1:-} ${2:-} ${3:-}" = "containerapp revision list" ]; then
+  answer list
+fi
+
+if [ "${1:-} ${2:-} ${3:-}" = "containerapp revision show" ]; then
+  rev=""
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = "--revision" ] && rev="$a"
+    prev="$a"
+  done
+  [ -n "$rev" ] || { echo "fake-az: show without --revision" >&2; exit 97; }
+  answer "show-$rev"
+fi
+
+echo "fake-az: unexpected invocation: $*" >&2
+exit 99

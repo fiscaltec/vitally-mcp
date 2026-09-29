@@ -177,19 +177,14 @@ resource "azurerm_container_app" "staging" {
       # come up guarded: it starts on the application default, false. Set it out of band as part of
       # the spin-up and then verify it:
       #
-      #   (the full form, which reports NOT ASSESSED rather than printing nothing when the
-      #    lookup fails, is in docs/runbooks/read-only-and-rbac-rollout.md — an empty result
-      #    from a bare loop is indistinguishable from an unguarded app)
-      #   CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-      #   REVS=$(az containerapp revision list -n $CA -g $RG \
-      #     --query '[?properties.trafficWeight > `0`].name' -o tsv) || echo "NOT ASSESSED"
-      #   for REV in $REVS; do az containerapp revision show -n $CA -g $RG --revision "$REV" \
-      #     --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv; done
+      #   bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
+      #     --env Authorization__ReadOnly --equals true --env ApplicationInsights__ConnectionString
       #
-      # Empty output means unguarded, not "defaulted to safe". It reads the SERVING revision
-      # deliberately: `az containerapp show` returns the desired template, which reports the new
-      # value the moment an update is accepted while the previous — unguarded — revision may
-      # still be taking every request.
+      # It must exit 0. <unset> means unguarded, not "defaulted to safe", and NOT ASSESSED (exit 2)
+      # means no verdict was possible. It reads every SERVING (active or weighted) revision deliberately: `az containerapp show`
+      # returns the desired template, which reports the new value the moment an update is accepted
+      # while the previous — unguarded — revision may still be taking every request. Do not inline a
+      # shorter loop here: an earlier one in this comment exited 0 on a failed listing (#167).
       #
       # Unset it for the tier-enforcement acceptance test, which has to see the write tools to prove
       # a reader is denied one, then put it back — under the EXIT trap in
