@@ -22,10 +22,19 @@ public sealed class CapturingLogger<T> : ILogger<T>
 
     public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
     public bool IsEnabled(LogLevel logLevel) => true;
+    // One lock over both lists, because callers log concurrently — Get_organization_summary's two
+    // sections run in parallel — and the index alignment above only holds if each entry and its
+    // exception are added as one unit. Reads are not locked: tests read after the writes finish.
+    private readonly object _gate = new();
+
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        Entries.Add((logLevel, formatter(state, exception)));
-        Exceptions.Add(exception);
+        var message = formatter(state, exception);
+        lock (_gate)
+        {
+            Entries.Add((logLevel, message));
+            Exceptions.Add(exception);
+        }
     }
 
     private sealed class NullScope : IDisposable

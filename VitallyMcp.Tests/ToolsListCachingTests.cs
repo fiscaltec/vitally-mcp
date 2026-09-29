@@ -75,5 +75,21 @@ public class ToolsListCachingTests : IClassFixture<ToolsListCachingTests.Factory
             Environment.SetEnvironmentVariable("Vitally__Region", "EU");
             return base.CreateHost(builder);
         }
+
+        // Cleared on the way out. Overwriting on entry protects THIS class from a sibling's leftovers;
+        // it does nothing for the class that runs next, which inherits `OAuth__NoAuth=true` — auth off
+        // — unless it happens to set that key itself. Same defect as ResourceMetadataDiscoveryTests
+        // had (#94).
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            foreach (var name in new[]
+            {
+                "OAuth__NoAuth", "Authorization__ReadOnly", "Vitally__DevelopmentApiKey", "Vitally__Region",
+            })
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
     }
 }
