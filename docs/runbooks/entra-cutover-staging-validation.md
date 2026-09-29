@@ -178,34 +178,16 @@ Keep that shell open for steps 3 and 4, then exit it. The failsafe logs its own 
 before you walk away, from any shell:**
 
 ```bash
-CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
-# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
-# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
-# print nothing and read exactly like the "unguarded" case the text below describes.
-if ! REVS=$(az containerapp revision list -n $CA -g $RG \
-     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
-else
-  rc=0
-  for REV in $REVS; do
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv); then
-      printf '%s\t%s\n' "$REV" "${V:-<unset>}"
-      [ "$V" = "true" ] || rc=1
-    else
-      echo "NOT ASSESSED — could not read $REV"; rc=1
-    fi
-  done
-  [ "$rc" -eq 0 ] && echo "GUARDED — every traffic-bearing revision has Authorization__ReadOnly=true"
-  [ "$rc" -eq 0 ]
-fi
+bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
+  --env Authorization__ReadOnly --equals true
 ```
 
-It must print `true`. **Empty output means UNGUARDED**, not "defaulted to safe" — the application
-default is `false`. This reads the revision that is *serving traffic*, deliberately: a plain
-`az containerapp show` returns the desired template, which reports `true` from the moment the
-update is accepted even while the previous, writable revision is still answering every request.
+It must exit **0** and print `PASS`, with `Authorization__ReadOnly=true` on every line. **`<unset>`
+means UNGUARDED**, not "defaulted to safe" — the application default is `false` — and `NOT ASSESSED`
+means you do not know, which is not the same as guarded. It reads every revision *serving traffic*,
+deliberately: a plain `az containerapp show` returns the desired template, which reports `true` from
+the moment the update is accepted even while the previous, writable revision is still answering every
+request.
 
 Steps 1, 2 and 5 are unaffected — they touch metadata, the token and the logs, not the tool
 catalogue — so leave the guard on for those.
@@ -283,45 +265,40 @@ survive a recreate, so the answer is not a property of "staging" but of the app 
 template, so during a swap it reports the variable as set while an older revision still serves requests
 and still writes full records to stdout. The `AppEvents` query would then read as a false negative.
 
+It asserts the connection string is set on **every traffic-bearing revision**, and prints each one's
+image beside it:
+
 ```bash
-CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-VAR=ApplicationInsights__ConnectionString
-if ! REVS=$(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
-else
-  rc=0
-  for REV in $REVS; do
-    # [value,secretRef] because a secretRef entry has NO value key: querying .value alone renders a
-    # variable that IS set exactly like one that is absent. See the warning below.
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].env[?name=='$VAR']|[0]|[value,secretRef]|[?@]|[0]" -o tsv) && I=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].image" -o tsv); then
-      echo "$REV  $( [ -n "$V" ] && echo set || echo '<unset>' )  ${I:-<no image>}"
-      { [ -n "$V" ] && [ -n "$I" ]; } || rc=1
-    else
-      echo "$REV  NOT ASSESSED — could not read this revision"; rc=1
-    fi
-  done
-  [ "$rc" -eq 0 ] && echo "CONFIGURED — every serving revision has a connection string (NOT proof of ingestion)"
-  [ "$rc" -eq 0 ]
-fi
+bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
+  --env ApplicationInsights__ConnectionString --image
 ```
 
-⚠️ **Five details here are load-bearing, and each was wrong in an earlier draft.**
+Exit **0** (`PASS`) means every serving revision has it; **1** (`FAIL`) means at least one definitely
+does not; **2** (`NOT ASSESSED`) means something could not be read. The script's header lists the
+fail-closed details it enforces — a failed or empty listing, a `secretRef` entry having no `value`
+key, an explicit `<unset>` token, the value never printed, schema drift. Do not re-inline it; the
+inline copies drifted fail-open (#167).
 
-1. **Query `[value,secretRef]`, not `.value`.** A `secretRef` entry carries no `value` key at all, so
-   `.value|[0]` renders a variable that IS set exactly like one that is absent — measured against
-   production's `OAuth__SharedClientSecret`, which is defined that way. Neither app stores the
-   connection string as a secret today, but it holds an instrumentation key and this repo already
-   keeps the OAuth secret as a Container App secret, so that is one routine tidy-up away. The
-   consequence of getting it wrong is not a missing answer but a confidently **wrong** one: you would
-   be sent to the console `grep` on an app where suppression is in force, find only breadcrumbs, and
-   conclude nothing was audited.
-2. **Print an explicit `<unset>` token.** `"${V:+set}"` prints nothing at all for the unset case, so a
-   definite answer arrives as a blank column while "could not read" arrives loudly — backwards, since
-   the two demand different actions. ⚠️ Do **not** reach for `"${V:+set}${V:-UNSET}"`: when `V` is
-   non-empty that expands to `set` followed by the connection string itself, printing a credential to
-   the terminal. An explicit branch, as above.
-3. **`NOT ASSESSED` is not `<unset>`.** Stop and find out which it is. A **mixed** result counts as
-   unset: one unsuppressed serving revision is enough to put full records on stdout.
+⚠️ **Four things it cannot decide for you.**
+
+1. **`NOT ASSESSED` is not `<unset>`.** Stop and find out which it is — an Azure CLI, RBAC or
+   transient error is not an answer, and treating it as one sends you to the console path for no
+   reason. A **mixed** result counts as unset: one unsuppressed serving revision is enough to put full
+   records on stdout.
+2. **The IMAGE matters as much as the variable, which is why the check prints both.** An image built
+   before #164 (`410e851`, 2026-09-25) has no exporter registration at all, so it **ignores this
+   variable entirely** — a stale revision reports `set` and still writes full records to stdout, while
+   the table above would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran
+   a 22-day-old image until 2026-09-25, and setting the variable on it changed nothing. If the tag
+   predates `sha-410e851`, deploy before reading anything into either answer.
+3. **`PASS` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
+   exporter *branch* was selected. A stale or wrong connection string is non-empty, so it passes while
+   `Program.cs:176` suppresses the console records and the exporter's sends fail — the records then
+   exist nowhere, and this check would have told you everything was fine. **Only the `AppEvents` query
+   below establishes ingestion.** Treat `PASS` as a precondition for reading `AppEvents`, never as a
+   substitute for it.
+4. **It proves the variable is declared**, not that a `secretRef` resolves to a real secret — though a
+   revision whose secretRef names a missing secret fails to provision and so never bears traffic.
 4. **The IMAGE matters as much as the variable, and the check prints both.** An image built before
    #164 (`410e851`, 2026-09-25) has no exporter registration at all, so it **ignores this variable
    entirely** — a stale revision reports `set` and still writes full records to stdout, while the table

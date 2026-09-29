@@ -1135,32 +1135,20 @@ while production ran `sha-410e851` — **22 days and 21 merged commits apart**
 be serving every request. Same trap this file already records for `Authorization__ReadOnly`:
 
 ```bash
-CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-if ! REVS=$(az containerapp revision list -n $CA -g $RG --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
-else
-  rc=0
-  for REV in $REVS; do
-    if IMG=$(az containerapp revision show -n $CA -g $RG --revision "$REV" --query "properties.template.containers[0].image" -o tsv); then
-      printf '%s\t%s\n' "$REV" "${IMG:-<none>}"
-      [ -n "$IMG" ] || { echo "NOT ASSESSED — no image resolved for $REV"; rc=1; }
-    else
-      echo "NOT ASSESSED — could not read $REV"; rc=1
-    fi
-  done
-  [ "$rc" -eq 0 ]
-fi
+bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth --image
 ```
 
 ⚠️ **Exit 0 here means "the read succeeded", not "the image is current"** — there is no expected
-value to assert against. Compare what it prints against production yourself, and treat two
-traffic-bearing revisions on different images as a finding.
+value to assert against. Compare what it prints against production yourself (same command, production's
+app name). The script calls out traffic-bearing revisions on different images; treat that as a finding.
 
-The guards still do real work. A bare `for REV in $(az …)` runs its body **zero times** on a failed or
-empty listing and still exits 0; and `az` exits **0 with empty output** when a `--query` path stops
-resolving (an extension bump, a multi-container template), so without the emptiness check a schema
-change prints a blank line that reads as a clean look at a current image. Same fail-open shape this
-file warns about for `Authorization__ReadOnly`.
+**Use the script; do not re-inline the loop.** It was inline here and in four other documents, and the
+copies drifted fail-open within a single PR (#167): one read `az containerapp show`, one lost the guard
+on a failed or empty listing, one lost the emptiness check. A bare `for REV in $(az …)` runs its body
+**zero times** on a failed or empty listing and exits 0, and `az` exits **0 with empty output** when a
+`--query` path stops resolving — the script reads the template as JSON instead, so schema drift is
+`NOT ASSESSED` rather than a blank that reads as a clean result. Its header lists every such detail.
+Exit codes: **0** pass, **1** a definite failure, **2** `NOT ASSESSED`, **64** usage.
 
 ⚠️ `NOT ASSESSED` on the listing is also what a **torn-down** staging app produces, and an absent
 staging app is a normal state rather than a fault (#112) — check whether it exists before reading
@@ -1244,45 +1232,26 @@ the shared production Vitally tenant until someone sets the variable. Set it as 
 spin-up and verify it, rather than reading the capture as a guarantee:
 
 ```bash
-CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
-# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
-# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
-# print nothing and read exactly like the "unguarded" case the text below describes.
-if ! REVS=$(az containerapp revision list -n $CA -g $RG \
-     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
-else
-  rc=0
-  for REV in $REVS; do
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv) \
-       && C=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
-      printf '%s\tReadOnly=%s\tAppInsights=%s\n' "$REV" "${V:-<unset>}" "$( [ -n "$C" ] && echo set || echo '<unset>' )"
-      [ "$V" = "true" ] || rc=1
-      [ -n "$C" ] || rc=1
-    else
-      echo "NOT ASSESSED — could not read $REV"; rc=1
-    fi
-  done
-  [ "$rc" -eq 0 ] && echo "SPUN UP CORRECTLY — every traffic-bearing revision has both variables"
-  [ "$rc" -eq 0 ]
-fi
+bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
+  --env Authorization__ReadOnly --equals true --env ApplicationInsights__ConnectionString
 ```
 
-Empty output means unguarded, not "defaulted to safe". It reads the **serving** revision on
-purpose: `az containerapp show` returns the desired template, which flips the moment an update is
+It must exit **0** and print `PASS`. `<unset>` means unguarded, not "defaulted to safe", and
+`NOT ASSESSED` (exit 2) means you do not know — neither is a pass. It reads every **serving** revision
+on purpose: `az containerapp show` returns the desired template, which flips the moment an update is
 accepted, while the previous — unguarded — revision may still be taking traffic.
 
-⚠️ **It checks BOTH spin-up variables, because a check that verifies one of two is worse than no
-check at all** — an operator runs it, sees a pass, and concludes the spin-up is complete. Two details
-in the second half are load-bearing:
+⚠️ **It asserts BOTH spin-up variables, because a check that verifies one of two is worse than no
+check at all** — an operator runs it, sees a pass, and concludes the spin-up is complete. If a third
+spin-up variable is ever added, add a third `--env` here and at every other site that runs this check
+(`grep -rn check-serving-revisions` — the *set* of things checked is what drifted last time, #167).
+Two details:
 
-- It queries `[value,secretRef]`, not `.value`. A `secretRef` entry carries **no `value` key**, so
-  `.value` renders a variable that IS set exactly like one that is absent (measured against
-  production's `OAuth__SharedClientSecret`, which is defined that way).
-- `AppInsights=set` means **configured, not exporting**. A stale or wrong connection string is
+- A `secretRef`-backed variable counts as **set**. A `secretRef` entry carries **no `value` key**, so
+  a `.value` query renders a variable that IS set exactly like one that is absent (measured against
+  production's `OAuth__SharedClientSecret`, which is defined that way). The script handles it; an
+  inline query would not.
+- `ApplicationInsights__ConnectionString=set` means **configured, not exporting**. A stale or wrong connection string is
   non-empty and passes here, while its sends fail and `Program.cs:176` suppresses the console records
   — so the records would exist nowhere and this check would still say pass. Only an `AppEvents` query
   proves ingestion; `docs/runbooks/entra-cutover-staging-validation.md` has it.
