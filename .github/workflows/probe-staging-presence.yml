@@ -1,7 +1,7 @@
 name: Probe staging presence (temporary, #171)
 
 # TEMPORARY evidence-gathering workflow for #171 -- deleted before the PR is opened. Deploys nothing
-# and changes nothing: every az call is a read. It answers one question: what does the DEPLOY
+# and changes nothing: every az call is a read. (Rerun after the RG-scope ContainerApp Reader grant.) It answers one question: what does the DEPLOY
 # identity (which holds Contributor scoped to each Container App, and nothing at resource-group
 # scope) see when it looks up a Container App that does not exist?
 on:
