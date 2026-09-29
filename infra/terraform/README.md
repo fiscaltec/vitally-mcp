@@ -103,11 +103,13 @@ DNS vnet-links / NAT associations (composite IDs).
 
 ## CI/CD (wired)
 `.github/workflows/deploy.yml` deploys to one of two targets, named by GitHub **environment**:
-`production` (default, and where the nightly release train ships) or `staging`. Each target needs
-three things, all captured here: a federated credential on the managed identity whose subject is
-`repo:fiscaltec/vitally-mcp:environment:<target>` (`identity.tf`), `Contributor` on that target's
-Container App (`identity.tf`), and `CONTAINER_APP` + `PUBLIC_ORIGIN` as **environment-scoped** GitHub
-variables. `ACR_NAME` / `RESOURCE_GROUP` / `IMAGE_NAME` are shared and stay repo-level.
+`production` (the default) or `staging`; the nightly release train ships to both, staging first
+(#171). Each target needs three things, all captured here: a federated credential on the managed
+identity whose subject is `repo:fiscaltec/vitally-mcp:environment:<target>` (`identity.tf`),
+`Contributor` on that target's Container App (`identity.tf`), and `CONTAINER_APP` + `PUBLIC_ORIGIN` as
+**environment-scoped** GitHub variables. The identity also holds `ContainerApp Reader` on the resource
+group (`identity.tf`), so the train can tell a torn-down staging from a failed lookup.
+`ACR_NAME` / `RESOURCE_GROUP` / `IMAGE_NAME` are shared and stay repo-level.
 
 The workflow itself holds no per-target literals, so adding a target means an environment plus a
 federated credential and no YAML change. It fails before building if any of those variables is

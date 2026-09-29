@@ -11,6 +11,7 @@
 #   0 = every serving (active or traffic-bearing) revision satisfies every assertion
 #   1 = at least one assertion definitely failed (and nothing was unassessable)
 #   2 = NOT ASSESSED -- something could not be read, so no verdict is possible
+#   3 = ABSENT -- az reported this app does not exist in this resource group
 #  64 = usage error
 set -uo pipefail
 
@@ -147,6 +148,53 @@ printf 'ERROR: AADSTS700024: Client assertion is not within its valid time range
 run app rg --env Authorization__ReadOnly --equals true
 check "a failed listing is NOT ASSESSED, not a pass" '[ "$RC" -eq 2 ] && grep -q "NOT ASSESSED" <<< "$OUT"'
 check "a failed listing surfaces az's own error" 'grep -q "AADSTS700024" <<< "$OUT"'
+
+# ---------------------------------------------------------------- ABSENT (exit 3)
+#
+# Only az's own "this app was not found in this resource group" is absence. It is only reachable
+# because the deploy identity holds ContainerApp Reader at resource-group scope (#171): without it
+# Azure answers AuthorizationFailed for an app that does not exist, identical to a lost role. Every
+# other failure -- the resource group missing, a role missing, a login lapsed, a DIFFERENT app not
+# found -- stays NOT ASSESSED, because treating any of those as "absent" would skip a check that
+# should have failed.
+
+ABSENT_MSG="ERROR: (ResourceNotFound) The Resource 'Microsoft.App/containerApps/app' under resource group 'rg' was not found. For more details please go to https://aka.ms/ARMResourceNotFoundFix"
+
+new_case
+printf '%s\n' "$ABSENT_MSG" > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "ResourceNotFound for this app in this group is ABSENT, exit 3" '[ "$RC" -eq 3 ] && grep -q "^ABSENT" <<< "$OUT"'
+check "...and still surfaces az's error" 'grep -qF "(ResourceNotFound)" <<< "$OUT"'
+
+new_case
+printf '%s\r\n' "$ABSENT_MSG" > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "ABSENT is recognised through Windows CR LF" '[ "$RC" -eq 3 ]'
+
+new_case
+printf '%s\n' "ERROR: (ResourceNotFound) The Resource 'Microsoft.App/containerApps/other' under resource group 'rg' was not found." > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "ResourceNotFound naming a DIFFERENT app is NOT ASSESSED, not ABSENT" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '%s\n' "ERROR: (ResourceNotFound) The Resource 'Microsoft.App/containerApps/app' under resource group 'other-rg' was not found." > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "ResourceNotFound naming a DIFFERENT resource group is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '%s\n' "ERROR: (ResourceGroupNotFound) Resource group 'rg' could not be found." > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "a missing resource group is NOT ASSESSED, not ABSENT" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '%s\n' "ERROR: (AuthorizationFailed) The client 'x' with object id 'y' does not have authorization to perform action 'Microsoft.App/containerApps/revisions/read' over scope '/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/containerApps/app' or the scope is invalid." > "$FAKE_AZ_DIR/list.fail"
+run app rg --image
+check "AuthorizationFailed -- what an absent app looks like WITHOUT the RG-scope role -- is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '%s\n' "ERROR: (ResourceNotFound) The Resource 'Microsoft.App/containerApps/appZx' under resource group 'rg' was not found." > "$FAKE_AZ_DIR/list.fail"
+run app.x rg --image
+check "the app name is matched literally -- 'app.x' is not a pattern matching 'appZx'" '[ "$RC" -eq 2 ]'
 
 new_case
 printf '[]\n' > "$FAKE_AZ_DIR/list.json"
