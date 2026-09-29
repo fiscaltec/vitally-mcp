@@ -18,6 +18,7 @@ namespace VitallyMcp.Tests;
 /// silently fell back to the request host would still pass the sibling class's assertions, because
 /// there the two values coincide.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class OAuthProxyPublicOriginTests : IClassFixture<OAuthProxyPublicOriginTests.Factory>
 {
     private const string PublicOrigin = "https://vitally.example.com";

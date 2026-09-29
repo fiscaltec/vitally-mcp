@@ -42,7 +42,9 @@ var builder = WebApplication.CreateBuilder(args);
 //
 // So this filter is NOISE REDUCTION, worth 19.5% of console bytes, with defence-in-depth as a
 // footnote: if redaction were ever disabled the filter would still keep the URIs out. Path segments
-// are not redacted, but those carry record ids, which `AuditLogger` deliberately records anyway.
+// are not redacted. They usually carry record ids, which `AuditLogger` deliberately records anyway —
+// but not always: tools put caller strings into the path unescaped, so a mistyped id is whatever the
+// model typed (#94). That is why VitallyService's failure record logs only the resource type.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 // Noise. Measured against live production on 2026-09-18 over a 300-record sample: these four
@@ -67,8 +69,12 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warnin
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
 
-// Warning rather than None, so a failing outbound call still surfaces — this server has exactly one
-// LogError call site of its own, so framework warnings are most of what reports a fault today.
+// Warning rather than None, so a failing outbound call still surfaces. This server's own failure
+// records (#94) cover only the paths it owns — a failed tool call (ToolCallFailureLog), a non-2xx from
+// Vitally (VitallyService.SendAsync), a Key Vault fetch (VitallyApiKeyProvider) — plus the Warning
+// sites in the Graph and OIDC resolvers, the rate limiter and the authentication re-emit below.
+// Hosting and routing faults surface only through these framework categories, so silencing them
+// entirely would still blind the server to a class of failure.
 //
 // ⚠️ One exception, stated because an earlier version of this comment claimed otherwise and was
 // wrong: `Microsoft.AspNetCore.Authorization` logs its *failures* at Information, not Warning
@@ -405,6 +411,12 @@ mcpBuilder.WithRequestFilters(filters =>
     // Surface the real failure reason (Vitally body / read-only / RBAC denial / validation) to the
     // client instead of the SDK's generic "An error occurred invoking 'X'." Unexpected exceptions
     // propagate so the SDK keeps its protocol-error / cancellation handling and generic message.
+    //
+    // Failures are also logged here (#94), bar RBAC denials (LogDenied has them) and a cancelled
+    // caller. Before that, a SURFACEABLE failure was converted into a result and left no server-side
+    // trace at all. The second branch is different: the SDK already logs an exception that escapes
+    // this filter, with the exception attached, so what this adds there is the correlation id that
+    // joins it to the audit record. See ToolCallFailureLog for why the message itself is never logged.
     filters.AddCallToolFilter(next => async (context, cancellationToken) =>
     {
         try
@@ -413,7 +425,13 @@ mcpBuilder.WithRequestFilters(filters =>
         }
         catch (Exception ex) when (ToolErrorResult.IsSurfaceable(ex))
         {
+            ToolCallFailureLog.Write(context.Services, context.Params?.Name, ex, cancellationToken);
             return ToolErrorResult.Build(ex);
+        }
+        catch (Exception ex)
+        {
+            ToolCallFailureLog.Write(context.Services, context.Params?.Name, ex, cancellationToken);
+            throw;
         }
     });
 

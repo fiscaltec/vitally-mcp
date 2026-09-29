@@ -58,7 +58,8 @@ public static class TestHelpers
         ToolAuthorizer? authorizer = null,
         AuditLogger? audit = null,
         ToolCallAuditContext? auditContext = null,
-        int maxAutoPageFetches = 10)
+        int maxAutoPageFetches = 10,
+        Microsoft.Extensions.Logging.ILogger<VitallyService>? logger = null)
     {
         var options = Options.Create(new VitallyServerOptions
         {
@@ -80,7 +81,7 @@ public static class TestHelpers
         audit ??= new AuditLogger(
             Options.Create(new AuditOptions { Enabled = false }),
             NullLogger<AuditLogger>.Instance);
-        return new VitallyService(httpClient, options, provider, authorizer, audit, auditContext);
+        return new VitallyService(httpClient, options, provider, authorizer, audit, auditContext, logger);
     }
 
     /// <summary>

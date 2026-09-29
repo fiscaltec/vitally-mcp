@@ -16,6 +16,7 @@ namespace VitallyMcp.Tests;
 /// configuration overrides supplied via in-memory config so we don't depend on a real identity
 /// provider or Key Vault.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class OAuthProxyEndpointsTests : IClassFixture<OAuthProxyEndpointsTests.Factory>
 {
     private readonly Factory _factory;
