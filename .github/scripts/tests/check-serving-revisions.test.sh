@@ -32,14 +32,17 @@ new_case() {
   unset FAKE_AZ_CRLF
 }
 
-# list_fixture "rev1:100" "rev2:0" ...  -> list.json with those traffic weights
+# list_fixture "rev1:100" "rev2:0:false" ...  -> list.json with those traffic weights and, optionally,
+# `active` (default true)
 list_fixture() {
-  local out="[" first=1 spec name weight
+  local out="[" first=1 spec name weight active rest
   for spec in "$@"; do
-    name="${spec%%:*}"; weight="${spec##*:}"
+    name="${spec%%:*}"; rest="${spec#*:}"
+    weight="${rest%%:*}"
+    if [ "$rest" = "$weight" ]; then active=true; else active="${rest#*:}"; fi
     [ "$first" = 1 ] || out="$out,"
     first=0
-    out="$out{\"name\":\"$name\",\"properties\":{\"trafficWeight\":$weight,\"active\":true}}"
+    out="$out{\"name\":\"$name\",\"properties\":{\"trafficWeight\":$weight,\"active\":$active}}"
   done
   printf '%s]\n' "$out" > "$FAKE_AZ_DIR/list.json"
 }
@@ -151,9 +154,9 @@ run app rg --env Authorization__ReadOnly --equals true
 check "an empty listing is NOT ASSESSED -- a bare for-loop would exit 0 here" '[ "$RC" -eq 2 ] && grep -q "NOT ASSESSED" <<< "$OUT"'
 
 new_case
-list_fixture r1:0 r2:0
+list_fixture r1:0:false r2:0:false
 run app rg --env Authorization__ReadOnly --equals true
-check "revisions with no traffic are NOT ASSESSED" '[ "$RC" -eq 2 ]'
+check "only inactive revisions with no traffic is NOT ASSESSED" '[ "$RC" -eq 2 ] && grep -q "no active or traffic-bearing" <<< "$OUT"'
 
 new_case
 printf 'WARNING: something\nnot json\n' > "$FAKE_AZ_DIR/list.json"
@@ -192,6 +195,100 @@ printf '{"name":"r1","properties":{"template":{"containers":[{"name":"a","image"
 run app rg --env Authorization__ReadOnly --equals true
 check "a container with no env array at all is <unset>, a definite answer" '[ "$RC" -eq 1 ] && grep -q "<unset>" <<< "$OUT"'
 
+# ---------------------------------------------------------------- the listing must be what it claims
+
+new_case
+printf '[{"name":"","properties":{"trafficWeight":100,"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+run app rg --env Authorization__ReadOnly --equals true
+check "an empty revision name is NOT ASSESSED -- word-splitting would check nothing and pass" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"","properties":{"trafficWeight":50,"active":true}},{"name":"r2","properties":{"trafficWeight":50,"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r2 "$IMG" "$GUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "an empty name beside a good revision is NOT ASSESSED -- half the traffic unchecked" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"*","properties":{"trafficWeight":100,"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+run app rg --env Authorization__ReadOnly --equals true
+check "a revision name that is not a revision name is NOT ASSESSED, and is never passed to az" '[ "$RC" -eq 2 ] && ! grep -q -- "--revision" "$FAKE_AZ_DIR/calls"'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":50,"active":true}},{"name":"r2","properties":{"traffic":{"weight":50},"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+rev_fixture r2 "$IMG" "$UNGUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "a revision with no numeric trafficWeight is NOT ASSESSED, not silently dropped" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":"100","active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "a string trafficWeight is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":100,"active":true}}][]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$UNGUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "more than one JSON document in the listing is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '{"value":[]}\n' > "$FAKE_AZ_DIR/list.json"
+run app rg --env Authorization__ReadOnly --equals true
+check "a listing that is an object, not an array, is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":100,"active":true}},{"name":"r2","properties":{"trafficWeight":0,"active":true}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+rev_fixture r2 "$IMG" "$UNGUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "an ACTIVE revision at 0% weight is still checked -- it answers on its own FQDN" '[ "$RC" -eq 1 ] && grep -q "^r2" <<< "$OUT"'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":100,"active":true}},{"name":"r0","properties":{"trafficWeight":0,"active":false}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "an inactive 0% revision is not checked -- it serves nothing" '[ "$RC" -eq 0 ] && ! grep -q "^r0" <<< "$OUT"'
+check "...and is never read" '! grep -q -- "--revision r0" "$FAKE_AZ_DIR/calls"'
+
+new_case
+printf '[{"name":"r1","properties":{"trafficWeight":100}}]\n' > "$FAKE_AZ_DIR/list.json"
+rev_fixture r1 "$IMG" "$GUARDED"
+run app rg --env Authorization__ReadOnly --equals true
+check "a revision with no boolean active field is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
+# ---------------------------------------------------------------- the template must be what it claims
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true"},{"name":"Authorization__ReadOnly","value":"false"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a duplicated env name is NOT ASSESSED -- which entry wins is not ours to guess" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '{"Authorization__ReadOnly":"true"}'
+run app rg --env Authorization__ReadOnly --equals true
+check "an env that is an object, not an array, is NOT ASSESSED rather than <unset>" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":true}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a non-string value is NOT ASSESSED rather than <unset>" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"ApplicationInsights__ConnectionString","value":"   "}]'
+run app rg --env ApplicationInsights__ConnectionString
+check "a whitespace-only value is not set -- the app reads it with IsNullOrWhiteSpace" '[ "$RC" -eq 1 ]'
+
+new_case
+list_fixture r1:100
+printf '{"name":"r1","properties":{"template":{"containers":[{"name":"a","image":"x","env":[]}]}}}\n{"name":"r1"}\n' > "$FAKE_AZ_DIR/show-r1.json"
+run app rg --env Authorization__ReadOnly --equals true
+check "more than one JSON document from revision show is NOT ASSESSED" '[ "$RC" -eq 2 ]'
+
 # ---------------------------------------------------------------- --image
 
 new_case
@@ -216,12 +313,18 @@ check "...but are called out" 'grep -q "different images" <<< "$OUT"'
 
 # ---------------------------------------------------------------- Windows CLI line endings
 
+# The CR that matters is the one jq.exe writes on its OUTPUT, so model that with a jq wrapper that
+# appends CR to every line -- on Linux, too, where the real jq writes none and a test that only fed
+# CR into jq's input would pass with the strip removed.
 new_case
 export FAKE_AZ_CRLF=1
+REAL_JQ="$(command -v jq)"
+printf '#!/usr/bin/env bash\nset -o pipefail\n"%s" "$@" | sed '"'"'s/$/\\r/'"'"'\n' "$REAL_JQ" > "$CASE/bin/jq"
+chmod +x "$CASE/bin/jq"
 list_fixture r1:100
 rev_fixture r1 "$IMG" "$GUARDED"
 run app rg --env Authorization__ReadOnly --equals true --image
-check "CR LF output from the Windows CLI still passes" '[ "$RC" -eq 0 ]'
+check "CR LF from both az and jq (as on Windows) still passes" '[ "$RC" -eq 0 ]'
 check "...and no CR leaks into the printed line" '! grep -q $'"'"'\r'"'"' <<< "$OUT"'
 
 # ---------------------------------------------------------------- usage (exit 64)
@@ -249,6 +352,14 @@ check "an unknown option is a usage error" '[ "$RC" -eq 64 ]'
 new_case
 run app rg --env A --equals x --equals y
 check "two --equals for one --env is a usage error" '[ "$RC" -eq 64 ]'
+
+new_case
+run app rg --env A --equals ""
+check "--equals with an empty value can never pass, so is a usage error" '[ "$RC" -eq 64 ]'
+
+new_case
+run app --image --image
+check "a resource group that looks like an option is a usage error" '[ "$RC" -eq 64 ]'
 
 echo
 echo "check-serving-revisions: $pass passed, $fail failed"

@@ -58,8 +58,7 @@ default of `false`. **After any recreate, set the variables and then verify them
 (#147); without it the exporter is not registered and this app's audit records — object ids, tool
 arguments, touched record ids — stay on stdout instead of reaching `AppEvents`. Neither survives a
 recreate, and neither failure announces itself. Read the value with
-`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`
-(spelled out rather than `$RG`, which this prose sits above — the block below is where that is defined).
+`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`.
 
 ```bash
 bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
@@ -74,9 +73,9 @@ A `secretRef`-backed variable counts as set, which a `.value` query would get wr
 header has why. And `ApplicationInsights__ConnectionString=set` means **configured, not exporting**: a
 stale string is non-empty and passes here while its sends fail and `Program.cs:176` suppresses the
 console records, so only an `AppEvents` query proves ingestion — see
-`docs/runbooks/entra-cutover-staging-validation.md`.
-It reads the revision *serving traffic* rather than the desired template, which would report the
-new value while the previous writable revision was still answering requests.
+`docs/runbooks/entra-cutover-staging-validation.md`. It reads every revision that can *serve*
+(active or traffic-bearing) rather than the desired template, which would report the new value while the previous writable
+revision was still answering requests.
 
 Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
 staging, and worth knowing before doing it anywhere else.

@@ -1130,8 +1130,8 @@ whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b`
 while production ran `sha-410e851` — **22 days and 21 merged commits apart**
 (`git log --oneline 06dcf7b..410e851 | wc -l`).
 
-⚠️ Read it off the **traffic-bearing revision**, not `az containerapp show` — that returns the
-*desired* template, which flips the moment an update is accepted while the previous revision may still
+⚠️ Read it off the **serving revisions** (active or traffic-bearing), not `az containerapp show` —
+that returns the *desired* template, which flips the moment an update is accepted while the previous revision may still
 be serving every request. Same trap this file already records for `Authorization__ReadOnly`:
 
 ```bash
@@ -1140,14 +1140,16 @@ bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vital
 
 ⚠️ **Exit 0 here means "the read succeeded", not "the image is current"** — there is no expected
 value to assert against. Compare what it prints against production yourself (same command, production's
-app name). The script calls out traffic-bearing revisions on different images; treat that as a finding.
+app name). The script calls out serving revisions on different images; treat that as a finding.
 
-**Use the script; do not re-inline the loop.** It was inline here and in four other documents, and the
-copies drifted fail-open within a single PR (#167): one read `az containerapp show`, one lost the guard
+**Use the script; do not re-inline the loop.** It was inline here and in three other files — six copies
+in all — and the copies drifted fail-open within a single PR (#166): one read `az containerapp show`, one lost the guard
 on a failed or empty listing, one lost the emptiness check. A bare `for REV in $(az …)` runs its body
 **zero times** on a failed or empty listing and exits 0, and `az` exits **0 with empty output** when a
 `--query` path stops resolving — the script reads the template as JSON instead, so schema drift is
-`NOT ASSESSED` rather than a blank that reads as a clean result. Its header lists every such detail.
+`NOT ASSESSED` rather than a blank that reads as a clean result. It checks every revision that is
+**active or** carries traffic, because an active revision at 0% still answers on its own revision FQDN.
+Its header lists every such detail.
 Exit codes: **0** pass, **1** a definite failure, **2** `NOT ASSESSED`, **64** usage.
 
 ⚠️ `NOT ASSESSED` on the listing is also what a **torn-down** staging app produces, and an absent
@@ -1237,14 +1239,16 @@ bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vital
 ```
 
 It must exit **0** and print `PASS`. `<unset>` means unguarded, not "defaulted to safe", and
-`NOT ASSESSED` (exit 2) means you do not know — neither is a pass. It reads every **serving** revision
-on purpose: `az containerapp show` returns the desired template, which flips the moment an update is
+`NOT ASSESSED` (exit 2) means you do not know — neither is a pass. It reads every **serving** (active
+or traffic-bearing) revision on purpose: `az containerapp show` returns the desired template, which flips the moment an update is
 accepted, while the previous — unguarded — revision may still be taking traffic.
 
 ⚠️ **It asserts BOTH spin-up variables, because a check that verifies one of two is worse than no
 check at all** — an operator runs it, sees a pass, and concludes the spin-up is complete. If a third
-spin-up variable is ever added, add a third `--env` here and at every other site that runs this check
-(`grep -rn check-serving-revisions` — the *set* of things checked is what drifted last time, #167).
+spin-up variable is ever added, add a third `--env` here and at the other two **spin-up** sites —
+`docs/runbooks/read-only-and-rbac-rollout.md` and the comment in `containerapps-staging.tf`. Not every
+`check-serving-revisions` call: the image check, the guard-restore check and the App Insights location
+check assert deliberately narrower sets. The *set* of things checked is what drifted last time (#166).
 Two details:
 
 - A `secretRef`-backed variable counts as **set**. A `secretRef` entry carries **no `value` key**, so
@@ -1277,6 +1281,7 @@ multi-session exercise #112 was raised to end:
 | The `staging` GitHub environment + its `CONTAINER_APP` / `PUBLIC_ORIGIN` variables | The workflow reads them; recreating them by hand invites a typo into the origin, which the preflight check would catch but only after a wasted run |
 | The federated credential and role assignments | See the identity note below |
 | `containerapps-staging.tf` | The recreate recipe. Keep it in step with the live app rather than deleting it when the app goes |
+| `.github/scripts/check-serving-revisions.sh` | The spin-up verification above. It is repo content, so nothing to keep — but it is the step that proves a recreate came up guarded, so run it rather than skip it |
 
 The managed TLS certificate and the hostname binding go with the app and are re-created by the two
 `az containerapp hostname` commands above — that plus the app itself is the entire spin-up, because

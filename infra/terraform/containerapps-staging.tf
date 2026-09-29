@@ -181,7 +181,7 @@ resource "azurerm_container_app" "staging" {
       #     --env Authorization__ReadOnly --equals true --env ApplicationInsights__ConnectionString
       #
       # It must exit 0. <unset> means unguarded, not "defaulted to safe", and NOT ASSESSED (exit 2)
-      # means the lookup failed. It reads every SERVING revision deliberately: `az containerapp show`
+      # means no verdict was possible. It reads every SERVING (active or weighted) revision deliberately: `az containerapp show`
       # returns the desired template, which reports the new value the moment an update is accepted
       # while the previous — unguarded — revision may still be taking every request. Do not inline a
       # shorter loop here: an earlier one in this comment exited 0 on a failed listing (#167).

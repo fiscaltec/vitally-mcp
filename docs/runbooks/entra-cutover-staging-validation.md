@@ -31,6 +31,12 @@ staging is writable against real customer data, and anything that ends the sessi
 failed step, Ctrl-C, closing the terminal, going to lunch — leaves it that way indefinitely, with
 nothing anywhere to notice. Two independent restores, because neither alone is enough:
 
+These helpers deliberately stay inline rather than calling `.github/scripts/check-serving-revisions.sh`
+(#167): they are `declare -f`-exported into the detached failsafe shell below, which fires half an hour
+later (`sleep 1800`), and a relative script path there would depend on the directory it happened to
+be launched from — a restore that silently fails to find its own check. The walk-away check at the end of this section *does* use the script, so
+the verdict that matters is the shared, tested one.
+
 ```bash
 APP=(-n vitally-staging-ca-uksouth -g vitally-prod-rg-uksouth)
 RG=vitally-prod-rg-uksouth; CA=vitally-staging-ca-uksouth
@@ -184,8 +190,8 @@ bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vital
 
 It must exit **0** and print `PASS`, with `Authorization__ReadOnly=true` on every line. **`<unset>`
 means UNGUARDED**, not "defaulted to safe" — the application default is `false` — and `NOT ASSESSED`
-means you do not know, which is not the same as guarded. It reads every revision *serving traffic*,
-deliberately: a plain `az containerapp show` returns the desired template, which reports `true` from
+means you do not know, which is not the same as guarded. It reads every revision that can *serve*
+(active or traffic-bearing), deliberately: a plain `az containerapp show` returns the desired template, which reports `true` from
 the moment the update is accepted even while the previous, writable revision is still answering every
 request.
 
@@ -265,8 +271,8 @@ survive a recreate, so the answer is not a property of "staging" but of the app 
 template, so during a swap it reports the variable as set while an older revision still serves requests
 and still writes full records to stdout. The `AppEvents` query would then read as a false negative.
 
-It asserts the connection string is set on **every traffic-bearing revision**, and prints each one's
-image beside it:
+It asserts the connection string is set on **every serving revision** (active or traffic-bearing),
+and prints each one's image beside it:
 
 ```bash
 bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
@@ -277,7 +283,7 @@ Exit **0** (`PASS`) means every serving revision has it; **1** (`FAIL`) means at
 does not; **2** (`NOT ASSESSED`) means something could not be read. The script's header lists the
 fail-closed details it enforces — a failed or empty listing, a `secretRef` entry having no `value`
 key, an explicit `<unset>` token, the value never printed, schema drift. Do not re-inline it; the
-inline copies drifted fail-open (#167).
+inline copies drifted fail-open (#166, fixed by #167).
 
 ⚠️ **Four things it cannot decide for you.**
 
@@ -288,7 +294,7 @@ inline copies drifted fail-open (#167).
 2. **The IMAGE matters as much as the variable, which is why the check prints both.** An image built
    before #164 (`410e851`, 2026-09-25) has no exporter registration at all, so it **ignores this
    variable entirely** — a stale revision reports `set` and still writes full records to stdout, while
-   the table above would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran
+   the table below would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran
    a 22-day-old image until 2026-09-25, and setting the variable on it changed nothing. If the tag
    predates `sha-410e851`, deploy before reading anything into either answer.
 3. **`PASS` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
@@ -299,33 +305,12 @@ inline copies drifted fail-open (#167).
    substitute for it.
 4. **It proves the variable is declared**, not that a `secretRef` resolves to a real secret — though a
    revision whose secretRef names a missing secret fails to provision and so never bears traffic.
-4. **The IMAGE matters as much as the variable, and the check prints both.** An image built before
-   #164 (`410e851`, 2026-09-25) has no exporter registration at all, so it **ignores this variable
-   entirely** — a stale revision reports `set` and still writes full records to stdout, while the table
-   above would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran a
-   22-day-old image until 2026-09-25, and setting the variable on it changed nothing. If the tag
-   predates `sha-410e851`, deploy before reading anything into either answer.
-5. **`CONFIGURED` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
-   exporter *branch* was selected. A stale or wrong connection string is non-empty, so it prints
-   `CONFIGURED` while `Program.cs:176` suppresses the console records and the exporter's sends fail —
-   the records then exist nowhere, and this check would have told you everything was fine. **Only the
-   `AppEvents` query below establishes ingestion.** Treat `CONFIGURED` as a precondition for reading
-   `AppEvents`, never as a substitute for it.
 
-This proves the variable is **declared**, not that a `secretRef` resolves to a real secret — though a
-revision whose secretRef names a missing secret fails to provision and so never bears traffic.
-
-⚠️ **Fail closed, and read the guards as the check itself.** A per-revision read failure leaves `V`
-empty and would otherwise print that revision as unset, sending you to the console path on an Azure
-CLI, RBAC or transient error rather than on a real answer. `NOT ASSESSED` is not "unset" — stop and
-find out which it is. A **mixed** result counts as unset: one unsuppressed serving revision is enough
-to put full records on stdout.
-
-| Set, on a post-#164 image | Empty, **or any image predating `sha-410e851`** |
+| `set`, on a post-#164 image | `<unset>`, **or any image predating `sha-410e851`** |
 |---|---|
 | Staging behaves like production: the denial is in `AppEvents`, and the console carries only a breadcrumb | The `AuditLogger` category is unsuppressed, so the full record — arguments and all — is on the console |
 
-⚠️ **Both columns depend on the image, not only the variable** — see detail 4 below. A pre-#164 image
+⚠️ **Both columns depend on the image, not only the variable** — see detail 2 above. A pre-#164 image
 ignores the variable, so `set` on such a revision still means the records are on the console.
 
 **With it set**, query the workspace — `AppEvents` holds both targets, told apart by `AppRoleName`:

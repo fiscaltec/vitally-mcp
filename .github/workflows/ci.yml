@@ -31,12 +31,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # The fail-closed revision check (#167) is operational tooling rather than application code,
-      # but a regression in it fails OPEN, so it is gated here like the rest. Runs against a stub
-      # `az`; needs only bash and jq, both on the runner image.
-      - name: Test shell scripts
-        run: bash .github/scripts/tests/check-serving-revisions.test.sh
-
       - name: Setup .NET 10 SDK
         uses: actions/setup-dotnet@v6
         with:
@@ -70,6 +64,14 @@ jobs:
           --results-directory TestResults
           --coverage
           --coverage-output-format cobertura
+
+      # The fail-closed revision check (#167) is operational tooling rather than application code,
+      # but a regression in it fails OPEN, so it is gated here like the rest. Runs against a stub
+      # `az`; needs only bash and jq, both on the runner image. After the .NET tests and
+      # `!cancelled()`, so a failure in either suite never hides the other's result.
+      - name: Test shell scripts
+        if: ${{ !cancelled() }}
+        run: bash .github/scripts/tests/check-serving-revisions.test.sh
 
       - name: Upload test results
         if: always()
