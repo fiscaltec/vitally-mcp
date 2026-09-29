@@ -172,7 +172,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         var permissions = await resolver.TryResolvePermissionsAsync(UserOid);
 
-        permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"]);
+        permissions!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"]);
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         var permissions = await resolver.TryResolvePermissionsAsync(UserOid);
 
-        permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write", "vitally:delete"]);
+        permissions!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write", "vitally:delete"]);
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
         var permissions = await resolver.TryResolvePermissionsAsync(UserOid);
 
         permissions.Should().NotBeNull();
-        permissions.Should().BeEmpty();
+        permissions!.Permissions.Should().BeEmpty();
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
         var resolver = Build(handler, timeProvider: clock);
 
         var fresh = await resolver.TryResolvePermissionsAsync(UserOid);
-        fresh.Should().BeEquivalentTo(["vitally:read", "vitally:write"]);
+        fresh!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"]);
 
         // Past the 60s fresh TTL but well inside the stale window, with Graph now down.
         clock.Advance(TimeSpan.FromSeconds(120));
@@ -246,7 +246,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         var served = await resolver.TryResolvePermissionsAsync(UserOid);
 
-        served.Should().BeEquivalentTo(["vitally:read", "vitally:write"],
+        served!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"],
             "a Graph outage must not revoke a user whose tier was known good two minutes earlier");
     }
 
@@ -318,8 +318,108 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         var served = await resolver.TryResolvePermissionsAsync(UserOid);
 
-        served.Should().BeEquivalentTo(["vitally:read"],
+        served!.Permissions.Should().BeEquivalentTo(["vitally:read"],
             "a stale copy must never beat a successful lookup, or a revocation would not take effect");
+    }
+
+    // ---- Reporting staleness to the caller (#161) ---------------------------------------------
+    // The audit record carries whether the tier it names was served from the retained copy. That is
+    // only honest if the resolver says so itself: it is the one component that knows which branch it
+    // took, and anything downstream inferring it would be guessing.
+
+    [Fact]
+    public async Task ReportsNotStale_ForAFreshLookup()
+    {
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        var resolved = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        resolved.Should().NotBeNull();
+        resolved!.ServedStale.Should().BeFalse("Graph answered this very call");
+        resolved.Age.Should().Be(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task ReportsNotStale_WithItsAge_ForACacheHitInsideTheFreshWindow()
+    {
+        // A cache hit inside LiveGroupCacheSeconds is the live check working as designed, not a
+        // degradation — Graph confirmed it within the window the deployment accepts as current. So
+        // it is not "stale"; but its age is still reported, because it is not zero either.
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(30));
+
+        var resolved = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        resolved!.ServedStale.Should().BeFalse();
+        resolved.Age.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task ReportsServedStale_WithItsAge_WhenServingTheRetainedCopy()
+    {
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { EditorGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(120));
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+
+        var resolved = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        resolved!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"]);
+        resolved.ServedStale.Should().BeTrue("this tier was not confirmed by Graph on this call");
+        resolved.Age.Should().Be(TimeSpan.FromSeconds(120),
+            "stale by twenty seconds and stale by fifty-nine minutes are different claims");
+    }
+
+    [Fact]
+    public async Task ReportsTheStaleAge_AsOfFailureTime_NotAsOfWhenTheLookupBegan()
+    {
+        // Same reasoning as the window decision below: a Graph timeout can burn the whole client
+        // timeout, and an age measured from before the attempt would under-report how stale the
+        // served answer is by exactly that much.
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { AdminGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(100));
+        handler.Status = HttpStatusCode.GatewayTimeout;
+        handler.OnRequest = () => clock.Advance(TimeSpan.FromSeconds(10));
+
+        var resolved = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        resolved!.ServedStale.Should().BeTrue();
+        resolved.Age.Should().Be(TimeSpan.FromSeconds(110));
+    }
+
+    [Fact]
+    public async Task ReportsNotStale_OnceGraphRecovers_AfterServingStale()
+    {
+        // The flag describes the answer, not the resolver's history: a stale serve must not leave
+        // the next fresh answer marked stale.
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(120));
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+        (await resolver.TryResolvePermissionsAsync(UserOid))!.ServedStale.Should().BeTrue();
+
+        handler.Status = HttpStatusCode.OK;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var recovered = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        recovered!.ServedStale.Should().BeFalse();
+        recovered.Age.Should().Be(TimeSpan.Zero);
     }
 
     [Fact]

@@ -212,6 +212,16 @@ serves each caller's last known-good tier for up to `Authorization:LiveGroupStal
 by default) rather than denying everyone — so a revoked user can retain access for that long. The
 trade is deliberate; see the entitlement section in `CLAUDE.md`.
 
+**Afterwards, the audit trail can tell you whether they used that window.** Each tool-call record
+carries `AuditTierServedStale`: `True` means the tier that admitted the call came from the retained
+copy rather than from Graph (#161). Records written before that change was deployed carry
+`unknown` — the field existed but nothing reported it — so they cannot answer the question.
+
+```bash
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
+  "AppEvents | where Name == 'VitallyToolCall' and tostring(Properties.AuditTierServedStale) == 'True' | project TimeGenerated, AppRoleName, user=tostring(Properties.AuditUserId), tool=tostring(Properties.McpToolName), tier=tostring(Properties.AuditPermissionTier)"
+```
+
 So the honest worst case is **the remaining token lifetime plus the stale window**. If that is not
 acceptable, escalate — but pick the right lever, because the two cases differ:
 
