@@ -58,47 +58,24 @@ default of `false`. **After any recreate, set the variables and then verify them
 (#147); without it the exporter is not registered and this app's audit records — object ids, tool
 arguments, touched record ids — stay on stdout instead of reaching `AppEvents`. Neither survives a
 recreate, and neither failure announces itself. Read the value with
-`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`
-(spelled out rather than `$RG`, which this prose sits above — the block below is where that is defined).
+`az monitor app-insights component show -a vitally-prod-appi-uksouth -g vitally-prod-rg-uksouth --query connectionString -o tsv`.
 
 ```bash
-CA=vitally-staging-ca-uksouth; RG=vitally-prod-rg-uksouth
-# EVERY revision taking traffic, not just the newest: a single unguarded one is enough for
-# requests to reach it. `for REV in $(az …)` on its own is NOT this check — a failed or empty
-# listing runs the body zero times and exits 0, so an Azure outage or a missing role would
-# print nothing and read exactly like the "unguarded" case the text below describes.
-if ! REVS=$(az containerapp revision list -n $CA -g $RG \
-     --query '[?properties.trafficWeight > `0`].name' -o tsv) || [ -z "$REVS" ]; then
-  echo "NOT ASSESSED — could not list traffic-bearing revisions"; false
-else
-  rc=0
-  for REV in $REVS; do
-    if V=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='Authorization__ReadOnly'].value|[0]" -o tsv) \
-       && C=$(az containerapp revision show -n $CA -g $RG --revision "$REV" \
-         --query "properties.template.containers[0].env[?name=='ApplicationInsights__ConnectionString']|[0]|[value,secretRef]|[?@]|[0]" -o tsv); then
-      printf '%s\tReadOnly=%s\tAppInsights=%s\n' "$REV" "${V:-<unset>}" "$( [ -n "$C" ] && echo set || echo '<unset>' )"
-      [ "$V" = "true" ] || rc=1
-      [ -n "$C" ] || rc=1
-    else
-      echo "NOT ASSESSED — could not read $REV"; rc=1
-    fi
-  done
-  [ "$rc" -eq 0 ] && echo "SPUN UP CORRECTLY — every traffic-bearing revision has both variables"
-  [ "$rc" -eq 0 ]
-fi
+bash .github/scripts/check-serving-revisions.sh vitally-staging-ca-uksouth vitally-prod-rg-uksouth \
+  --env Authorization__ReadOnly --equals true --env ApplicationInsights__ConnectionString
 ```
 
-Empty output means **unguarded**, not "defaulted to safe" — the application default is `false`.
+It must exit **0** and print `PASS`. `<unset>` means **unguarded**, not "defaulted to safe" — the
+application default is `false` — and `NOT ASSESSED` (exit 2) means you do not know. This is the same
+invocation as CLAUDE.md's staging spin-up check; keep the two asserting the same set (#167).
 
-Two details in the second half are load-bearing. It queries `[value,secretRef]` rather than `.value`,
-because a `secretRef` entry carries **no `value` key** and `.value` would render a variable that IS
-set exactly like one that is absent. And `AppInsights=set` means **configured, not exporting**: a
+A `secretRef`-backed variable counts as set, which a `.value` query would get wrong — the script's
+header has why. And `ApplicationInsights__ConnectionString=set` means **configured, not exporting**: a
 stale string is non-empty and passes here while its sends fail and `Program.cs:176` suppresses the
 console records, so only an `AppEvents` query proves ingestion — see
-`docs/runbooks/entra-cutover-staging-validation.md`.
-It reads the revision *serving traffic* rather than the desired template, which would report the
-new value while the previous writable revision was still answering requests.
+`docs/runbooks/entra-cutover-staging-validation.md`. It reads every revision that can *serve*
+(active or traffic-bearing) rather than the desired template, which would report the new value while the previous writable
+revision was still answering requests.
 
 Toggling it rolls a new revision, which also empties the in-process permission cache — harmless on
 staging, and worth knowing before doing it anywhere else.
