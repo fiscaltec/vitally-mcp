@@ -36,7 +36,7 @@ jobs:
           RG: ${{ vars.RESOURCE_GROUP }}
           CA: ${{ vars.CONTAINER_APP }}
         run: |
-          set -u
+          set -u +e
           az config set extension.use_dynamic_install=yes_without_prompt > /dev/null 2>&1
           probe() { echo "::group::$1"; shift; "$@"; echo "exit=$?"; echo "::endgroup::"; }
           probe "1 revision list, REAL staging app" az containerapp revision list -n "$CA" -g "$RG" --query '[].name' -o tsv
