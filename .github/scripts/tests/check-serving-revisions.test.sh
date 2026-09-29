@@ -175,7 +175,7 @@ rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"false"}]'
 printf 'ERROR: boom\n' > "$FAKE_AZ_DIR/show-r2.fail"
 run app rg --env Authorization__ReadOnly --equals true
 check "NOT ASSESSED outranks a definite failure elsewhere" '[ "$RC" -eq 2 ]'
-check "...while still reporting the definite failure" 'grep -qF "Authorization__ReadOnly=\"false\"" <<< "$OUT"'
+check "...while still reporting the definite failure" 'grep -qF "Authorization__ReadOnly=<mismatch>" <<< "$OUT"'
 
 new_case
 list_fixture r1:100
@@ -324,7 +324,7 @@ list_fixture r1:100
 rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true\n"}]'
 run app rg --env Authorization__ReadOnly --equals true
 check "a value with a trailing newline does not equal the value without it" '[ "$RC" -eq 1 ]'
-check "...and is printed escaped, so the difference is visible" 'grep -qF "Authorization__ReadOnly=\"true\\n\"" <<< "$OUT"'
+check "...and says it differs only by whitespace, so the difference is visible" 'grep -qF "Authorization__ReadOnly=<mismatch: differs only in surrounding whitespace>" <<< "$OUT"'
 
 new_case
 list_fixture r1:100
@@ -337,6 +337,34 @@ list_fixture r1:100
 rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"true "}]'
 run app rg --env Authorization__ReadOnly --equals true
 check "a value with trailing whitespace does not equal the value without it" '[ "$RC" -eq 1 ]'
+
+# --equals never prints the live value: used against a credential by mistake, a mismatch would
+# otherwise write the credential into a terminal or CI log. It says HOW it differs instead.
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"ApplicationInsights__ConnectionString","value":"InstrumentationKey=SECRET-DO-NOT-PRINT"}]'
+run app rg --env ApplicationInsights__ConnectionString --equals InstrumentationKey=something-else
+check "a mismatch under --equals fails" '[ "$RC" -eq 1 ]'
+check "...and never prints the live value" '! grep -q "SECRET-DO-NOT-PRINT" <<< "$OUT"'
+check "...but says it is a mismatch" 'grep -qF "ApplicationInsights__ConnectionString=<mismatch>" <<< "$OUT"'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"Authorization__ReadOnly","value":"True"}]'
+run app rg --env Authorization__ReadOnly --equals true
+check "a value differing only in case is a mismatch, and says so" '[ "$RC" -eq 1 ] && grep -qF "<mismatch: differs only in case>" <<< "$OUT"'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"ApplicationInsights__ConnectionString","secretRef":{"name":"appi"}}]'
+run app rg --env ApplicationInsights__ConnectionString
+check "a non-string secretRef is NOT ASSESSED, not set" '[ "$RC" -eq 2 ]'
+
+new_case
+list_fixture r1:100
+rev_fixture r1 "$IMG" '[{"name":"ApplicationInsights__ConnectionString","secretRef":""}]'
+run app rg --env ApplicationInsights__ConnectionString
+check "an empty secretRef with no value is unset" '[ "$RC" -eq 1 ]'
 
 new_case
 list_fixture r1:100

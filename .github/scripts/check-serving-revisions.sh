@@ -9,8 +9,9 @@
 #   --env NAME               NAME is set: a non-blank value, or a secretRef. The value is never
 #                            printed, only `set` / `<unset>`, so it is safe for connection strings.
 #   --env NAME --equals V    NAME's value is exactly V -- byte for byte, so `true\n` is not `true`.
-#                            A match prints V; a mismatch prints the actual value JSON-encoded, so
-#                            a stray newline or CR is visible. A secretRef cannot be compared, so it
+#                            A match prints V (which you supplied). A mismatch NEVER prints the
+#                            live value, only `<mismatch>`, or `<mismatch: differs only in case>` /
+#                            `... in surrounding whitespace>`. A secretRef cannot be compared, so it
 #                            is NOT ASSESSED rather than a pass or a fail.
 #   --image                  the image is readable, and is printed. There is no expected value --
 #                            compare it yourself. Revisions on different images are called out.
@@ -183,13 +184,14 @@ for REV in "${REV_LIST[@]}"; do
   line="$REV"
   for i in "${!ENV_NAMES[@]}"; do
     name="${ENV_NAMES[$i]}"
-    # One of: eq  ne:<json>  set  secretref  unset. A blank value is unset -- the app reads its
+    # One of: eq  ne:[<how>]  set  secretref  unset. A blank value is unset -- the app reads its
     # settings with IsNullOrWhiteSpace, so to it blank means "not configured".
     #
     # The --equals comparison is made HERE, inside jq, never on a value carried out into the shell:
     # `$(…)` drops trailing newlines and the CR strip drops embedded CRs, so `true\n` and `tr\rue`
-    # would compare equal to `true` out there. A mismatch comes back JSON-encoded for the same reason
-    # -- printed as `"true\n"`, so the difference is visible rather than looking like a match.
+    # would compare equal to `true` out there. The live value never leaves jq at all: a mismatch
+    # reports only HOW it differs, so --equals used against a credential by mistake cannot write
+    # that credential into a terminal or CI log.
     if ! state=$(printf '%s' "$C" | jqr -r --arg n "$name" --arg want "${ENV_VALUES[$i]}" \
         --argjson compare "${ENV_HAS_VALUE[$i]}" '
         # The key as .NET configuration sees it: case-insensitive, with `:` and `__` the same
@@ -200,13 +202,17 @@ for REV in "${REV_LIST[@]}"; do
         | if length > 1 then error("\($n) appears \(length) times")
           elif length == 0 then "unset"
           else .[0]
-            | if (.secretRef // "") != "" then "secretref"
+            | if (.secretRef != null) and ((.secretRef | type) != "string")
+                then error("\($n) has a non-string secretRef")
+              elif (.secretRef // "") != "" then "secretref"
               elif .value == null then "unset"
               elif (.value | type) != "string" then error("\($n) has a non-string value")
               elif (.value | test("\\S") | not) then "unset"
               elif $compare != 1 then "set"
               elif .value == $want then "eq"
-              else "ne:" + (.value | tojson) end
+              elif (.value | gsub("^\\s+|\\s+$"; "")) == $want then "ne:differs only in surrounding whitespace"
+              elif (.value | ascii_downcase) == ($want | ascii_downcase) then "ne:differs only in case"
+              else "ne:" end
           end' 2>&1); then
       line="$line  $name=<NOT ASSESSED: $state>"
       note 2; continue
@@ -215,8 +221,11 @@ for REV in "${REV_LIST[@]}"; do
       case "$state" in
         eq)
           line="$line  $name=${ENV_VALUES[$i]}" ;;
-        ne:*)
-          line="$line  $name=${state#ne:}"
+        ne:?*)
+          line="$line  $name=<mismatch: ${state#ne:}>"
+          note 1 ;;
+        ne:)
+          line="$line  $name=<mismatch>"
           note 1 ;;
         secretref)
           line="$line  $name=<secretRef: value not readable, NOT ASSESSED>"
