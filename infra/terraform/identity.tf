@@ -100,10 +100,12 @@ resource "azurerm_role_assignment" "mi_ca_staging_contributor" {
 # Measured from the deploy identity on 2026-09-29: before this grant, AuthorizationFailed; after it,
 # `(ResourceNotFound)`, which check-serving-revisions.sh reports as exit 3.
 #
-# Read-only, but not nothing: the identity is also both apps' RUNTIME identity, so the running
+# Mostly read, and not nothing: the identity is also both apps' RUNTIME identity, so the running
 # containers can now read every Container App's configuration in the group (non-secret env values
-# included; secrets are a separate `listSecrets` action this role does not grant). The built-in role
-# also carries `Microsoft.Insights/alertRules/*` (classic alert rules) -- accepted over maintaining a
+# included; secrets are a separate `listSecrets` action this role does not grant), every role
+# assignment in it (`Microsoft.Authorization/*/read`) and its deployment history
+# (`Microsoft.Resources/deployments/read`). The built-in role also carries
+# `Microsoft.Insights/alertRules/*` -- WRITE on classic alert rules. Accepted over maintaining a
 # custom role (decision: dsearle, 2026-09-29).
 resource "azurerm_role_assignment" "mi_rg_containerapp_reader" {
   scope                = data.azurerm_resource_group.rg.id

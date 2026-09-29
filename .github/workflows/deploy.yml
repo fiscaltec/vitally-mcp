@@ -19,10 +19,15 @@ name: Deploy
 #     staging never smoke-tested; and
 #   * `az acr import --force` of a REBUILT image would overwrite the tag staging's revision points
 #     at, and staging (minReplicas 0, referencing a tag) would cold-start into production's rebuild.
-# Importing the same digest into the same tag is a no-op on content, so neither can happen. The
-# revision still references the readable tag (`vitally-mcp:v4.7.0`); the digest is what the tag was
-# verified to hold, printed in the job summary. ACR's data plane is unreachable from a hosted runner
-# (public access disabled), so the import IS the verification -- there is no read-back.
+# Within one train run, importing the same digest into the same tag is a no-op on content, so neither
+# can happen. The revision still references the readable tag (`vitally-mcp:v4.7.0`); the digest is
+# what the tag held AT IMPORT TIME, printed in the job summary. ACR's data plane is unreachable from a
+# hosted runner (public access disabled), so the import IS the verification -- there is no read-back.
+#
+# ⚠️ OUTSIDE the train the hazard is still live: a manual dispatch that REUSES an existing tag without
+# `image_digest` rebuilds and `--force`-imports over it, and staging (minReplicas 0) cold-starts into
+# that rebuild. To re-deploy a tag that already shipped, pass its digest (from the earlier job
+# summary) or re-run the train's failed jobs, which keeps staging's digest.
 #
 # THE TARGET IS A GITHUB ENVIRONMENT NAME, and everything that differs between targets is an
 # environment-scoped variable (CONTAINER_APP, PUBLIC_ORIGIN) rather than a literal in this file, so
@@ -54,7 +59,7 @@ on:
         required: false
         type: string
       image_digest:
-        description: "Skip the build and deploy this already-pushed GHCR digest (sha256:…). Normally empty"
+        description: "Skip the build and deploy this already-pushed GHCR digest (sha256:…). Requires image_tag. Normally empty"
         required: false
         type: string
   workflow_call:
@@ -80,6 +85,15 @@ on:
         description: "Skip the build and deploy this already-pushed GHCR digest (sha256:…)"
         required: false
         type: string
+      require_image_digest:
+        # Set by the train's production call when staging DEPLOYED. Without it, a break anywhere in
+        # the four-hop output chain (step -> job -> workflow_call -> needs) would hand production an
+        # empty digest, which reads as "build from ref" -- a silent rebuild of exactly the kind this
+        # design exists to prevent. With it, an empty digest fails the run instead.
+        description: "Fail rather than build if image_digest is empty"
+        required: false
+        default: false
+        type: boolean
     outputs:
       image_digest:
         description: "The GHCR manifest digest this run imported and rolled the target to"
@@ -203,9 +217,22 @@ jobs:
         env:
           GIVEN: ${{ inputs.image_digest }}
           BUILT: ${{ steps.build.outputs.digest }}
+          REQUIRED: ${{ inputs.require_image_digest }}
+          GIVEN_TAG: ${{ inputs.image_tag }}
           TAG: ${{ steps.vars.outputs.tag }}
+          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
+          if [ "$REQUIRED" = "true" ] && [ -z "$GIVEN" ]; then
+            echo "::error::A digest was required (staging deployed one) but none reached this call. Refusing to build: production would ship an image staging never ran."
+            exit 1
+          fi
+          # A given digest with a DEFAULTED tag would label it `sha-<ref>`, which may name a different
+          # build than the one the digest came from.
+          if [ -n "$GIVEN" ] && [ -z "$GIVEN_TAG" ]; then
+            echo "::error::image_digest requires an explicit image_tag"
+            exit 1
+          fi
           if [ -n "$GIVEN" ]; then digest="$GIVEN"; source="given by the caller (build skipped)"
           else digest="$BUILT"; source="built by this run"; fi
           if ! printf '%s' "$digest" | grep -Eqx 'sha256:[0-9a-f]{64}'; then
@@ -214,7 +241,7 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "Deploying $TAG = $digest, $source"
-          echo "**${{ inputs.target }}**: \`$TAG\` = \`$digest\` ($source)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**$TARGET**: \`$TAG\` = \`$digest\` ($source)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3

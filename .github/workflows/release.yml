@@ -27,7 +27,7 @@ name: Release
 #     nightly deploy of the tag would overwrite a branch mid-validation.
 #     ⚠️ THIS IS NOT THE AUTO_DEPLOY PATTERN warned against below. That released without deploying
 #     anywhere; a pin skips STAGING only, and production still ships what was tagged. A pinned
-#     staging is by definition not current, so the notice repeats every night rather than once.
+#     staging is by definition not current, so the notice repeats on every run that cuts a tag.
 #
 # TO FREEZE DEPLOYS: `gh workflow disable release.yml`; to lift it, `gh workflow enable release.yml`.
 # That stops tagging, releasing and deploying together, which is the coherent unit — a freeze must not
@@ -43,8 +43,14 @@ on:
     - cron: "0 2 * * *" # 02:00 UTC nightly
   workflow_dispatch:
 
-# Permissions are set per-job: a reusable workflow's token is CAPPED by the caller, so the deploy
-# job must itself grant id-token/packages or the called deploy.yml would be denied them at runtime.
+# Permissions are set per-job: a reusable workflow's token is CAPPED by the caller, so each calling
+# job must itself grant what its called workflow needs (id-token for the gate; id-token and packages
+# for the deploys), or the called workflow is denied them at runtime.
+#
+# RECOVERING A RUN. A gate failure, a staging failure or a cancellation leaves the tag and its
+# Release in place with production not shipped -- the next nightly run finds no NEW tag and does
+# nothing. Re-run that run's failed jobs (`gh run rerun <id> --failed`), which keeps any digest
+# staging already deployed; a fresh `gh workflow run release.yml` is a green no-op.
 concurrency:
   group: release-train
   cancel-in-progress: false
@@ -139,6 +145,7 @@ jobs:
       ref: ${{ needs.release.outputs.new_tag }}
       image_tag: ${{ needs.release.outputs.new_tag }}
       image_digest: ${{ needs.deploy-staging.outputs.image_digest }}
+      require_image_digest: ${{ needs.staging-gate.outputs.deploy == 'true' }}
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

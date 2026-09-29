@@ -296,7 +296,7 @@ inline copies drifted fail-open (#166, fixed by #167).
    variable entirely** — a stale revision reports `set` and still writes full records to stdout, while
    the table below would send you to `AppEvents` to find nothing. That is not hypothetical: staging ran
    a 22-day-old image until 2026-09-25, and setting the variable on it changed nothing. If the tag
-   predates `sha-410e851`, deploy before reading anything into either answer.
+   predates `v4.6.0` (`sha-410e851`), deploy before reading anything into either answer.
 3. **`PASS` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
    exporter *branch* was selected. A stale or wrong connection string is non-empty, so it passes while
    `Program.cs:176` suppresses the console records and the exporter's sends fail — the records then
