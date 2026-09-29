@@ -67,8 +67,11 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warnin
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authorization", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
 
-// Warning rather than None, so a failing outbound call still surfaces — this server has exactly one
-// LogError call site of its own, so framework warnings are most of what reports a fault today.
+// Warning rather than None, so a failing outbound call still surfaces. This server's own Error
+// records (#94) cover only the paths it owns — a failed tool call (ToolCallFailureLog), a non-2xx from
+// Vitally (VitallyService.SendAsync) and a Key Vault fetch (VitallyApiKeyProvider). Everything outside
+// those — hosting, routing, authentication plumbing — reports a fault only through these framework
+// categories, so silencing them entirely would still blind the server to a class of failure.
 //
 // ⚠️ One exception, stated because an earlier version of this comment claimed otherwise and was
 // wrong: `Microsoft.AspNetCore.Authorization` logs its *failures* at Information, not Warning
@@ -405,6 +408,12 @@ mcpBuilder.WithRequestFilters(filters =>
     // Surface the real failure reason (Vitally body / read-only / RBAC denial / validation) to the
     // client instead of the SDK's generic "An error occurred invoking 'X'." Unexpected exceptions
     // propagate so the SDK keeps its protocol-error / cancellation handling and generic message.
+    //
+    // Every failure is also logged here (#94) — before that, this filter returned the error to the
+    // client and left no server-side trace. Both branches log: the surfaceable ones are converted
+    // into a result, and the unexpected ones still propagate to the SDK's generic handling, but a Key
+    // Vault outage takes that second path on every call and must not be silent either. See
+    // ToolCallFailureLog for why the message itself is never logged.
     filters.AddCallToolFilter(next => async (context, cancellationToken) =>
     {
         try
@@ -413,7 +422,13 @@ mcpBuilder.WithRequestFilters(filters =>
         }
         catch (Exception ex) when (ToolErrorResult.IsSurfaceable(ex))
         {
+            ToolCallFailureLog.Write(context.Services, context.Params?.Name, ex, cancellationToken);
             return ToolErrorResult.Build(ex);
+        }
+        catch (Exception ex)
+        {
+            ToolCallFailureLog.Write(context.Services, context.Params?.Name, ex, cancellationToken);
+            throw;
         }
     });
 

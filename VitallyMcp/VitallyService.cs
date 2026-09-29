@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace VitallyMcp;
@@ -14,6 +15,7 @@ public class VitallyService
     private readonly ToolAuthorizer _authorizer;
     private readonly AuditLogger _audit;
     private readonly ToolCallAuditContext? _auditContext;
+    private readonly ILogger<VitallyService> _logger;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -44,7 +46,7 @@ public class VitallyService
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null, ILogger<VitallyService>? logger = null)
     {
         _httpClient = httpClient;
         _options = options.Value;
@@ -52,6 +54,7 @@ public class VitallyService
         _authorizer = authorizer;
         _audit = audit;
         _auditContext = auditContext;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<VitallyService>.Instance;
         _baseUrl = _options.BaseUrl;
     }
 
@@ -90,6 +93,20 @@ public class VitallyService
 
         if (!response.IsSuccessStatusCode)
         {
+            // The server-side record of the failure (#94). LogAction above already records the status
+            // in the audit trail; this is the operational one, at Error, where an operator looks.
+            //
+            // ⚠️ Status and path only. NOT the body, which is the whole reason this record was missing
+            // before: Vitally's failure bodies can carry customer data, and so can the query string
+            // (Search_users sends its term there), which ResourcePath strips. The correlation id joins
+            // this line to the audit records, which is where the detail lives. It is emitted per
+            // upstream call rather than per tool call on purpose: Get_organization_summary swallows a
+            // failed sub-call into its result, so the tool succeeds and only this line shows the fault.
+            _logger.LogError(
+                "Vitally upstream call failed: {Method} {ResourcePath} returned {StatusCode} correlation={CorrelationId}",
+                method.Method, AuditLogger.ResourcePath(url), (int)response.StatusCode,
+                _auditContext?.CorrelationId ?? "none");
+
             // EnsureSuccessStatusCode discards the response body, but Vitally returns the
             // actual failure reason in the body (e.g. {"message": "externalId is required"}).
             // Surfacing it gives the LLM something concrete to act on instead of "Response

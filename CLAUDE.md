@@ -768,8 +768,29 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > should redaction ever be turned off. Path segments are *not* redacted, but they carry record ids,
 > which `AuditLogger` deliberately records anyway.
 > Four `Microsoft.AspNetCore.*` noise filters sit beside it, all `Warning` rather than `None` so
-> framework *warnings* still surface — this application has exactly **one** `LogError` call site of
-> its own, so those are most of what reports a fault.
+> framework *warnings* still surface. The application's own `Error` records (#94) cover only the
+> paths it owns — a failed tool call (`ToolCallFailureLog`, category `VitallyMcp.ToolCallFailures`),
+> a non-2xx from Vitally (`VitallyService.SendAsync`) and a Key Vault fetch
+> (`VitallyApiKeyProvider`) — so outside those, framework warnings are still the only fault report.
+> Until #94 there was exactly **one** `LogError` call site, and a failed tool call left no
+> server-side trace at all.
+>
+> ⚠️ **Those failure records log the exception _type_, status and resource path — never the
+> exception message.** The message is what the client is shown, and it carries a truncated upstream
+> body (`HttpRequestException`) or the caller's own input (`ArgumentException`), either of which can
+> be customer data — and unlike `VitallyMcp.AuditLogger`, these categories stay on the console. The
+> correlation id joins each one to the tool-call audit record, which holds the detail under the audit
+> table's access control. Do not "improve" a failure record by adding `ex.Message`. The Key Vault
+> record is the one that attaches the exception, because Azure's error carries its status and code,
+> never the secret or customer data.
+>
+> Levels: an upstream or unexpected failure is `Error`; a rejected argument is `Warning` (the
+> caller's input, not a fault); an RBAC denial is not logged here at all, because `LogDenied` already
+> records it; a cancelled caller is skipped, but an `HttpClient` **timeout** is logged — both are
+> `OperationCanceledException`, so the test is the caller's token, not the type. One upstream failure
+> therefore produces **two** `Error` lines, the tool's and the upstream call's — by design, since
+> `Get_organization_summary` absorbs a failed sub-call into a successful result and only the
+> upstream line shows it. Count one category when alerting (#159), not both.
 >
 > ⚠️ **But two framework signals are logged at `Information`, and these filters do suppress them.**
 > An earlier version of this note claimed all faults stay visible; that was wrong, and the exception
@@ -845,7 +866,7 @@ This means: rotating the Vitally key is a `Set-AzKeyVaultSecret` away (cache exp
 
 Scoped via `AddHttpClient<VitallyService>()`. Per-request auth: the constructor takes the per-request `VitallyApiKeyProvider`, and the private `SendAsync(method, url, content?)` helper builds each `HttpRequestMessage`, fetches the API key from the provider, sets the `Authorization: Basic` header on the message, and dispatches via `_httpClient.SendAsync`. The shared `HttpClient` is *not* mutated — there's no `DefaultRequestHeaders.Authorization`, so multi-user safety is preserved.
 
-On non-2xx responses `SendAsync` reads the response body, disposes the response, and throws `HttpRequestException` with `StatusCode` set and a message that includes a truncated copy of the response body. This deliberately replaces `EnsureSuccessStatusCode()` because Vitally returns the actual failure reason (e.g. `{"message":"externalId is required"}`) in the body, and surfacing it gives the LLM something concrete to act on. The MCP SDK only forwards an exception's own message to the client when it is an `McpException`, so a CallTool request filter (`ToolErrorResult` + `AddCallToolFilter` in `Program.cs`) is what actually delivers this body — and the read-only/RBAC denial and `ArgumentException` validation messages — to the client; other (unexpected) exceptions still yield the SDK's generic error.
+On non-2xx responses `SendAsync` reads the response body, disposes the response, and throws `HttpRequestException` with `StatusCode` set and a message that includes a truncated copy of the response body. This deliberately replaces `EnsureSuccessStatusCode()` because Vitally returns the actual failure reason (e.g. `{"message":"externalId is required"}`) in the body, and surfacing it gives the LLM something concrete to act on. The MCP SDK only forwards an exception's own message to the client when it is an `McpException`, so a CallTool request filter (`ToolErrorResult` + `AddCallToolFilter` in `Program.cs`) is what actually delivers this body — and the read-only/RBAC denial and `ArgumentException` validation messages — to the client; other (unexpected) exceptions still yield the SDK's generic error. Before returning, it also logs the failure server-side (#94) — and so does `SendAsync` itself, with the status and path — but never the body or the message; see the log-levels note under *Configuration*.
 
 Standard methods (apply field/trait filtering and the `{results, next}` envelope):
 - `GetResourcesAsync` — list with pagination, sorting, filtering
@@ -1015,7 +1036,7 @@ To add support for a new Vitally resource:
 - **Permission management**: Tools use `ReadOnly = true` flag for GET/LIST operations and `Destructive = true` flag for CREATE/UPDATE/DELETE operations. This allows MCP clients to bulk enable/disable operations by permission level.
 - **Write operations**: All resources support full CRUD operations (where applicable). JSON body parameters accept complete request bodies for create/update operations.
 - **Configuration**: Never hardcode credentials. Production deployments use Key Vault via managed identity; local dev uses `Vitally:DevelopmentApiKey` (env var `Vitally__DevelopmentApiKey`).
-- **Error handling**: `VitallyService.SendAsync` throws `HttpRequestException` with the Vitally response body included in the message on non-2xx responses. A CallTool request filter (`ToolErrorResult` + `AddCallToolFilter`, `Program.cs`) surfaces the messages of `HttpRequestException`, `UnauthorizedAccessException` (read-only / RBAC denial) and `ArgumentException` (validation) to the client as the tool-call error text, so the LLM sees the actual failure reason rather than the SDK's generic "An error occurred invoking 'X'."; other exceptions keep the generic message.
+- **Error handling**: `VitallyService.SendAsync` throws `HttpRequestException` with the Vitally response body included in the message on non-2xx responses. A CallTool request filter (`ToolErrorResult` + `AddCallToolFilter`, `Program.cs`) surfaces the messages of `HttpRequestException`, `UnauthorizedAccessException` (read-only / RBAC denial) and `ArgumentException` (validation) to the client as the tool-call error text, so the LLM sees the actual failure reason rather than the SDK's generic "An error occurred invoking 'X'."; other exceptions keep the generic message. Both kinds are also logged server-side by type, never by message (#94).
 - **Client-side filtering**: Field and trait selection is done client-side (Vitally API doesn't support it natively).
 - **Trait filtering**: Traits are excluded by default — use the `traits` parameter to include specific trait keys (requires `"traits"` in the `fields` parameter).
 - **Resource-specific defaults**: Each resource type has optimised default fields (see table above).

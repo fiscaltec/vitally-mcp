@@ -60,12 +60,22 @@ public class ToolCallAuditCompositionTests
         private readonly WebApplicationFactory<Program> _factory;
         private readonly CapturingLoggerProvider _audit = new("VitallyMcp.AuditLogger");
 
+        private readonly CapturingLoggerProvider _failures = new(ToolCallFailureLog.Category);
+        private readonly CapturingLoggerProvider _service = new("VitallyMcp.VitallyService");
+
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
+
+        /// <summary>Records from the tool-call failure log (#94).</summary>
+        public IReadOnlyList<(LogLevel Level, string Message)> FailureRecords => _failures.Entries;
+
+        /// <summary>Records from <see cref="VitallyService"/> itself — the upstream-call failure log.</summary>
+        public IReadOnlyList<(LogLevel Level, string Message)> ServiceRecords => _service.Entries;
 
         public Harness(
             string vitallyBody,
             HttpStatusCode vitallyStatus = HttpStatusCode.OK,
-            bool sabotageAudit = false)
+            bool sabotageAudit = false,
+            Func<Exception>? vitallyThrows = null)
         {
             // Process-wide, and read by Program.cs at composition time before test configuration is
             // injected — hence the collection this class belongs to.
@@ -85,6 +95,8 @@ public class ToolCallAuditCompositionTests
                 .ConfigureLogging(l =>
                 {
                     l.AddProvider(_audit);
+                    l.AddProvider(_failures);
+                    l.AddProvider(_service);
                     if (sabotageAudit)
                     {
                         l.AddProvider(new ThrowingLoggerProvider("VitallyMcp.AuditLogger"));
@@ -106,7 +118,7 @@ public class ToolCallAuditCompositionTests
                     // Stub the upstream at the *primary* handler so the real VitallyService
                     // pipeline — the rate-limit handler included — still runs in front of it.
                     services.AddHttpClient<VitallyService>()
-                        .ConfigurePrimaryHttpMessageHandler(() => new VitallyHandler(vitallyBody, vitallyStatus));
+                        .ConfigurePrimaryHttpMessageHandler(() => new VitallyHandler(vitallyBody, vitallyStatus, vitallyThrows));
                 }));
         }
 
@@ -174,6 +186,8 @@ public class ToolCallAuditCompositionTests
             _factory.Dispose();
             _baseFactory.Dispose();
             _audit.Dispose();
+            _failures.Dispose();
+            _service.Dispose();
 
             foreach (var name in new[]
             {
@@ -238,10 +252,13 @@ public class ToolCallAuditCompositionTests
         }
     }
 
-    private sealed class VitallyHandler(string body, HttpStatusCode status) : RecordingHandler
+    private sealed class VitallyHandler(string body, HttpStatusCode status, Func<Exception>? throws = null)
+        : RecordingHandler
     {
         protected override HttpResponseMessage Respond(HttpRequestMessage request) =>
-            new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            throws is not null
+                ? throw throws()
+                : new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
     }
 
     /// <summary>
@@ -350,5 +367,72 @@ public class ToolCallAuditCompositionTests
             .Should().NotBeEmpty("the upstream call is recorded too")
             .And.OnlyContain(e => e.Message.Contains("correlation=" + correlation, StringComparison.Ordinal),
                 "every upstream record joins to the tool call that caused it");
+    }
+
+    [Fact]
+    public async Task AnUpstreamFailure_IsLoggedAtError_ByTheFilterAndTheService_JoinedToTheAuditRecord()
+    {
+        // #94: the error-surfacing filter used to return the failure to the client without logging
+        // it, so a Vitally outage left no server-side trace. Asserted through a composed host because
+        // the filter only has a correlation id if it resolves the SAME scoped context the tool wrote to.
+        using var harness = new Harness(
+            "{\"message\":\"upstream exploded\"}", HttpStatusCode.InternalServerError);
+
+        var result = await harness.CallToolAsync("List_organizations");
+        result.Should().Contain("upstream exploded", "the client still sees the real reason");
+
+        var correlation = Regex.Match(
+            harness.AuditRecords.Single(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal)).Message,
+            @"correlation=([0-9a-f]{32})").Groups[1].Value;
+
+        var failure = harness.FailureRecords.Should().ContainSingle().Subject;
+        failure.Level.Should().Be(LogLevel.Error);
+        failure.Message.Should().Contain("List_organizations").And.Contain("HttpRequestException")
+            .And.Contain("500").And.Contain(correlation);
+        failure.Message.Should().NotContain("upstream exploded", "the body can carry customer data");
+
+        var upstream = harness.ServiceRecords.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject;
+        upstream.Message.Should().Contain("500").And.Contain(correlation);
+        upstream.Message.Should().NotContain("upstream exploded");
+    }
+
+    [Fact]
+    public async Task ATransportFailure_IsLoggedAtError()
+    {
+        // No response at all, so SendAsync's non-2xx record never fires — the filter is the only
+        // place this failure can be seen.
+        using var harness = new Harness(TwoOrganisations,
+            vitallyThrows: () => new HttpRequestException("connection refused"));
+
+        await harness.CallToolAsync("List_organizations");
+
+        harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error)
+            .Subject.Message.Should().Contain("HttpRequestException");
+    }
+
+    [Fact]
+    public async Task AnUnexpectedException_IsLoggedAtError_AndStillLeftToTheSdk()
+    {
+        // Not a surfaceable type, so the SDK keeps its generic message — but a Key Vault outage takes
+        // this path on every call, and it must not be silent.
+        using var harness = new Harness(TwoOrganisations,
+            vitallyThrows: () => new InvalidOperationException("internal detail"));
+
+        var result = await harness.CallToolAsync("List_organizations");
+        result.Should().NotContain("internal detail", "unexpected detail is never surfaced to the client");
+
+        var failure = harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject;
+        failure.Message.Should().Contain("InvalidOperationException");
+        failure.Message.Should().NotContain("internal detail");
+    }
+
+    [Fact]
+    public async Task ASuccessfulCall_LogsNoFailure()
+    {
+        using var harness = new Harness(TwoOrganisations);
+
+        await harness.CallToolAsync("List_organizations");
+
+        harness.FailureRecords.Should().BeEmpty();
     }
 }

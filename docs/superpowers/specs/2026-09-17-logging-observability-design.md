@@ -337,6 +337,13 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 
 ### System failures
 
+> **Status (2026-09-29): the three logging gaps below are closed by #94's first PR** — the CallTool
+> filter, the `SendAsync` non-2xx record and the Key Vault fetch now each log at `Error` (a rejected
+> argument at `Warning`), carrying type, status and path but never a body or exception message. See
+> `ToolCallFailureLog` and the log-levels note in `CLAUDE.md`. The rate-limit **counter** is phase 6
+> and is not in that PR. The findings are kept as written, because they record why the records have
+> the shape they do.
+
 - **The CallTool filter swallows errors.** `Program.cs` catches every surfaceable exception and
   returns it to the client without logging, so **Vitally upstream failures and `ArgumentException`
   validation failures leave no server-side trace**. Log at `Error` before returning.
