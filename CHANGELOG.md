@@ -24,6 +24,13 @@ All notable changes to this project are documented here. Format based on
 
 ### Security
 
+- **The tool-call audit record now says whether the permission tier was served
+  stale** (#161). `IGroupPermissionResolver` returns a `ResolvedPermissions`
+  (built only via `Confirmed` / `Retained`) instead of a bare set, and
+  `tierStale` reads `True` / `False` on the live path instead of `unknown`.
+  `unknown` remains for the claim path and RBAC bypass. A null result still
+  denies. Records written before this deployed read `unknown` and cannot say.
+
 - **Fixed an open-redirector / authorisation-code theft vulnerability in
   the OAuth proxy.** `/oauth/authorize` and `/oauth/register` now validate
   every client `redirect_uri` against `OAuth:AllowedClientRedirectUris`

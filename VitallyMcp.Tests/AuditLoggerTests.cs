@@ -307,6 +307,23 @@ public class AuditLoggerTests
     }
 
     [Fact]
+    public void LogToolCall_RendersAnUncheckedStaleness_AsUnknown_NeverAsFalse()
+    {
+        // #161. `unknown` is the honest answer on the claim path and under an RBAC bypass, where
+        // nothing checked freshness. Rendering null as False would assert a check that never happened
+        // — the one collapse the field is designed to refuse.
+        var (audit, logger) = Build(user: EntraV2User(
+            oid: "675ebdda-7590-4d79-8ec3-a2d17ab029ba",
+            pairwiseSub: "S-1pairwise"));
+
+        audit.LogToolCall(SampleCall() with { TierServedStale = null });
+
+        var message = logger.Entries.Should().ContainSingle().Subject.Message;
+        message.Should().Contain("tierStale=unknown");
+        message.Should().NotContain("tierStale=False");
+    }
+
+    [Fact]
     public void LogToolCall_RecordsAFailedCall_NotOnlyASuccessfulOne()
     {
         // A trail that records only successes cannot show an attempted deletion that errored, which
