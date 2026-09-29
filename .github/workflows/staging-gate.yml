@@ -88,8 +88,11 @@ jobs:
             exit 1
           fi
           az config set extension.use_dynamic_install=yes_without_prompt > /dev/null 2>&1
-          bash .github/scripts/check-serving-revisions.sh "$CONTAINER_APP" "$RESOURCE_GROUP" --image
-          rc=$?
+          # `|| rc=$?`, not a bare call then `rc=$?`: Actions runs this under `bash -e`, which `set -uo`
+          # does not undo, so a non-zero exit would end the step before the case below ever saw it --
+          # turning ABSENT (3) into a failure. The self-test caught exactly that.
+          rc=0
+          bash .github/scripts/check-serving-revisions.sh "$CONTAINER_APP" "$RESOURCE_GROUP" --image || rc=$?
           case "$rc" in
             0) echo "deploy=true" >> "$GITHUB_OUTPUT" ;;
             3) echo "::notice title=Staging torn down, not deployed::$CONTAINER_APP does not exist in $RESOURCE_GROUP. Production still deploys."
