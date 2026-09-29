@@ -61,17 +61,84 @@ public class FailureLoggingTests
         await act.Should().ThrowAsync<HttpRequestException>();
 
         var entry = logger.Entries.Should().ContainSingle().Subject.Message;
-        entry.Should().Contain("/resources/accounts");
+        entry.Should().Contain("/resources/accounts/…");
         entry.Should().NotContain(typedId);
+    }
+
+    [Theory]
+    [InlineData("../acmeholdingsltd")]
+    [InlineData("%2E%2E/acmeholdingsltd")]
+    [InlineData("..\\acmeholdingsltd")]
+    [InlineData("./../acmeholdingsltd/x")]
+    public async Task SendAsync_CannotBeSteeredIntoLoggingCallerText_ByDotSegments(string typedId)
+    {
+        // Uri normalises `../` BEFORE the path is read, so "the first segment after /resources/" can
+        // be made into the caller's own text — a customer name on the console. The resource type is
+        // therefore checked against the set this code builds, not taken from a parsed path, and
+        // anything else reads `unrecognised`: fail closed, as KnownToolNames does for tool names.
+        using var client = TestHelpers.CreateMockHttpClient("{}", HttpStatusCode.NotFound);
+        var logger = new CapturingLogger<VitallyService>();
+        var service = TestHelpers.BuildVitallyService(client, logger: logger);
+
+        var act = () => service.GetResourceByIdAsync("organizations", typedId);
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        logger.Entries.Should().ContainSingle().Subject.Message.Should().NotContain("acmeholdingsltd");
+    }
+
+    [Fact]
+    public async Task SendAsync_LogsAnUnrecognisedResourceType_AsUnrecognised()
+    {
+        using var client = TestHelpers.CreateMockHttpClient("{}", HttpStatusCode.NotFound);
+        var logger = new CapturingLogger<VitallyService>();
+        var service = TestHelpers.BuildVitallyService(client, logger: logger);
+
+        var act = () => service.GetRawAsync("acmeholdingsltd/x");
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        var entry = logger.Entries.Should().ContainSingle().Subject.Message;
+        entry.Should().Contain("unrecognised").And.NotContain("acmeholdingsltd");
+    }
+
+    [Fact]
+    public void ToolCallFailureLog_DoesNotPrintAnUnknownRequestError_WhenThereWasAResponse()
+    {
+        // HttpRequestError is Unknown whenever a response arrived, which reads as "an unknown error".
+        var logger = new CapturingLogger<object>();
+
+        ToolCallFailureLog.Write(logger, "List_users",
+            new HttpRequestException("x", null, HttpStatusCode.InternalServerError), "corr", CancellationToken.None);
+
+        logger.Entries.Single().Message.Should().Contain("error=none").And.NotContain("Unknown");
+    }
+
+    [Fact]
+    public void ToolCallFailureLog_TreatsAnArgumentExceptionSubtype_AsOurFault()
+    {
+        // The plain ArgumentException is what this code throws for bad input, and what the SDK throws
+        // for a missing parameter. An ArgumentOutOfRangeException or ArgumentNullException is almost
+        // always a bug of ours — a slice, a null — and hiding it as "rejected its arguments" at
+        // Warning would bury a server fault as the caller's mistake.
+        var logger = new CapturingLogger<object>();
+
+        ToolCallFailureLog.Write(logger, "List_users", new ArgumentOutOfRangeException("start"), "corr", CancellationToken.None);
+        ToolCallFailureLog.Write(logger, "List_users", new ArgumentNullException("value"), "corr", CancellationToken.None);
+
+        logger.Entries.Should().HaveCount(2).And.OnlyContain(e => e.Level == LogLevel.Error);
     }
 
     public static TheoryData<int, LogLevel> StatusLevels => new()
     {
         // The caller's mistake: a wrong id, a missing field. Worth seeing, not worth paging for.
-        { 400, LogLevel.Warning }, { 404, LogLevel.Warning }, { 422, LogLevel.Warning },
-        // Ours or Vitally's: a bad or revoked shared key, the rate-limit budget, an outage.
-        { 401, LogLevel.Error }, { 403, LogLevel.Error }, { 429, LogLevel.Error },
+        { 400, LogLevel.Warning }, { 404, LogLevel.Warning }, { 409, LogLevel.Warning },
+        { 422, LogLevel.Warning },
+        // Ours or Vitally's: a bad or revoked shared key, the rate-limit budget, an outage — and
+        // 407/408, which are infrastructure conditions despite sitting in the 4xx range.
+        { 401, LogLevel.Error }, { 403, LogLevel.Error }, { 407, LogLevel.Error },
+        { 408, LogLevel.Error }, { 429, LogLevel.Error },
         { 500, LogLevel.Error }, { 503, LogLevel.Error },
+        // An unfollowed redirect or a non-standard code is a misconfiguration, never the caller.
+        { 302, LogLevel.Error }, { 600, LogLevel.Error },
     };
 
     [Theory]
@@ -106,14 +173,21 @@ public class FailureLoggingTests
         // A renamed custom object in Vitally makes every summary return an error section forever,
         // and the tool still succeeds — so without this the drift is invisible server-side. The
         // object name is caller-overridable, so the fixed SECTION label is logged, never the name.
-        using var client = TestHelpers.CreateMockHttpClient(
-            "{\"id\":\"org-1\",\"results\":[{\"id\":\"co-1\",\"name\":\"somethingElse\"}]}");
+        // Sequenced, one response per upstream call: SendAsync disposes each response, so a single
+        // shared one fails the second call — and the section would then read "catalogue unavailable",
+        // which is how this test first passed for the wrong reason.
+        var (client, _) = TestHelpers.CreateMockHttpClientPaged(
+            "{\"id\":\"org-1\",\"name\":\"Acme\"}",
+            "{\"results\":[{\"id\":\"co-1\",\"name\":\"somethingElse\"}]}");
+        using var _client = client;
         var logger = new CapturingLogger<VitallyService>();
         var service = TestHelpers.BuildVitallyService(client, logger: logger);
 
         await service.GetOrganizationSummaryAsync("org-1", null, "callerGoalsName", "callerFeedbackName");
 
         logger.Entries.Should().HaveCount(2).And.OnlyContain(e => e.Level == LogLevel.Warning);
+        logger.Entries.Should().OnlyContain(e => e.Message.Contains("not found in the catalogue", StringComparison.Ordinal),
+            "the reason is what sends the operator to the right place");
         logger.Entries.Should().Contain(e => e.Message.Contains("goals", StringComparison.Ordinal));
         logger.Entries.Should().Contain(e => e.Message.Contains("productFeedback", StringComparison.Ordinal));
         logger.Entries.Should().NotContain(e => e.Message.Contains("callerGoalsName", StringComparison.Ordinal)

@@ -42,7 +42,9 @@ var builder = WebApplication.CreateBuilder(args);
 //
 // So this filter is NOISE REDUCTION, worth 19.5% of console bytes, with defence-in-depth as a
 // footnote: if redaction were ever disabled the filter would still keep the URIs out. Path segments
-// are not redacted, but those carry record ids, which `AuditLogger` deliberately records anyway.
+// are not redacted. They usually carry record ids, which `AuditLogger` deliberately records anyway —
+// but not always: tools put caller strings into the path unescaped, so a mistyped id is whatever the
+// model typed (#94). That is why VitallyService's failure record logs only the resource type.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 // Noise. Measured against live production on 2026-09-18 over a 300-record sample: these four
@@ -410,11 +412,11 @@ mcpBuilder.WithRequestFilters(filters =>
     // client instead of the SDK's generic "An error occurred invoking 'X'." Unexpected exceptions
     // propagate so the SDK keeps its protocol-error / cancellation handling and generic message.
     //
-    // Every failure is also logged here (#94) — before that, this filter returned the error to the
-    // client and left no server-side trace. Both branches log: the surfaceable ones are converted
-    // into a result, and the unexpected ones still propagate to the SDK's generic handling, but a Key
-    // Vault outage takes that second path on every call and must not be silent either. See
-    // ToolCallFailureLog for why the message itself is never logged.
+    // Failures are also logged here (#94), bar RBAC denials (LogDenied has them) and a cancelled
+    // caller. Before that, a SURFACEABLE failure was converted into a result and left no server-side
+    // trace at all. The second branch is different: the SDK already logs an exception that escapes
+    // this filter, with the exception attached, so what this adds there is the correlation id that
+    // joins it to the audit record. See ToolCallFailureLog for why the message itself is never logged.
     filters.AddCallToolFilter(next => async (context, cancellationToken) =>
     {
         try

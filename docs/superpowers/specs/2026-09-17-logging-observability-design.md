@@ -345,7 +345,8 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 > **Status (2026-09-29): the three logging gaps below are closed by #94's first PR** — the CallTool
 > filter, the `SendAsync` non-2xx record and the Key Vault fetch each now log, as does a
 > `Get_organization_summary` section absorbed into a successful result. Levels follow the status
-> band: `Error` for a 5xx/401/403/429/no response, `Warning` for other 4xx and rejected arguments.
+> band: `Error` for a 5xx/401/403/407/408/429, no response or a timeout, `Warning` for other 4xx
+> and rejected arguments.
 > The tool-call and upstream records carry the exception type, status and resource *type* — never a
 > body, an exception message or the rest of the path. The Key Vault record is the deliberate
 > exception: it attaches Azure's exception, which carries its status and code but no secret or

@@ -67,6 +67,9 @@ public class ToolCallAuditCompositionTests
         /// <summary>Records from the MCP SDK itself, whichever of its categories logged them.</summary>
         public IReadOnlyList<(LogLevel Level, string Message)> SdkRecords => _sdk.Entries;
 
+        /// <summary>The exception attached to each SDK record, index-aligned with <see cref="SdkRecords"/>.</summary>
+        public IReadOnlyList<Exception?> SdkExceptions => _sdk.Exceptions;
+
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
 
         /// <summary>Records from the tool-call failure log (#94).</summary>
@@ -459,9 +462,12 @@ public class ToolCallAuditCompositionTests
 
         await harness.CallToolAsync("alice_at_example");
 
-        harness.FailureRecords.Should().NotContain(e => e.Message.Contains("alice_at_example", StringComparison.Ordinal));
-        harness.FailureRecords.Should().NotContain(e => e.Level >= LogLevel.Error,
+        // Asserting the Warning was written, not only that nothing bad was: without it this would pass
+        // with the filter never running at all.
+        harness.FailureRecords.Should().ContainSingle().Subject.Should().Match<(LogLevel Level, string Message)>(e =>
+            e.Level == LogLevel.Warning && e.Message.Contains("unrecognised", StringComparison.Ordinal),
             "naming a tool that does not exist is a client error, not a server fault");
+        harness.FailureRecords.Should().NotContain(e => e.Message.Contains("alice_at_example", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -483,7 +489,9 @@ public class ToolCallAuditCompositionTests
         harness.ServiceRecords.Should().Contain(e => e.Level == LogLevel.Error
             && e.Message.Contains("/resources/customObjects", StringComparison.Ordinal));
         harness.ServiceRecords.Where(e => e.Level == LogLevel.Warning).Should().HaveCount(2,
-            "each absorbed section is recorded, so a failure the summary hid is still visible");
+            "each absorbed section is recorded, so a failure the summary hid is still visible")
+            .And.OnlyContain(e => e.Message.Contains("catalogue unavailable", StringComparison.Ordinal),
+                "the catalogue fetch failed, which is a different fix from a renamed object");
     }
 
     [Fact]
@@ -501,8 +509,12 @@ public class ToolCallAuditCompositionTests
         var failure = harness.FailureRecords.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject;
         failure.Message.Should().Contain("InvalidOperationException");
         failure.Message.Should().NotContain("internal detail");
-        harness.SdkRecords.Should().Contain(e => e.Level == LogLevel.Error,
-            "the SDK logs an unhandled tool exception itself — CLAUDE.md counts on that");
+        // Exactly one, with the exception attached: CLAUDE.md's Error-lines table and its warning that
+        // the SDK's line carries the message both rest on this.
+        var sdkErrors = harness.SdkRecords.Select((e, i) => (e.Level, Exception: harness.SdkExceptions[i]))
+            .Where(e => e.Level == LogLevel.Error).ToList();
+        sdkErrors.Should().ContainSingle("the SDK logs an unhandled tool exception itself, once")
+            .Which.Exception.Should().BeOfType<InvalidOperationException>();
     }
 
     [Fact]

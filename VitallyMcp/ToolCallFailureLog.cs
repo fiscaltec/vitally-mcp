@@ -92,10 +92,17 @@ public static class ToolCallFailureLog
     /// <b>Warning</b> for any other 4xx, which is the caller's input: a wrong id from the model is
     /// routine, and logging it at Error would bury a real outage once #159 alerts on that level.
     /// </summary>
+    /// <remarks>
+    /// 407 and 408 are infrastructure conditions despite sitting in the 4xx range, so they are Error
+    /// too. ⚠️ Known blind spot: a 4xx on a request the caller did not shape — Vitally renaming an
+    /// endpoint, or rejecting a parameter this server adds itself — is logged at Warning, so an
+    /// Error-only alert would not see it. The rate of Warnings is the signal there.
+    /// </remarks>
     public static LogLevel LevelFor(HttpStatusCode? status) => status switch
     {
         null => LogLevel.Error,
-        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests => LogLevel.Error,
+        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.ProxyAuthenticationRequired
+            or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests => LogLevel.Error,
         >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError => LogLevel.Warning,
         _ => LogLevel.Error,
     };
@@ -112,6 +119,15 @@ public static class ToolCallFailureLog
             case OperationCanceledException when cancellationToken.IsCancellationRequested:
                 return;
 
+            // Anything else cancelled is a timeout — HttpClient's (100 s by default) or Azure.Core's.
+            // Named as such rather than left to "failed unexpectedly", because it is an expected
+            // failure mode with its own cause; the rate limiter's waits can run into it.
+            case OperationCanceledException:
+                logger.LogError(
+                    "Tool call {ToolName} timed out: {ExceptionType} correlation={CorrelationId}",
+                    toolName, type, correlationId);
+                return;
+
             // Recorded by AuditLogger.LogDenied, with the caller and the resource path — when
             // Audit:Enabled is on, which it is on every deployed target. A denial is the system
             // working, and logging it at Error would make it look like a fault.
@@ -120,7 +136,10 @@ public static class ToolCallFailureLog
 
             // The caller's input was rejected before anything reached Vitally. Worth seeing — a tool
             // description that keeps producing bad arguments is a content defect — but not a fault.
-            case ArgumentException:
+            // The PLAIN type only: that is what this code throws for bad input and what the SDK throws
+            // for a missing parameter, whereas an ArgumentOutOfRange/ArgumentNull is almost always a
+            // bug of ours and falls through to Error below.
+            case ArgumentException when ex.GetType() == typeof(ArgumentException):
                 logger.LogWarning(
                     "Tool call {ToolName} rejected its arguments: {ExceptionType} correlation={CorrelationId}",
                     toolName, type, correlationId);
@@ -141,7 +160,8 @@ public static class ToolCallFailureLog
                 logger.Log(LevelFor(http.StatusCode),
                     "Tool call {ToolName} failed upstream: {ExceptionType} status={StatusCode} error={HttpRequestError} correlation={CorrelationId}",
                     toolName, type, http.StatusCode is { } status ? (object)(int)status : "none",
-                    http.HttpRequestError, correlationId);
+                    // Unknown whenever a response arrived, which would read as "an unknown error".
+                    http.StatusCode is null ? (object)http.HttpRequestError : "none", correlationId);
                 return;
 
             default:

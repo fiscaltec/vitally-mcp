@@ -505,7 +505,6 @@ public class AuditLogger
 
     // Log the path only — strips the query string so filter values (which may contain customer
     // data) never land in the audit log. The record id in the path is fine and is the point.
-    // Internal so VitallyService's failure log applies the same stripping rather than a second copy.
-    internal static string ResourcePath(string url) =>
+    private static string ResourcePath(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.AbsolutePath : url;
 }

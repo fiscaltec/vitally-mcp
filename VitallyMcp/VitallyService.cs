@@ -155,22 +155,41 @@ public class VitallyService
         return body;
     }
 
+    // The first path segments this code builds, and so the only ones safe to put on the console.
+    private static readonly HashSet<string> KnownResourceTypes = new(StringComparer.Ordinal)
+    {
+        "accounts", "admins", "conversations", "customFields", "customObjects", "meetingTranscripts",
+        "meetings", "messages", "noteCategories", "notes", "npsResponses", "organizations",
+        "projectCategories", "projectTemplates", "projects", "surveyQuestions", "surveyResponses",
+        "surveys", "taskCategories", "tasks", "users",
+    };
+
     // `/resources/accounts/<caller text>/users` → `/resources/accounts/…`. Only the first segment after
     // /resources/ is fixed by this code rather than by a caller, so it is the only one safe to log to
     // the console. See the non-2xx record in SendAsync.
-    private static string ResourceTypeOf(string url)
+    //
+    // ⚠️ Read from the RAW string and checked against KnownResourceTypes, never taken from a parsed
+    // Uri: Uri normalises dot-segments before the path is read, so an id of `../Alice Smith` makes the
+    // "first segment" the caller's own text. Anything not in the set reads `unrecognised` — fail
+    // closed, as KnownToolNames does for tool names. A new resource type logs as `unrecognised` until
+    // it is added here, which is the safe direction to be wrong in.
+    private string ResourceTypeOf(string url)
     {
-        var path = AuditLogger.ResourcePath(url);
-        const string prefix = "/resources/";
-        var start = path.IndexOf(prefix, StringComparison.Ordinal);
-        if (start < 0)
+        var prefix = _baseUrl + "/resources/";
+        if (!url.StartsWith(prefix, StringComparison.Ordinal))
         {
-            return "(unrecognised path)";
+            return "/resources/(unrecognised)";
         }
 
-        var rest = path[(start + prefix.Length)..];
-        var slash = rest.IndexOf('/');
-        return slash < 0 ? prefix + rest : prefix + rest[..slash] + "/…";
+        var rest = url.AsSpan(prefix.Length);
+        var end = rest.IndexOfAny('/', '?', '\\');
+        var segment = (end < 0 ? rest : rest[..end]).ToString();
+        if (!KnownResourceTypes.Contains(segment))
+        {
+            return "/resources/(unrecognised)";
+        }
+
+        return end >= 0 && rest[end] == '/' ? $"/resources/{segment}/…" : $"/resources/{segment}";
     }
 
     private static string Truncate(string value, int max) =>
@@ -491,7 +510,10 @@ public class VitallyService
             }
             if (!nameToId.TryGetValue(objectName, out var objectId))
             {
-                reason = "custom object not found";
+                // "In the catalogue", deliberately: the catalogue is read with limit=100 and no paging,
+                // and an unexpected envelope yields an empty map — so a missing name is not proof the
+                // object was renamed.
+                reason = "custom object not found in the catalogue (first 100 read)";
                 throw new InvalidOperationException($"custom object '{objectName}' not found");
             }
             reason = "instance search failed";
