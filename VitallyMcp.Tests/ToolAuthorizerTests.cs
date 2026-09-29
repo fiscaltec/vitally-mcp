@@ -13,14 +13,17 @@ public class ToolAuthorizerTests
     private const string ReaderGroup = "71451cc9-f5df-44ee-8ed1-3acc41a911eb";
     private const string CallerOid = "675ebdda-7590-4d79-8ec3-a2d17ab029ba";
 
-    private sealed class StubResolver(IReadOnlySet<string>? result, bool servedStale = false, TimeSpan age = default)
-        : IGroupPermissionResolver
+    private sealed class StubResolver(IReadOnlySet<string>? result, bool servedStale = false) : IGroupPermissionResolver
     {
         public string? LastObjectId { get; private set; }
         public Task<ResolvedPermissions?> TryResolvePermissionsAsync(string userObjectId, CancellationToken cancellationToken = default)
         {
             LastObjectId = userObjectId;
-            return Task.FromResult(result is null ? null : new ResolvedPermissions(result, servedStale, age));
+            return Task.FromResult(result is null
+                ? null
+                : servedStale
+                    ? ResolvedPermissions.Retained(result, TimeSpan.FromSeconds(90))
+                    : ResolvedPermissions.Confirmed(result, TimeSpan.Zero));
         }
     }
 
@@ -374,7 +377,7 @@ public class ToolAuthorizerTests
         // #161. The resolver is the only component that knows whether it served the retained copy,
         // and the audit record must carry its answer — both ways round. `false` is recorded only
         // because the resolver reported it: that is a checked claim, unlike the default it replaces.
-        var resolver = new StubResolver(new HashSet<string> { "vitally:read" }, servedStale, TimeSpan.FromSeconds(90));
+        var resolver = new StubResolver(new HashSet<string> { "vitally:read" }, servedStale);
         var context = new ToolCallAuditContext();
         var authorizer = Build(
             options: new ToolAuthorizationOptions { Enabled = true, LiveGroupCheck = true },

@@ -22,7 +22,10 @@ namespace VitallyMcp;
 /// <para>
 /// Tri-state on purpose. <c>true</c>/<c>false</c> are reported by the resolver itself through
 /// <see cref="ResolvedPermissions.ServedStale"/> (#161), so on the live path they are checked facts.
-/// <c>null</c> means <b>not known</b> — the claim path, or a call denied before any tier resolved.
+/// <c>null</c> means <b>not known</b> — the claim path, and a call admitted with RBAC bypassed
+/// (<c>Authorization:Enabled=false</c> or <c>OAuth:NoAuth</c>), where the tier is <c>unresolved</c>
+/// too. A call denied before any tier resolved never reaches this record: the SDK checkpoint refuses
+/// it and only <c>LogToolCallDenied</c> is written.
 /// It must never be collapsed into <c>false</c>: that would assert the tier was fresh when nothing
 /// checked, a weaker claim dressed as a stronger one.
 /// </para>

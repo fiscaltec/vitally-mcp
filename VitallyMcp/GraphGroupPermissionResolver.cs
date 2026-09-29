@@ -83,7 +83,14 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         {
             // Not stale: inside the fresh window is the live check working as designed. Its age is
             // still reported, because it is not zero.
-            return new ResolvedPermissions(lastKnownGood.Permissions, ServedStale: false, now - lastKnownGood.ResolvedAt);
+            //
+            // ⚠️ Reporting this as Confirmed is honest ONLY because the cache holds nothing but
+            // successful lookups: the stale branch below never writes back. Re-caching a stale serve
+            // (say, to damp retries during an outage) with a fresh ResolvedAt would bring it back
+            // through here labelled Confirmed — recording out-of-date data as checked, and stretching
+            // the fresh window past a revocation. Pinned by
+            // ReportsServedStale_OnEveryCall_ThroughAnOutage_NotOnlyTheFirst.
+            return ResolvedPermissions.Confirmed(lastKnownGood.Permissions, now - lastKnownGood.ResolvedAt);
         }
 
         var groupIds = _options.ConfiguredGroupIds.ToArray();
@@ -112,7 +119,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             // propagation, which is the whole reason the live check exists. Erring old is the safe
             // direction; erring young is not.
             _cache.Set(cacheKey, new CachedPermissions(permissions, now), TimeSpan.FromSeconds(retentionSeconds));
-            return new ResolvedPermissions(permissions, ServedStale: false, TimeSpan.Zero);
+            return ResolvedPermissions.Confirmed(permissions, TimeSpan.Zero);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -151,7 +158,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
                 // to say this decision was made on data known to be out of date, and this branch is
                 // the only place that knows it was taken. The same `age` feeds both, so the log line
                 // and the returned value cannot disagree.
-                return new ResolvedPermissions(lastKnownGood.Permissions, ServedStale: true, age);
+                return ResolvedPermissions.Retained(lastKnownGood.Permissions, age);
             }
 
             // Deliberately does NOT say "falling back to the token claim". It used to, and that became

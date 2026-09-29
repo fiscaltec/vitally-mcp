@@ -212,16 +212,6 @@ serves each caller's last known-good tier for up to `Authorization:LiveGroupStal
 by default) rather than denying everyone — so a revoked user can retain access for that long. The
 trade is deliberate; see the entitlement section in `CLAUDE.md`.
 
-**Afterwards, the audit trail can tell you whether they used that window.** Each tool-call record
-carries `AuditTierServedStale`: `True` means the tier that admitted the call came from the retained
-copy rather than from Graph (#161). Records written before that change was deployed carry
-`unknown` — the field existed but nothing reported it — so they cannot answer the question.
-
-```bash
-az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
-  "AppEvents | where Name == 'VitallyToolCall' and tostring(Properties.AuditTierServedStale) == 'True' | project TimeGenerated, AppRoleName, user=tostring(Properties.AuditUserId), tool=tostring(Properties.McpToolName), tier=tostring(Properties.AuditPermissionTier)"
-```
-
 So the honest worst case is **the remaining token lifetime plus the stale window**. If that is not
 acceptable, escalate — but pick the right lever, because the two cases differ:
 
@@ -236,6 +226,27 @@ acceptable, escalate — but pick the right lever, because the two cases differ:
 
 **Do not reach for "scale to zero".** A Container App with HTTP ingress scales back up on the next
 request: staging runs `minReplicas: 0` and serves `/health` 200 on demand. It is not a halt.
+
+**Afterwards, the audit trail can tell you whether the stale window was used.** Each tool-call record
+carries `AuditTierServedStale`: `True` means the tier that admitted the call came from the retained
+copy rather than from Graph (#161). It describes the check that *admitted* the call: a call admitted
+on a Graph-confirmed tier reads `False` even if a later check inside it was served stale. Records
+written before that change was deployed carry
+`unknown` — the field existed but nothing reported it — so they cannot answer the question.
+
+```bash
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
+  "AppEvents | where Name == 'VitallyToolCall' and tostring(Properties.AuditTierServedStale) == 'True' | project TimeGenerated, AppRoleName, user=tostring(Properties.AuditUserId), tool=tostring(Properties.McpToolName), tier=tostring(Properties.AuditPermissionTier)"
+```
+
+⚠️ **An empty result is only "no stale serves" if the period you care about is covered.** It is
+also exactly what a window of `unknown` records produces. Check coverage first — a period with no
+`True`/`False` rows cannot answer the question either way:
+
+```bash
+az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query \
+  "AppEvents | where Name == 'VitallyToolCall' | summarize records=count(), earliest=min(TimeGenerated), latest=max(TimeGenerated) by stale=tostring(Properties.AuditTierServedStale), AppRoleName"
+```
 
 ## How it's set up (in brief)
 

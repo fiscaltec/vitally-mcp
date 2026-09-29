@@ -97,6 +97,35 @@ public class ToolCallAuditCompositionTests
             "null from the resolver still means deny — the widened return must not have softened it");
     }
 
+    [Fact]
+    public async Task TheRecordKeepsTheAdmissionDecisionsStaleness_WhenALaterCheckInTheSameCallIsServedStale()
+    {
+        // The scenario above gives the admission check and the VitallyService backstop the SAME
+        // answer in every phase, so it cannot tell "the admission decision's staleness reached the
+        // record" from "whichever check ran last did" — or from the handler's authorizer writing into
+        // a different scope's context than the one the filter reads. This splits them inside one call:
+        // Graph answers the admission lookup, then goes down while the fresh window lapses, so the
+        // backstop is served the retained copy. The record must say False — the admission tier was
+        // confirmed. Last-write-wins, a scope split, or a dropped admission write each record True.
+        using var harness = new Harness(TwoOrganisations);
+        harness.Graph.AfterRespond = () =>
+        {
+            harness.Graph.AfterRespond = null;
+            harness.Graph.Status = HttpStatusCode.ServiceUnavailable;
+            harness.Clock.Advance(TimeSpan.FromSeconds(FreshSeconds + 1));
+        };
+
+        var result = await harness.CallToolAsync("List_organizations");
+        result.Should().NotContain("\"error\"", "the backstop is admitted on the retained tier");
+
+        harness.Graph.FailedResponses.Should().BeGreaterThan(0,
+            "the backstop must actually have asked Graph and been refused, or this proves nothing");
+        harness.AuditRecords.Should()
+            .ContainSingle(e => e.Message.Contains("called List_organizations", StringComparison.Ordinal))
+            .Subject.Message.Should().Contain("tierStale=False",
+                "the record documents the decision that admitted the call, and Graph confirmed that one");
+    }
+
     private sealed class Harness : IDisposable
     {
         private readonly WebApplicationFactory<Program> _baseFactory;
@@ -297,10 +326,28 @@ public class ToolCallAuditCompositionTests
         /// <summary>Mutable because the stale path only engages after an earlier success.</summary>
         public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
 
+        /// <summary>
+        /// Runs after each response is produced. Lets a test change the world <i>between</i> two
+        /// lookups inside one tool call, which is the only way to give the admission check and the
+        /// backstop different answers.
+        /// </summary>
+        public Action? AfterRespond { get; set; }
+
+        /// <summary>How many lookups Graph refused — evidence the stale path was actually taken.</summary>
+        public int FailedResponses { get; private set; }
+
         protected override HttpResponseMessage Respond(HttpRequestMessage request)
+        {
+            var response = Answer(request);
+            AfterRespond?.Invoke();
+            return response;
+        }
+
+        private HttpResponseMessage Answer(HttpRequestMessage request)
         {
             if (Status != HttpStatusCode.OK)
             {
+                FailedResponses++;
                 return new HttpResponseMessage(Status)
                 {
                     Content = new StringContent("{\"error\":\"graph is down\"}", Encoding.UTF8, "application/json")

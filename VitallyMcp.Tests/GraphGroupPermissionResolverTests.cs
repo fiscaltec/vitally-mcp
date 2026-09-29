@@ -199,7 +199,7 @@ public class GraphGroupPermissionResolverTests : IDisposable
     }
 
     [Fact]
-    public async Task ReturnsNull_WhenGraphFails_SoCallerFallsBackToClaim()
+    public async Task ReturnsNull_WhenGraphFails_WithNoRetainedCopy_SoTheCallerDenies()
     {
         var handler = new RecordingHandler(new HashSet<string>(), HttpStatusCode.Forbidden);
         var resolver = Build(handler);
@@ -398,6 +398,29 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         resolved!.ServedStale.Should().BeTrue();
         resolved.Age.Should().Be(TimeSpan.FromSeconds(110));
+    }
+
+    [Fact]
+    public async Task ReportsServedStale_OnEveryCall_ThroughAnOutage_NotOnlyTheFirst()
+    {
+        // Pins that a stale serve is never written back to the cache. Re-caching it — the obvious
+        // way to damp repeated Graph attempts during an outage — with a fresh ResolvedAt would bring
+        // the next call back through the fresh-window branch labelled Confirmed: out-of-date data
+        // recorded as checked, and a fresh window stretched past a revocation.
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
+        var resolver = Build(handler, timeProvider: clock);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(120));
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+        (await resolver.TryResolvePermissionsAsync(UserOid))!.ServedStale.Should().BeTrue();
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var next = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        next!.ServedStale.Should().BeTrue("Graph is still down, so this answer is still the retained copy");
+        next.Age.Should().Be(TimeSpan.FromSeconds(121), "and it is a second older, not reset");
     }
 
     [Fact]
