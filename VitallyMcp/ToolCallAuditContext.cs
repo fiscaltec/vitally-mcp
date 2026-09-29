@@ -100,6 +100,7 @@ public sealed class ToolCallAuditContext
     /// ⚠️ <b>Unbackfillable.</b> Entitlement comes from live Entra group membership, so once someone
     /// leaves a group nothing can reconstruct what they were entitled to at a past moment.
     /// </para>
+    /// </remarks>
     /// <param name="servedStale">
     /// Whether the tier came from a retained copy during a Graph outage — pass
     /// <see cref="ResolvedPermissions.ServedStale"/> exactly as the resolver reported it. <c>null</c>
@@ -108,7 +109,6 @@ public sealed class ToolCallAuditContext
     /// it is. Recording <c>false</c> where nothing checked would assert the tier was fresh — a weaker
     /// claim dressed as a stronger one, which is the opposite of what this field is for.
     /// </param>
-    /// </remarks>
     public void RecordResolvedTier(IReadOnlySet<string> permissions, bool? servedStale)
     {
         lock (_gate)
