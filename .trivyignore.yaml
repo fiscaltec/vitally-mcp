@@ -7,3 +7,14 @@
 #   - id: CVE-2025-12345
 #     statement: "No fix in the chiselled base image yet; revisit at the next .NET base bump."
 #     expired_at: 2026-09-30
+
+vulnerabilities:
+  - id: CVE-2026-84782
+    statement: >-
+      OpenSSL information disclosure (HIGH) in libssl3t64 3.0.13-0ubuntu3.15, inside the chiselled
+      base image mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled. Ubuntu has shipped the fix
+      (3.0.13-0ubuntu3.16), but Microsoft had not rebuilt the image when this was found
+      (2026-09-30), and a chiselled image has no package manager, so it cannot be patched in our
+      Dockerfile. Waived for 7 days to let the MCR rebuild land; if it has not by the expiry, the
+      scan re-blocks and this must be reviewed again (decision: dsearle, 2026-09-30).
+    expired_at: 2026-10-07
