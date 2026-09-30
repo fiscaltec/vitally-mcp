@@ -950,8 +950,13 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   >
   > Verified by behaviour as well as by option (#178's PR): a probe pointing the exporter at a local
   > listener, with trace sampling at 0%, received **0 of 5** in-request logs under the default and **5 of
-  > 5** with the switch off. No environment variable overrides it — `AzureMonitor__EnableTraceBasedLogsSampler`
-  > is not bound — and a sampled-out request's log carries no `sampleRate`, so `count()` over `AppEvents`
+  > 5** with the switch off. No environment variable overrides it, in either direction — probed for
+  > both `AzureMonitor__EnableTraceBasedLogsSampler` and `AzureMonitorExporter__EnableTraceBasedLogsSampler`
+  > (the downstream exporter's key, which Copilot on #181 believed was bound after the distro copies its
+  > options): with the code at `false` and that key `true`, 20 of 20 in-request logs were still exported;
+  > with the code at its default and that key `false`, 0 of 20 were. So no `PostConfigure` of the
+  > exporter options is needed, and adding one would guard a path that does not exist. Re-probe on any
+  > distro version bump. A sampled-out request's log carries no `sampleRate`, so `count()` over `AppEvents`
   > stays an exact audit count however far trace sampling is reduced.
   >
   > The reversal is **conditional on access control**, which is therefore part of the design rather than an operational afterthought: the workspace carries **no** role assignments of its own and inherits from the subscription and management group. **Reviewed 2026-09-21 (#146)**, superseding the 2026-09-17 estimate of "5 users and 28 service principals", which counted a group and an external principal as users and counted assignments rather than principals. Actual: **4** named IT administrators, whose `Owner`/`Contributor` is **PIM-eligible rather than permanent**, plus **2** by-design break-glass accounts; **22** service principals with a read-capable role, of which ~13 are Microsoft platform automation and 8 are FISCAL-controlled (two Azure DevOps connections holding `Owner`); and **one external MSP holding `Owner`** through delegated administration. The review also found **4 orphaned principals** — deleted from the directory, permanently, with 14 live role assignments between them; **13 were removed on 2026-09-21** (80 → 67 effective assignments at the workspace), the 14th held because it sits at management-group scope. ⚠️ `Testing Dan Dan Dan`'s `Reader` was flagged and then **deliberately left in place** (dsearle, 2026-09-21) — do not "tidy" it. ⚠️ **Table-level RBAC cannot fence the audit table off** — Azure RBAC is allow-only, so it adds narrow readers and never subtracts from an inherited `*/read`; the design said otherwise until this review. The data is acceptable to store because it is restricted; if that stops being true, so does the policy.
