@@ -1179,11 +1179,11 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 
 ## Deployment
 
-The deployment shape is **Azure Container Apps + Azure Key Vault + Microsoft Entra**, and the container image hosted in Azure Container Registry. `.github/workflows/deploy.yml` builds the image, imports it into the private ACR (via GitHub OIDC, no long-lived credentials) and rolls a Container App to the new revision.
+The deployment shape is **Azure Container Apps + Azure Key Vault + Microsoft Entra**, and the container image hosted in Azure Container Registry. `.github/workflows/deploy.yml` builds the image (or takes a caller-supplied digest — the train's production call does), imports it into the private ACR (via GitHub OIDC, no long-lived credentials) and rolls a Container App to the new revision.
 
 **It deploys to one of two targets, and the target is a GitHub *environment* name:** `production`
-(the default, and what the nightly release train ships to) or `staging` — see the staging section
-below. Everything that differs between targets is an environment-scoped GitHub variable
+(the default) or `staging`. The nightly release train ships to **both — staging first, then
+production with the same image digest** (#171); see the staging section below. Everything that differs between targets is an environment-scoped GitHub variable
 (`CONTAINER_APP`, `PUBLIC_ORIGIN`), so the workflow contains no per-target literals and the smoke
 test, metadata verification and rollback are shared rather than duplicated per target and left to
 drift. Shared values (`ACR_NAME` / `RESOURCE_GROUP` / `IMAGE_NAME`) stay repo-level, as do the secrets
@@ -1195,7 +1195,11 @@ a deploy that was in fact fine.
 Each target needs its **own federated credential** on the managed identity, subject
 `repo:fiscaltec/vitally-mcp:environment:<target>`, plus `Contributor` on that target's Container App.
 The subject is an exact string match, so a target with no credential fails at `azure/login` rather
-than deploying somewhere unintended.
+than deploying somewhere unintended. The identity also holds **`ContainerApp Reader` at
+resource-group scope** (#171), for one reason: without it, looking up an app that does not exist
+answers `AuthorizationFailed` — the same as a lost role — so the train could not tell a torn-down
+staging from a broken lookup. With it the answer is `(ResourceNotFound)`. Measured both ways from the
+deploy identity on 2026-09-29.
 
 | Component | Resource | Notes |
 |---|---|---|
@@ -1203,10 +1207,10 @@ than deploying somewhere unintended.
 | Hosting (staging) | Azure Container Apps `vitally-staging-ca-uksouth`, **same** RG and CAE | Scale-to-zero (`minReplicas: 0`); managed cert on `vitally-staging.fiscaltec.com`; the pre-production target for identity changes — see below |
 | Secrets | Azure Key Vault | `vitally-shared` is the default secret name; managed identity has `Key Vault Secrets User` |
 | Identity | User-assigned managed identity | `AcrPull` on the registry + `Key Vault Secrets User` on the vault |
-| Image registry | Azure Container Registry (Premium SKU) | `vitally-mcp:sha-<short-sha>` tag per build; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
+| Image registry | Azure Container Registry (Premium SKU) | A manual dispatch tags `vitally-mcp:sha-<short-sha>` by default; the release train tags `vitally-mcp:v<semver>`, and that one tag — one build, imported by digest — is shared by staging and production; untagged purged after 7 days; ACR Task weekly purge keeps last 5 tags / 30 days |
 | Logs | Log Analytics `vitally-prod-law-uksouth` | **Working since 2026-09-17 — and it had never worked before that.** For the workspace's entire prior lifetime no log from this server reached it: `ContainerAppConsoleLogs_CL` held **0 rows, ever**. **Root cause, and it was never going to work:** the CAE shipped logs with `logs_destination = log-analytics`, which writes to the workspace using its **shared key**, while the workspace has `local_authentication_enabled = false` and refuses exactly that. Microsoft also documents direct-to-workspace as **unsupported over Private Link**. The workspace is not empty — Key Vault and ACR arrive via *diagnostic settings*, which use the Azure Monitor control plane and are governed by neither local auth nor the network settings. **Fixed and VERIFIED 2026-09-17 (#142): `logs_destination` changed to `azure-monitor` plus a diagnostic setting (`infra/terraform/diagnostics.tf`) — the two are useless apart, and each fails silently alone. First records landed seconds later, from both apps; this is the first telemetry this server has ever delivered.** **`ContainerAppSystemLogs` and `ContainerAppConsoleLogs` are both enabled**, the latter added 2026-09-26 (#142) once the audit records had left stdout. Verified all-time over the whole table: production **1,510 rows / 152 breadcrumbs / 0 full audit records**, staging 1,911 / 2 / 0. (Those do not sum to the table — it also carries Container Apps **Jobs**, e.g. the Key Vault scanner, with an empty `ContainerAppName` and its identity in `JobName`.) ⚠️ Count breadcrumb **messages** (`Log contains 'Vitally audit breadcrumb:'`), not rows matching `breadcrumb` — the console logger emits a header line and an indented message per entry, so a naive filter reports exactly double. The breadcrumb count is the load-bearing half, since zero full records is also what a *broken* export looks like. That inference is strong for production and **weak for staging**, whose 2 breadcrumbs are a single call at enabling time; staging's suppression rests on the direct console sample of 2026-09-26 and on both apps running the same image. Both land in the **resource-specific** tables (typed columns, no `_s` suffixes), so per-table retention is available to #93. ⚠️ The setting is on the shared CAE and **cannot be scoped per app**, so a staging spin-up that omits `ApplicationInsights__ConnectionString` now exports that app's unsuppressed records for the whole environment — which is why the spin-up sets two variables and the guard checks both. `ContainerAppHTTPLogs` stays off: it carries request URLs and needs its own PII review. **Application Insights `vitally-prod-appi-uksouth` is live on production since 2026-09-25 (#147), and this was VERIFIED by reading the records back, not inferred.** The SDK (`Azure.Monitor.OpenTelemetry.AspNetCore`) and the `UseAzureMonitor` registration landed with #147's routing half; the registration is conditional on `ApplicationInsights__ConnectionString`, set on **both** targets on 2026-09-25 — production revision 39, staging revision 17 — each verified by reading rows back. `AppRoleName` separates them, so one component serves both. ⚠️ Staging is an **on-demand** app and the variable does **not** survive a recreate, so that describes the staging app that exists today, not any future one — a spin-up must set it alongside `Authorization__ReadOnly`. A `List_project_categories` call produced a `VitallyToolCall` and a `VitallyUpstreamCall` row in **`AppEvents`** carrying the caller's `oid`, the tool name, the arguments, the three record ids touched, the resolved tier and a shared correlation id — so `microsoft.custom_event.name` is set correctly, which is the one thing that could not be proven before Azure. Console suppression is in force with it: `AuditLogger` lines on the console are now **0**. ⚠️ **Query the WORKSPACE, not `az monitor app-insights query`.** The component is `IngestionMode: LogAnalytics`, so the tables are `AppEvents`/`AppTraces`, while the app-insights command resolves only the classic names (`customEvents`, `traces`) and answers `AppEvents` with `SEM0100 Failed to resolve table expression`. With stderr suppressed that reads exactly like "no data" on a switch-on that in fact worked: `az monitor log-analytics query -w 6712885d-0296-41fb-904c-e307f4f35b08 --analytics-query "AppEvents | where Name == 'VitallyToolCall'"`. Historically "for traces" was aspirational, and its local auth was disabled 2026-09-17 so the planned SDK must use the managed identity. ⚠️ **Verify that with `az resource show`, not `az monitor app-insights component show`** — the extension reports `disableLocalAuth: null` for this component while raw ARM reports `DisableLocalAuth: true`, so the convenient command says the opposite of the truth about the one property the authentication design rests on. Note also its `publicNetworkAccessForIngestion` is **Disabled**, so ingestion has to take the AMPLS private path. The managed identity `vitally-prod-id-uksouth` (`c57b35e7-19b8-4d25-b762-321de5f4f0cb`) was granted **`Monitoring Metrics Publisher`** on the component on 2026-09-24; it had no assignment at or above that scope before. Query access was opened 2026-09-17 so the workspace can be read at all. See `docs/superpowers/specs/2026-09-17-logging-observability-design.md` |
 | Auth (Entra — live on both targets) | Entra app registration `Vitally MCP` `c3812e7d-a413-4169-b57e-803326611ba3` | Both the OAuth client and the API resource in one registration, which is why `SharedClientId` is also a valid `aud`. App ID URI `https://vitally.fiscaltec.com` (no slash), exposes `mcp.access`, and carries **both** origins' `/oauth/callback` so it *can* serve both targets. **Both targets point at it** since the 2026-09-16 flip, so `SharedClientId` and `SharedClientSecret` hold the same values on each — the five **identity** variables in `infra/terraform/variables.tf` (`authority`, `audience`, `upstream_resource_scope`, `shared_client_id`, `shared_client_secret`) were collapsed onto one shared `oauth_*` set by #156, closing #102 — but **`oauth_resource` and `public_base_url` are not among them**, because each target publishes its own origin and sharing them would make staging advertise production's, which strict RFC 9728 clients reject. Both targets hold the secret under the same Container App secret name, `entra-oauth-client-secret`. `appRoleAssignmentRequired` with nine department groups assigned **directly** (nesting does not grant sign-in). ⚠️ **That assignment list is now the ONLY record of who can sign in, and nothing detects an omission.** It had to be kept at parity with a second app for as long as the rollback was retained, and drifted **twice** (2026-09-03, 2026-09-15), each time an onboarded department that would have lost access at the cutover — the cause being `ACCESS.md` naming the other app in its onboarding steps, so both were onboarded exactly as documented. That failure class is gone now the rollback is abandoned (#156): there is one place to assign, `ACCESS.md` names it, and an omission now fails immediately and visibly at that department's next sign-in. #134, which proposed automating the parity diff, was closed `not planned` on 2026-09-21. What remains worth running is the membership assertion against `infra/terraform/entra.tf`; see the runbook. Secret `entra-mcp-client-secret` in the vault, expires **2027-03-01** — 180 days, which is a convention rather than an enforced rule: `scan/run.py` warns when an **enabled** Key Vault secret **that has an expiry** comes within **30 days** of it, and its alert text repeats the 180-day wording — but nothing validates the interval, a secret with no expiry set is not covered at all, and the scanner cannot see Entra credentials. A hard outage date — though the mechanism is Entra rejecting the expired credential at `/oauth/token`, not Key Vault refusing a read: the app never reads the vault for this secret, only for `vitally-shared` (for which the Key Vault mechanism does apply). The expiry is set on the *Key Vault secret* as well as the Entra credential, because the scanner alerts on the former and knows nothing about Entra. Rotating the vault copy alone does not rotate what the app sends — see #138. `vitally-shared` is on the same standard (2027-02-14). See `docs/runbooks/entra-app-registration.md` |
-| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
+| CI/CD | GitHub Actions → OIDC federation → Azure | Reusable `deploy.yml` (build → GHCR → `az acr import` → roll, with smoke + rollback — the smoke covers `/health`, the exact-401 challenge **and** the OAuth metadata documents); nightly `release.yml` cuts a semver tag + GitHub Release, then deploys it to staging and then production, one build imported by digest into both — freeze by disabling the workflow, see the deploy-freeze note below; OIDC, no long-lived secrets in GitHub |
 | IaC | Terraform (`infra/terraform/`) | A **back-filled as-built capture**, not the active source of truth: adoption via the `imports.tf` blocks has never been performed, `terraform apply` is never run here, and the live resources are managed with `az cli`. `deploy.yml` rolls those resources directly and never invokes Terraform. Keep the capture in step with reality by hand; see `infra/terraform/README.md`, which describes adoption as a deliberate future step rather than a routine. |
 | IaC — Entra | `infra/terraform/entra.tf` + the `azuread` provider | Added by #107. Same adopt-by-import convention, but it is the **first non-`azurerm` provider here**, so `terraform init` must be re-run before any plan. The client secret and the admin-consent grant are deliberately *not* modelled — state would hold the secret value, and the vault is private-endpoint only so Terraform cannot write it from outside the VNet regardless |
 
@@ -1223,10 +1227,53 @@ a separate dev environment (see the topology note at the end of this section).
 gh workflow run deploy.yml -f target=staging -f ref=<branch-tag-or-sha>
 ```
 
-⚠️ **Staging never auto-deploys, so a standing staging app can be arbitrarily old — check its image
-before concluding anything from its behaviour.** The release train ships to production only, and
-`deploy.yml` reaches staging solely by manual dispatch, so an app stood up weeks ago is still running
-whatever it was stood up with. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127), last deployed there on **2026-09-03**,
+**Staging tracks the release train** (#171): each nightly tag is deployed to staging first, then to
+production with the **same image digest**, and a staging smoke failure stops production. So a
+standing staging app is normally on the same tag as production.
+
+⚠️ **Two cases where it is not, and both are normal — check its image before concluding anything from
+its behaviour:**
+
+| Case | What the train does | How you know |
+|---|---|---|
+| **Pinned** — `STAGING_PINNED` on the `staging` GitHub environment is non-empty | Skips staging, ships production. The value is the reason, printed as a notice on **every run that cuts a tag** while set | `gh variable list --env staging` |
+| **Torn down** (#112) | Skips staging, ships production | the gate job's `Staging torn down` notice |
+
+Pin it whenever staging is running something ahead of production — a branch mid-validation, which is
+what staging is for (it ran Entra from 2026-09-03 while production waited until 2026-09-16) and which
+the next nightly tag would otherwise overwrite:
+
+```bash
+gh variable set STAGING_PINNED --env staging --body "validating <branch> for #<n>"   # pin
+gh variable delete STAGING_PINNED --env staging                                     # unpin
+```
+
+⚠️ **Unpinning does not restore staging** — it resumes tracking from the **next** tag, which on a quiet
+week can be days away. To catch it up now, dispatch the current tag to staging **with its digest**
+(from the production job's summary in the last train run), so nothing is rebuilt over the tag
+production runs:
+
+```bash
+gh workflow run deploy.yml -f target=staging -f ref=<tag> -f image_tag=<tag> -f image_digest=sha256:<…>
+```
+
+⚠️ **A pin is not the `AUTO_DEPLOY` pattern** warned against under *Freezing deploys*: that released
+without deploying anywhere, whereas a pin skips staging only and production still ships what was
+tagged. A manual `deploy.yml` dispatch to staging is unaffected by the pin — pinning is how you stop
+the *train* overwriting what you dispatched. ⚠️ `deploy.yml` declares one concurrency group per
+target (`deploy-staging`), and GitHub keeps only one *pending* run per group. **Unverified:** whether
+that top-level group also applies when the train *calls* `deploy.yml` — GitHub's reusable-workflow
+documentation does not say. If it does, queueing a manual staging dispatch while the train's staging
+call is waiting cancels one of them; a cancelled train staging call stops production (safe) and the
+tag then has to be deployed by hand — see *Deploying a tag by hand, staging first* under *Freezing
+deploys*. Avoid manual staging dispatches around 02:00 UTC.
+
+The gate **fails the train** rather than skipping when it cannot tell whether staging exists — a
+lapsed login, a missing role, an Azure outage. Reading "could not check" as "absent" is the fail-open
+shape #167 removed, and it would ship production on an assumption. See `release.yml`.
+
+**History, and why this exists:** until #171 the train shipped to production only and staging was
+reached solely by manual dispatch. Measured 2026-09-25: staging was on `sha-06dcf7b` (#127), last deployed there on **2026-09-03**,
 while production ran `sha-410e851` — **22 days and 21 merged commits apart**
 (`git log --oneline 06dcf7b..410e851 | wc -l`).
 
@@ -1250,11 +1297,13 @@ on a failed or empty listing, one lost the emptiness check. A bare `for REV in $
 `NOT ASSESSED` rather than a blank that reads as a clean result. It checks every revision that is
 **active or** carries traffic, because an active revision at 0% still answers on its own revision FQDN.
 Its header lists every such detail.
-Exit codes: **0** pass, **1** a definite failure, **2** `NOT ASSESSED`, **64** usage.
+Exit codes: **0** pass, **1** a definite failure, **2** `NOT ASSESSED`, **3** `ABSENT`, **64** usage.
 
-⚠️ `NOT ASSESSED` on the listing is also what a **torn-down** staging app produces, and an absent
-staging app is a normal state rather than a fault (#112) — check whether it exists before reading
-that message as an outage.
+A **torn-down** staging app is a normal state rather than a fault (#112), and it is exit **3**
+(`ABSENT`) — az's own `(ResourceNotFound)` for that app in that group, matched exactly. ⚠️ That needs
+**read at resource-group scope**: without it Azure answers `AuthorizationFailed` for a missing app,
+which the script correctly reports as `NOT ASSESSED` (2), since it is also what a lost role looks
+like. `dsearle.adm` and the deploy identity both have it; another caller may not.
 
 **The failure mode is a configuration change that is accepted and does nothing.** Setting
 `ApplicationInsights__ConnectionString` on that stale app rolled a revision and came up `Healthy`,
@@ -1378,7 +1427,8 @@ multi-session exercise #112 was raised to end:
 | The Cloudflare `CNAME` + `asuid.vitally-staging` `TXT` | Costs nothing while the app is gone. The `CNAME` target is deterministic (`<app-name>.<CAE default domain>`), so it keeps pointing at the right place after a recreate under the same name |
 | The staging `/oauth/callback` on the shared Entra app registration | **Identifiers and redirect URIs are the thing a recreate must not have to re-agree.** It is inert while no app answers there, and deleting it per teardown is precisely the orphaning cost the stable hostname exists to avoid |
 | The Entra staging redirect URI (#107) | Same reason |
-| The `staging` GitHub environment + its `CONTAINER_APP` / `PUBLIC_ORIGIN` variables | The workflow reads them; recreating them by hand invites a typo into the origin, which the preflight check would catch but only after a wasted run |
+| The `staging` GitHub environment + its `CONTAINER_APP` / `PUBLIC_ORIGIN` variables | The workflow reads them; recreating them by hand invites a typo into the origin, which the preflight check would catch but only after a wasted run. ⚠️ A typo in `CONTAINER_APP` would make the train's gate read staging as **torn down** on every tagged run |
+| — but **delete** `STAGING_PINNED` at teardown | A pin left across a teardown makes the gate report *pinned* rather than *torn down*, and after a recreate keeps the new app off the train |
 | The federated credential and role assignments | See the identity note below |
 | `containerapps-staging.tf` | The recreate recipe. Keep it in step with the live app rather than deleting it when the app goes |
 | `.github/scripts/check-serving-revisions.sh` | The spin-up verification above. It is repo content, so nothing to keep — but it is the step that proves a recreate came up guarded, so run it rather than skip it |
@@ -1403,7 +1453,14 @@ did not already hold. Don't "fix" this on sight — it was priced and taken.
 **What would change the answer:** the moment `production` gains a protection rule that `staging` does
 not — required reviewers, or a deployment branch policy — the shared identity becomes a way around
 that gate, and it stops being an accepted risk. Revisit it then, and also if staging starts routinely
-deploying unreviewed refs. The remedy is a `vitally-staging-id-uksouth` with its own `AcrPull`,
+deploying unreviewed refs. **#171 considered this and does not trigger it:** the train now deploys to
+staging on every run that cuts a tag, but what it deploys is the tag cut from `main` — which takes
+changes only through the Secure-branches ruleset — and it is the same ref production gets minutes
+later. That sameness is the argument: staging deploys nothing production does not. #171 also added
+`ContainerApp Reader` at resource-group scope to this identity: read plus classic alert-rule write
+(`Microsoft.Insights/alertRules/*`), and no route to production it did not already have.
+
+The remedy is a `vitally-staging-id-uksouth` with its own `AcrPull`,
 `Key Vault Secrets User`, Graph `GroupMember.Read.All` and an app-scoped `Contributor`; the Graph
 grant needs admin consent, which is the only real friction.
 
@@ -1559,6 +1616,13 @@ a separate workflow and unaffected by the freeze:
 gh workflow run deploy.yml --ref <tag-or-sha> -f ref=<tag-or-sha> -f image_tag=<tag>
 ```
 
+⚠️ **That route is production-only and builds its own image** — no staging step, no digest sharing.
+And if `<tag>` is one the train already shipped, it **rebuilds and `--force`-imports over the tag
+staging's revision references**, so staging cold-starts into an image nobody smoke-tested. For a tag
+that already shipped, add `-f image_digest=sha256:<…>` from that run's job summary, or re-run the
+train's failed jobs (`gh run rerun <id> --failed`), which keeps staging's digest. A freeze also stops
+staging tracking the train, since the gate is part of it.
+
 That is the intended route during a freeze, and #108 needs it — the Entra cutover is gated on its
 predecessors being *deployed*, not merely merged, so a freeze that blocked every deploy would deadlock
 it.
@@ -1573,14 +1637,36 @@ night it ran produced `v4.2.2` — a Release marked "Latest", deployed nowhere. 
 future change makes "release without deploying" look useful again, re-read this paragraph first: the
 requirement it was serving did not exist.
 
-**A `deploy` job showing as `skipped` in a release run is normal** and is not a freeze. The job is
-gated on `new_tag != ''`, so a night with no new conventional commits produces no tag and nothing to
-ship. Most historical runs look like this; the deploys that did fire (18, 19 and 22 August 2026)
-appear as `deploy / Build, import to ACR, roll Container App`.
+**A release run with jobs showing as `skipped` is normally fine** and is not a freeze. There are now
+three that can skip, for different reasons:
 
-**Automatic deploys do not appear in `deploy.yml`'s run list.** When `release.yml` calls it via
-`uses:`, the job runs *inside the caller's run* — `gh run list --workflow=deploy.yml` shows only
-manual `workflow_dispatch` runs, which makes the automation look untested when it is not. A second
+| Job | Skipped when | Is that a problem? |
+|---|---|---|
+| `staging-gate`, `deploy-staging` **and** `deploy` | no new tag — a night with no new conventional commits | No: nothing to ship. Most historical runs look like this |
+| `deploy-staging` only | the gate found staging **pinned** or **torn down** — its notice says which | No, by design; production still ships. But a pinned staging is not current |
+| `deploy` (production) while `staging-gate` **failed** | the gate could not establish whether staging exists | **Yes.** Production did not ship. Fix the lookup (login, role, Azure), then `gh run rerun <id> --failed` — **not** a fresh `gh workflow run release.yml`, which finds no new tag and is a green no-op |
+| `deploy` (production) while `deploy-staging` **failed** or was **cancelled** | staging's smoke failed (and it rolled back), or the run was cancelled (possibly by a queued manual staging dispatch — see the pin note above) | **Yes.** The tag and its Release exist while production has not shipped them. A **failed** job: `gh run rerun <id> --failed`. A **cancelled** one — GitHub's docs do not say whether `--failed` covers it, so do not rely on it — deploy by hand with the two commands below |
+
+**Deploying a tag by hand, staging first** — the recovery that depends on nothing but `deploy.yml`:
+
+```bash
+gh workflow run deploy.yml -f target=staging -f ref=<tag> -f image_tag=<tag>
+# read the digest from that run's summary, then:
+gh workflow run deploy.yml -f target=production -f ref=<tag> -f image_tag=<tag> -f image_digest=sha256:<…>
+```
+
+⚠️ Not `gh run rerun <id>` (all jobs): the tag step finds its tag already cut, outputs no new tag,
+and every deploy skips — a green no-op, like a fresh `gh workflow run release.yml`.
+
+A staging deploy that **fails** its smoke rolls staging back and stops production — that run shows
+`deploy` as skipped too, and is the train doing its job. The deploys that fired before #171 (18, 19
+and 22 August 2026) appear as `deploy / Build, import to ACR, roll Container App`; since #171 there
+are two, `deploy-staging / …` and `deploy / …`, and the production one builds nothing when staging
+deployed — it imports staging's digest, printed in both jobs' summaries.
+
+**Automatic deploys do not appear in `deploy.yml`'s run list** — to either target. When `release.yml`
+calls it via `uses:`, the job runs *inside the caller's run* — `gh run list --workflow=deploy.yml`
+shows only manual `workflow_dispatch` runs, which makes the automation look untested when it is not. A second
 tell: the release train passes `image_tag: <semver>`, whereas a manual dispatch defaults to
 `sha-<short-sha>`, so the deployed image name says which path shipped it
 (`az containerapp show ... --query properties.template.containers[0].image`).

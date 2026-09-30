@@ -1,7 +1,8 @@
 name: Deploy
 
 # Deploys the image to one of the Container Apps targets in `vitally-prod-rg-uksouth`: `production`
-# (the default, and what the release train ships to) or `staging`. The ACR has public network access
+# (the default) or `staging`. The release train calls it twice -- staging, then production with the
+# digest staging was rolled to (#171). The ACR has public network access
 # disabled, so the image cannot be built/pushed to it from a GitHub-hosted runner. Instead we build +
 # push to a private GHCR package, then `az acr import` (server-side, works with public access
 # disabled) pulls it into the private ACR, and `az containerapp update` rolls the app. OIDC auth as
@@ -9,6 +10,24 @@ name: Deploy
 # repo:fiscaltec/vitally-mcp:environment:<target> -- one per target). Callable manually
 # (workflow_dispatch) or by the release train (workflow_call). On a failed health/smoke check it rolls
 # the Container App back to the previous image.
+#
+# BUILD ONCE, IMPORT BY DIGEST. The build step outputs the GHCR manifest digest, and the import
+# pulls `ghcr…@<digest>` -- never `ghcr…:<tag>` -- into the ACR tag. A caller that already has a
+# digest (the train's production call, passing what staging ran) sets `image_digest`, and the build
+# is skipped entirely. Two reasons, both from #171:
+#   * a rebuild of the same ref is not guaranteed byte-identical, so production would ship an image
+#     staging never smoke-tested; and
+#   * `az acr import --force` of a REBUILT image would overwrite the tag staging's revision points
+#     at, and staging (minReplicas 0, referencing a tag) would cold-start into production's rebuild.
+# Within one train run, importing the same digest into the same tag is a no-op on content, so neither
+# can happen. The revision still references the readable tag (`vitally-mcp:v4.7.0`); the digest is
+# what the tag held AT IMPORT TIME, printed in the job summary. ACR's data plane is unreachable from a
+# hosted runner (public access disabled), so the import IS the verification -- there is no read-back.
+#
+# ⚠️ OUTSIDE the train the hazard is still live: a manual dispatch that REUSES an existing tag without
+# `image_digest` rebuilds and `--force`-imports over it, and staging (minReplicas 0) cold-starts into
+# that rebuild. To re-deploy a tag that already shipped, pass its digest (from the earlier job
+# summary) or re-run the train's failed jobs, which keeps staging's digest.
 #
 # THE TARGET IS A GITHUB ENVIRONMENT NAME, and everything that differs between targets is an
 # environment-scoped variable (CONTAINER_APP, PUBLIC_ORIGIN) rather than a literal in this file, so
@@ -39,6 +58,10 @@ on:
         description: "Image tag to publish (default sha-<short-sha> of the chosen ref)"
         required: false
         type: string
+      image_digest:
+        description: "Skip the build and deploy this already-pushed GHCR digest (sha256:…). Requires image_tag. Normally empty"
+        required: false
+        type: string
   workflow_call:
     inputs:
       target:
@@ -56,6 +79,25 @@ on:
         description: "Image tag to publish (default sha-<short-sha> of the chosen ref)"
         required: false
         type: string
+      image_digest:
+        # Set by the release train's production call to the digest its staging call deployed, so
+        # both targets run one build. Empty means build from `ref`.
+        description: "Skip the build and deploy this already-pushed GHCR digest (sha256:…)"
+        required: false
+        type: string
+      require_image_digest:
+        # Set by the train's production call when staging DEPLOYED. Without it, a break anywhere in
+        # the four-hop output chain (step -> job -> workflow_call -> needs) would hand production an
+        # empty digest, which reads as "build from ref" -- a silent rebuild of exactly the kind this
+        # design exists to prevent. With it, an empty digest fails the run instead.
+        description: "Fail rather than build if image_digest is empty"
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      image_digest:
+        description: "The GHCR manifest digest this run imported and rolled the target to"
+        value: ${{ jobs.deploy.outputs.image_digest }}
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -79,6 +121,8 @@ jobs:
       packages: write # push to GHCR
     runs-on: ubuntu-latest
     environment: ${{ inputs.target }}
+    outputs:
+      image_digest: ${{ steps.digest.outputs.digest }}
     env:
       # ACR_NAME / RESOURCE_GROUP / IMAGE_NAME are shared by every target and stay repo-level.
       # CONTAINER_APP and PUBLIC_ORIGIN are set per environment; both targets set them explicitly so
@@ -148,7 +192,11 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      # Build only when no digest was given AND none was required. A required-but-missing digest must
+      # fail at "Resolve the image digest" WITHOUT building first: a build would push over the GHCR
+      # tag before the failure, mutating the registry for a deploy that is then refused.
       - name: Log in to GHCR
+        if: ${{ inputs.image_digest == '' && !inputs.require_image_digest }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -156,12 +204,47 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image to GHCR
+        id: build
+        if: ${{ inputs.image_digest == '' && !inputs.require_image_digest }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
           push: true
           tags: ${{ steps.vars.outputs.ghcr }}:${{ steps.vars.outputs.tag }}
+
+      # The one digest this run deploys: the build's, or the caller's. Validated so an empty or
+      # malformed value fails here rather than turning the import below into a pull of `…@`.
+      - name: Resolve the image digest
+        id: digest
+        env:
+          GIVEN: ${{ inputs.image_digest }}
+          BUILT: ${{ steps.build.outputs.digest }}
+          REQUIRED: ${{ inputs.require_image_digest }}
+          GIVEN_TAG: ${{ inputs.image_tag }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUIRED" = "true" ] && [ -z "$GIVEN" ]; then
+            echo "::error::A digest was required (staging deployed one) but none reached this call. Refusing to build: production would ship an image staging never ran."
+            exit 1
+          fi
+          # A given digest with a DEFAULTED tag would label it `sha-<ref>`, which may name a different
+          # build than the one the digest came from.
+          if [ -n "$GIVEN" ] && [ -z "$GIVEN_TAG" ]; then
+            echo "::error::image_digest requires an explicit image_tag"
+            exit 1
+          fi
+          if [ -n "$GIVEN" ]; then digest="$GIVEN"; source="given by the caller (build skipped)"
+          else digest="$BUILT"; source="built by this run"; fi
+          if ! printf '%s' "$digest" | grep -Eqx 'sha256:[0-9a-f]{64}'; then
+            echo "::error::Image digest '$digest' ($source) is not sha256:<64 hex>"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Deploying $TAG = $digest, $source"
+          echo "**$TARGET**: \`$TAG\` = \`$digest\` ($source)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
@@ -190,7 +273,7 @@ jobs:
           set -euo pipefail
           az acr import \
             --name "$ACR_NAME" \
-            --source "${{ steps.vars.outputs.ghcr }}:${{ steps.vars.outputs.tag }}" \
+            --source "${{ steps.vars.outputs.ghcr }}@${{ steps.digest.outputs.digest }}" \
             --image "$IMAGE_NAME:${{ steps.vars.outputs.tag }}" \
             --username "${{ github.actor }}" \
             --password "$GHCR_TOKEN" \

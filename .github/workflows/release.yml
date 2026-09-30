@@ -2,7 +2,32 @@ name: Release
 
 # Nightly release train: if main changed since the last tag, compute the next semver from
 # conventional commits, create the tag + a GitHub Release (the changelog), and deploy it via the
-# reusable deploy workflow. Fully automatic; the deploy self-rolls-back on a failed smoke test.
+# reusable deploy workflow -- to STAGING first, then to PRODUCTION with the same image digest (#171).
+# Fully automatic; each deploy self-rolls-back on a failed smoke test, and a staging failure stops
+# production.
+#
+# WHY STAGING FIRST, stated precisely because the obvious reason is the weak one. The main reason is
+# that staging stays CURRENT: it was reachable only by manual dispatch and drifted 22 days behind,
+# where a configuration change was accepted, rolled a Healthy revision and did nothing, because the
+# code that reads it had not reached that image. The pre-production gate is a small side-effect:
+# staging shares production's CAE, identity, Key Vault and Vitally tenant, so its smoke is the same
+# set production's own deploy runs and self-rolls-back on. It saves a few minutes of a broken
+# production revision at 02:00 UTC. It catches no functional regression -- those need a real token.
+#
+# STAGING IS SKIPPED, NOT FAILED, in two cases, and production still ships:
+#   * it is torn down (#112 -- on-demand, so absence is normal). The gate (staging-gate.yml) asks
+#     check-serving-revisions.sh, whose exit 3 means az said the app does not exist. Any other
+#     failure -- a lapsed login, a missing role, an Azure outage -- FAILS the train rather than
+#     skipping, because reading "could not check" as "absent" is the fail-open shape #167 removed.
+#     Absence is only observable because the deploy identity holds ContainerApp Reader at
+#     resource-group scope; without it Azure answers AuthorizationFailed for a missing app.
+#   * it is PINNED: the `STAGING_PINNED` variable on the `staging` GitHub environment is non-empty,
+#     and its value is the reason. Staging exists to run the next identity change ahead of
+#     production (it ran Entra from 2026-09-03 while production waited until 2026-09-16), and a
+#     nightly deploy of the tag would overwrite a branch mid-validation.
+#     ⚠️ THIS IS NOT THE AUTO_DEPLOY PATTERN warned against below. That released without deploying
+#     anywhere; a pin skips STAGING only, and production still ships what was tagged. A pinned
+#     staging is by definition not current, so the notice repeats on every run that cuts a tag.
 #
 # TO FREEZE DEPLOYS: `gh workflow disable release.yml`; to lift it, `gh workflow enable release.yml`.
 # That stops tagging, releasing and deploying together, which is the coherent unit — a freeze must not
@@ -18,8 +43,20 @@ on:
     - cron: "0 2 * * *" # 02:00 UTC nightly
   workflow_dispatch:
 
-# Permissions are set per-job: a reusable workflow's token is CAPPED by the caller, so the deploy
-# job must itself grant id-token/packages or the called deploy.yml would be denied them at runtime.
+# Permissions are set per-job: a reusable workflow's token is CAPPED by the caller, so each calling
+# job must itself grant what its called workflow needs (id-token for the gate; id-token and packages
+# for the deploys), or the called workflow is denied them at runtime.
+#
+# RECOVERING A RUN. A gate failure, a staging failure or a cancellation leaves the tag and its
+# Release in place with production not shipped. Neither a fresh `gh workflow run release.yml` nor a
+# re-run of ALL jobs recovers it: the tag step finds the tag already cut, outputs no new tag, and
+# every deploy skips -- a green no-op.
+#   * A FAILED gate or staging job: `gh run rerun <id> --failed`.
+#   * A CANCELLED job, or if --failed did not pick it up: GitHub's docs do not say whether --failed
+#     covers cancelled jobs, so do not rely on it. Deploy by hand instead, which depends on nothing
+#     but deploy.yml: dispatch staging with the tag, then production with the same tag AND the
+#     digest from the staging run's summary (`-f image_digest=sha256:…`), so production gets the
+#     build staging ran. CLAUDE.md, "Freezing deploys", has the commands.
 concurrency:
   group: release-train
   cancel-in-progress: false
@@ -55,9 +92,56 @@ jobs:
           set -euo pipefail
           gh release create "$NEW_TAG" --generate-notes --latest
 
-  deploy:
+  # Decides whether staging takes this tag: deploy, skip (pinned or torn down), or FAIL when it cannot
+  # tell. See staging-gate.yml.
+  staging-gate:
     needs: release
     if: ${{ needs.release.outputs.new_tag != '' }}
+    permissions:
+      id-token: write # OIDC for azure/login in the called gate
+      contents: read
+    uses: ./.github/workflows/staging-gate.yml
+    with:
+      ref: ${{ needs.release.outputs.new_tag }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  deploy-staging:
+    needs: [release, staging-gate]
+    if: ${{ needs.staging-gate.outputs.deploy == 'true' }}
+    permissions:
+      id-token: write # OIDC for azure/login in the called deploy
+      contents: read
+      packages: write # GHCR push in the called deploy
+    uses: ./.github/workflows/deploy.yml
+    with:
+      target: staging
+      ref: ${{ needs.release.outputs.new_tag }}
+      image_tag: ${{ needs.release.outputs.new_tag }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  # Production ships when the gate SUCCEEDED and staging did what the gate decided: deployed
+  # successfully when the gate said deploy, or was skipped when it said not to. Pairing the two, rather
+  # than accepting `success || skipped` alone, means a staging job skipped for any OTHER reason cannot
+  # wave production through. The default `needs` semantics would skip this whenever deploy-staging is
+  # skipped, and `!cancelled()` is what lets it run at all in that case. A gate failure (could not
+  # assess), a staging failure or a cancellation stops it.
+  #
+  # When staging deployed, production takes staging's DIGEST and skips the build, so both targets run
+  # one image. When staging was skipped, `image_digest` is empty and production builds as it always did.
+  deploy:
+    needs: [release, staging-gate, deploy-staging]
+    if: >-
+      ${{ !cancelled()
+          && needs.release.outputs.new_tag != ''
+          && needs.staging-gate.result == 'success'
+          && ((needs.staging-gate.outputs.deploy == 'true' && needs.deploy-staging.result == 'success')
+              || (needs.staging-gate.outputs.deploy == 'false' && needs.deploy-staging.result == 'skipped')) }}
     permissions:
       id-token: write # OIDC for azure/login in the called deploy
       contents: read
@@ -66,6 +150,8 @@ jobs:
     with:
       ref: ${{ needs.release.outputs.new_tag }}
       image_tag: ${{ needs.release.outputs.new_tag }}
+      image_digest: ${{ needs.deploy-staging.outputs.image_digest }}
+      require_image_digest: ${{ needs.staging-gate.outputs.deploy == 'true' }}
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

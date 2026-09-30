@@ -1,0 +1,108 @@
+name: Staging gate
+
+# Decides whether the release train deploys this tag to staging (#171). Called by release.yml; a
+# separate reusable workflow so its three verdicts can be exercised without running the train.
+#
+#   deploy=true    staging exists and every serving revision could be read
+#   deploy=false   staging is PINNED (STAGING_PINNED is non-empty -- its value is the reason) or
+#                  TORN DOWN (check-serving-revisions.sh exit 3: az said the app does not exist)
+#   job FAILS      anything else -- a lapsed login, a missing role, an Azure outage, a malformed
+#                  listing. Reading "could not check" as "absent" is the fail-open shape #167 removed,
+#                  and it would ship production on an assumption, so the train stops instead.
+#
+# Absence is only observable because the deploy identity holds ContainerApp Reader at resource-group
+# scope (infra/terraform/identity.tf): without it Azure answers AuthorizationFailed for an app that
+# does not exist, identical to a lost role.
+#
+# ⚠️ A WRONG `CONTAINER_APP` on the staging environment reads as torn down: az says that name does
+# not exist, which is exactly absence. The notice names the app it looked for, on every tagged run;
+# if staging is up and the notice says torn down, check the variable.
+#
+# Proven on 2026-09-29 by a temporary self-test calling this workflow (run 36584985171, ATTEMPT 1 --
+# attempt 2 was a deliberately pinned re-run): live staging -> deploy=true; a nonexistent app name ->
+# deploy=false; a bogus client id -> the gate failed at login. The pin path by attempt 2.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Ref to take check-serving-revisions.sh from (the tag being released)"
+        required: true
+        type: string
+    outputs:
+      deploy:
+        description: "'true' to deploy to staging, 'false' to skip it"
+        value: ${{ jobs.gate.outputs.deploy }}
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  gate:
+    name: Is staging up and unpinned?
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC for azure/login
+      contents: read
+    # The staging credential -- the federated subject is per environment -- but NO deployment record:
+    # nothing is deployed here, and a phantom staging deployment on every tagged run would make the
+    # environment's history lie. Verified to record none (#171).
+    environment:
+      name: staging
+      deployment: false
+    outputs:
+      deploy: ${{ steps.decide.outputs.deploy }}
+    env:
+      PINNED: ${{ vars.STAGING_PINNED }}
+      CONTAINER_APP: ${{ vars.CONTAINER_APP }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+    steps:
+      # A pin needs no Azure at all, so it is decided before login: a pinned staging then cannot be
+      # blocked by an unrelated Azure failure.
+      - name: Checkout repository
+        if: ${{ env.PINNED == '' }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Azure login (OIDC)
+        if: ${{ env.PINNED == '' }}
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Decide
+        id: decide
+        run: |
+          set -uo pipefail
+          if [ -n "$PINNED" ]; then
+            # First line only, stripped of `::`: the value is admin-set, but it lands in a workflow
+            # command, and a second line or a `::` would be interpreted as another one.
+            reason=$(printf '%s\n' "$PINNED" | head -n 1 | sed 's/::/: :/g')
+            echo "::notice title=Staging PINNED, not deployed::$reason -- staging is NOT current while the pin is set. Production still deploys. Deleting STAGING_PINNED resumes tracking from the NEXT tag; to catch staging up now, dispatch deploy.yml to staging with the current tag and its image_digest."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$CONTAINER_APP" ] || [ -z "$RESOURCE_GROUP" ]; then
+            echo "::error::CONTAINER_APP / RESOURCE_GROUP are not set for the staging environment"
+            exit 1
+          fi
+          az config set extension.use_dynamic_install=yes_without_prompt > /dev/null \
+            || { echo "::error::az is not usable on this runner (az config failed)"; exit 1; }
+          # `|| rc=$?`, not a bare call then `rc=$?`: Actions runs this under `bash -e`, which `set -uo`
+          # does not undo, so a non-zero exit would end the step before the case below ever saw it --
+          # turning ABSENT (3) into a failure. The self-test caught exactly that (run 36584594351).
+          rc=0
+          bash .github/scripts/check-serving-revisions.sh "$CONTAINER_APP" "$RESOURCE_GROUP" --image || rc=$?
+          case "$rc" in
+            0) echo "deploy=true" >> "$GITHUB_OUTPUT" ;;
+            3) echo "::notice title=Staging torn down, not deployed::$CONTAINER_APP does not exist in $RESOURCE_GROUP. Production still deploys."
+               echo "deploy=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not establish whether staging is up (check-serving-revisions exit $rc). Failing rather than skipping: an auth or Azure failure is not absence."
+               exit 1 ;;
+          esac

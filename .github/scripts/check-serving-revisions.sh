@@ -26,6 +26,15 @@
 #   2   NOT ASSESSED: the listing failed, was empty or was not the shape expected, a revision could
 #       not be read, or its template did not have the shape the assertions need. No verdict is
 #       possible. Outranks 1.
+#   3   ABSENT: az reported that this app does not exist in this resource group -- its exact
+#       `(ResourceNotFound) The Resource 'Microsoft.App/containerApps/<app>' under resource group
+#       '<rg>' was not found`, matched as a fixed string. Nothing looser: a missing resource group, a
+#       missing role, a lapsed login or another app's not-found are all NOT ASSESSED (2), because
+#       mistaking any of them for absence would skip a check that should have failed.
+#       ⚠️ Only meaningful for a caller with READ AT RESOURCE-GROUP SCOPE. Without it Azure answers
+#       AuthorizationFailed for an app that does not exist -- the same answer as a lost role -- so
+#       absence cannot be observed and every lookup of a missing app is 2. The deploy identity holds
+#       `ContainerApp Reader` on vitally-prod-rg-uksouth for exactly this reason (#171).
 #  64   usage error -- including no assertion at all, since a check of nothing must not pass
 #
 # WHY THIS IS A SCRIPT (#167). The loop it replaces was copied into five places, and the copies
@@ -119,10 +128,20 @@ jqr() { jq "$@" | tr -d '\r'; }
 
 # ---------------------------------------------------------------- the listing
 
-if ! LISTING=$(az containerapp revision list -n "$APP" -g "$RG" -o json); then
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$ERR_FILE"' EXIT
+if ! LISTING=$(az containerapp revision list -n "$APP" -g "$RG" -o json 2> "$ERR_FILE"); then
+  cat "$ERR_FILE" >&2
+  # ABSENT only on az's own not-found for THIS app in THIS group, matched as a fixed string. See the
+  # exit-code table for why nothing looser will do.
+  if grep -qF "(ResourceNotFound) The Resource 'Microsoft.App/containerApps/$APP' under resource group '$RG' was not found" "$ERR_FILE"; then
+    echo "ABSENT — $APP does not exist in $RG"
+    exit 3
+  fi
   not_assessed "could not list revisions of $APP in $RG (az failed — see its error)"
   exit 2
 fi
+cat "$ERR_FILE" >&2
 
 # -s slurps, so a body holding more than one JSON document is caught rather than processed piecewise.
 # Every element is validated BEFORE any is selected, so one malformed revision cannot be dropped
