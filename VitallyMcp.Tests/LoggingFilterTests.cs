@@ -191,7 +191,7 @@ public class LoggingFilterTests
 
         logger.IsEnabled(LogLevel.Warning).Should().BeTrue(
             "the filter is Warning rather than None deliberately — a failing outbound call must " +
-            "still surface, and this server has only one LogError call site of its own");
+            "still surface, and this server's own Error records cover only the paths it owns");
     }
 
     [Theory]
@@ -209,7 +209,7 @@ public class LoggingFilterTests
 
         // Asserted in the same test rather than left implied: a regression from Warning to None
         // would satisfy the line above while silently hiding faults — and framework warnings are
-        // most of what reports one here, since the application has exactly one LogError call site.
+        // the only thing that reports a fault outside the paths the application logs itself (#94).
         logger.IsEnabled(LogLevel.Warning).Should().BeTrue(
             "the filters are Warning rather than None so genuine faults still surface");
     }

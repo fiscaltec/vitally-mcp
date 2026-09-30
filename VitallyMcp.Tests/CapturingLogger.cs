@@ -11,10 +11,31 @@ namespace VitallyMcp.Tests;
 public sealed class CapturingLogger<T> : ILogger<T>
 {
     public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+    /// <summary>
+    /// The exception attached to each entry, index-aligned with <see cref="Entries"/>. Separate because
+    /// the message formatter ignores the exception, so a record that attaches one — whose
+    /// <c>ToString()</c> the console and the OTel exporter both render — looks identical in
+    /// <see cref="Entries"/> to one that does not. The failure logs (#94) depend on telling them apart.
+    /// </summary>
+    public List<Exception?> Exceptions { get; } = new();
+
     public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
     public bool IsEnabled(LogLevel logLevel) => true;
+    // One lock over both lists, because callers log concurrently — Get_organization_summary's two
+    // sections run in parallel — and the index alignment above only holds if each entry and its
+    // exception are added as one unit. Reads are not locked: tests read after the writes finish.
+    private readonly object _gate = new();
+
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        => Entries.Add((logLevel, formatter(state, exception)));
+    {
+        var message = formatter(state, exception);
+        lock (_gate)
+        {
+            Entries.Add((logLevel, message));
+            Exceptions.Add(exception);
+        }
+    }
 
     private sealed class NullScope : IDisposable
     {
@@ -29,15 +50,24 @@ public sealed class CapturingLogger<T> : ILogger<T>
 /// one category on purpose — the audit assertions must count only <see cref="AuditLogger"/> records,
 /// not every framework message the host happens to emit.
 /// </summary>
-public sealed class CapturingLoggerProvider(string categoryName) : ILoggerProvider
+/// <remarks>
+/// <paramref name="matchPrefix"/> widens the match to every category starting with the name — for a
+/// third-party component such as the MCP SDK, whose exact category is an implementation detail.
+/// </remarks>
+public sealed class CapturingLoggerProvider(string categoryName, bool matchPrefix = false) : ILoggerProvider
 {
     private readonly CapturingLogger<object> _sink = new();
 
     /// <summary>Entries logged under <c>categoryName</c>, in order.</summary>
     public IReadOnlyList<(LogLevel Level, string Message)> Entries => _sink.Entries;
 
+    /// <summary>The exception attached to each entry, index-aligned with <see cref="Entries"/>.</summary>
+    public IReadOnlyList<Exception?> Exceptions => _sink.Exceptions;
+
     public ILogger CreateLogger(string category) =>
-        category == categoryName ? _sink : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        category == categoryName || (matchPrefix && category.StartsWith(categoryName, StringComparison.Ordinal))
+            ? _sink
+            : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
     public void Dispose() { }
 }

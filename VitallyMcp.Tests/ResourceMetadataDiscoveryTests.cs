@@ -149,5 +149,23 @@ public class ResourceMetadataDiscoveryTests : IClassFixture<ResourceMetadataDisc
             Environment.SetEnvironmentVariable("OAuth__PublicBaseUrl", "https://example.test");
             return base.CreateHost(builder);
         }
+
+        // Cleared on the way out, because they outlive this fixture otherwise. Serialisation stops two
+        // fixtures racing; it does nothing about one that leaves its values behind for whichever class
+        // runs next. This one did, and every proxy test that omits OAuth:PublicBaseUrl from its own
+        // configuration then saw https://example.test as its origin — nine failures in Release builds,
+        // where #94's added tests had shifted the order to put them after this class.
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            foreach (var name in new[]
+            {
+                "OAuth__NoAuth", "Authorization__ReadOnly", "Vitally__DevelopmentApiKey", "Vitally__Region",
+                "OAuth__Authority", "OAuth__Audience", "OAuth__Resource", "OAuth__PublicBaseUrl",
+            })
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
     }
 }

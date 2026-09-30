@@ -16,6 +16,7 @@ namespace VitallyMcp.Tests;
 /// <see cref="HttpClient"/> the handler resolves from <see cref="IHttpClientFactory"/> and reading
 /// back the URI it posted to.
 /// </summary>
+[Collection(IntegrationTestCollection.Name)]
 public class OAuthTokenProxyForwardTests : IClassFixture<OAuthTokenProxyForwardTests.Factory>
 {
     private readonly Factory _factory;
