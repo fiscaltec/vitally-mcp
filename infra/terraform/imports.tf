@@ -194,6 +194,11 @@ import {
   to = azurerm_role_assignment.mi_monitoring_metrics_publisher
   id = "${local.rg_id}/providers/Microsoft.Insights/components/vitally-prod-appi-uksouth/providers/Microsoft.Authorization/roleAssignments/21b34521-171a-47d9-ade6-e12b5cc37b83"
 }
+# Granted 2026-09-29 for #171's staging presence check (see identity.tf).
+import {
+  to = azurerm_role_assignment.mi_rg_containerapp_reader
+  id = "${local.rg_id}/providers/Microsoft.Authorization/roleAssignments/fcffb5d1-5cdc-47e8-88f6-8578dd6d5139"
+}
 
 # ---- Need a looked-up ID first (uncomment + fill in, then plan) ----
 # Diagnostic settings:  import id = "<target-resource-id>|to-law"
