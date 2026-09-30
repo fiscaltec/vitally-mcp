@@ -48,9 +48,15 @@ on:
 # for the deploys), or the called workflow is denied them at runtime.
 #
 # RECOVERING A RUN. A gate failure, a staging failure or a cancellation leaves the tag and its
-# Release in place with production not shipped -- the next nightly run finds no NEW tag and does
-# nothing. Re-run that run's failed jobs (`gh run rerun <id> --failed`), which keeps any digest
-# staging already deployed; a fresh `gh workflow run release.yml` is a green no-op.
+# Release in place with production not shipped. Neither a fresh `gh workflow run release.yml` nor a
+# re-run of ALL jobs recovers it: the tag step finds the tag already cut, outputs no new tag, and
+# every deploy skips -- a green no-op.
+#   * A FAILED gate or staging job: `gh run rerun <id> --failed`.
+#   * A CANCELLED job, or if --failed did not pick it up: GitHub's docs do not say whether --failed
+#     covers cancelled jobs, so do not rely on it. Deploy by hand instead, which depends on nothing
+#     but deploy.yml: dispatch staging with the tag, then production with the same tag AND the
+#     digest from the staging run's summary (`-f image_digest=sha256:…`), so production gets the
+#     build staging ran. CLAUDE.md, "Freezing deploys", has the commands.
 concurrency:
   group: release-train
   cancel-in-progress: false

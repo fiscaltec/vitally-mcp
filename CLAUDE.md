@@ -1265,7 +1265,8 @@ target (`deploy-staging`), and GitHub keeps only one *pending* run per group. **
 that top-level group also applies when the train *calls* `deploy.yml` — GitHub's reusable-workflow
 documentation does not say. If it does, queueing a manual staging dispatch while the train's staging
 call is waiting cancels one of them; a cancelled train staging call stops production (safe) and the
-run then needs `gh run rerun <id> --failed`. Avoid manual staging dispatches around 02:00 UTC.
+tag then has to be deployed by hand — see *Deploying a tag by hand, staging first* under *Freezing
+deploys*. Avoid manual staging dispatches around 02:00 UTC.
 
 The gate **fails the train** rather than skipping when it cannot tell whether staging exists — a
 lapsed login, a missing role, an Azure outage. Reading "could not check" as "absent" is the fail-open
@@ -1644,7 +1645,18 @@ three that can skip, for different reasons:
 | `staging-gate`, `deploy-staging` **and** `deploy` | no new tag — a night with no new conventional commits | No: nothing to ship. Most historical runs look like this |
 | `deploy-staging` only | the gate found staging **pinned** or **torn down** — its notice says which | No, by design; production still ships. But a pinned staging is not current |
 | `deploy` (production) while `staging-gate` **failed** | the gate could not establish whether staging exists | **Yes.** Production did not ship. Fix the lookup (login, role, Azure), then `gh run rerun <id> --failed` — **not** a fresh `gh workflow run release.yml`, which finds no new tag and is a green no-op |
-| `deploy` (production) while `deploy-staging` **failed** or was **cancelled** | staging's smoke failed (and it rolled back), or the run was cancelled (possibly by a queued manual staging dispatch — see the pin note above) | **Yes.** Same recovery, `gh run rerun <id> --failed`. The tag and its Release exist while production has not shipped them |
+| `deploy` (production) while `deploy-staging` **failed** or was **cancelled** | staging's smoke failed (and it rolled back), or the run was cancelled (possibly by a queued manual staging dispatch — see the pin note above) | **Yes.** The tag and its Release exist while production has not shipped them. A **failed** job: `gh run rerun <id> --failed`. A **cancelled** one — GitHub's docs do not say whether `--failed` covers it, so do not rely on it — deploy by hand with the two commands below |
+
+**Deploying a tag by hand, staging first** — the recovery that depends on nothing but `deploy.yml`:
+
+```bash
+gh workflow run deploy.yml -f target=staging -f ref=<tag> -f image_tag=<tag>
+# read the digest from that run's summary, then:
+gh workflow run deploy.yml -f target=production -f ref=<tag> -f image_tag=<tag> -f image_digest=sha256:<…>
+```
+
+⚠️ Not `gh run rerun <id>` (all jobs): the tag step finds its tag already cut, outputs no new tag,
+and every deploy skips — a green no-op, like a fresh `gh workflow run release.yml`.
 
 A staging deploy that **fails** its smoke rolls staging back and stops production — that run shows
 `deploy` as skipped too, and is the train doing its job. The deploys that fired before #171 (18, 19
