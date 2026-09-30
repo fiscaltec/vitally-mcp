@@ -157,12 +157,13 @@ if (exporterConfigured)
         options.Credential = new DefaultAzureCredential();
 
         // ⚠️ The audit trail must not depend on trace sampling (#178). The distro's default —
-        // verified from the 1.6.0 package, since the .NET docs do not state it — is TRUE: a log
-        // record is exported only if its trace was sampled. The audit records are logged inside the
-        // request's trace, and traces are rate-limited to 5 a second by default, so under load
-        // VitallyToolCall / VitallyUpstreamCall records were silently never written to AppEvents.
+        // verified from the 1.6.0 package, since the distro's docs do not state it — is TRUE: a log
+        // record is exported only if its trace was sampled. All four audit record types are logged
+        // inside the request's trace, and traces are rate-limited to 5 a second by default, so under
+        // sustained load a proportion of requests silently lost their records from AppEvents.
         // Off, every log record is exported regardless, and trace sampling becomes a cost lever that
-        // can be turned without touching the audit trail. Pinned by
+        // can be turned without touching the audit trail. (Mind that TracesPerSecond takes precedence
+        // over SamplingRatio: percentage sampling needs TracesPerSecond = null too.) Pinned by
         // LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp.
         options.EnableTraceBasedLogsSampler = false;
     });

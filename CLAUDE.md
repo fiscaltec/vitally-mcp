@@ -926,14 +926,33 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   > **Routing is built, and switched on by configuration.** Every audit record carries the `microsoft.custom_event.name` attribute, which the Azure Monitor OpenTelemetry exporter uses to write it to **`AppEvents`** rather than `AppTraces`; `Program.cs` registers the exporter and suppresses the whole `VitallyMcp.AuditLogger` category from the console **only when `ApplicationInsights__ConnectionString` is set** — **set on both targets on 2026-09-25** (production revision 39, staging revision 17), each verified by reading rows back out of `AppEvents`. ⚠️ Staging is an **on-demand** app and the variable does **not** survive a recreate, so that describes the staging app that exists today, not any future one — a spin-up must set it alongside `Authorization__ReadOnly`. ⚠️ **#142's console export is ungated on production as of that flip**, because the console stream is now customer-data-free: a breadcrumb stays there carrying the object id, tool name, outcome and correlation id and nothing else, since OpenTelemetry export is asynchronous and a lost export cannot be detected in-process. Design: `docs/superpowers/specs/2026-09-17-logging-observability-design.md`.
   >
   > ⚠️ **The audit trail does not depend on trace sampling, and must not start to (#178).** The distro's
-  > default — read off the 1.6.0 package, because the .NET docs do not state it — is
-  > `EnableTraceBasedLogsSampler = true`: a log record is exported only if its trace was sampled. Audit
-  > records are logged inside the request's trace, and traces are rate-limited to **5 a second** by
-  > default, so until #178 any request past that rate lost its `VitallyToolCall` / `VitallyUpstreamCall`
-  > records from `AppEvents` silently — only the console breadcrumb survived. `Program.cs` now sets it
-  > `false`, pinned by `LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp`. That is what makes
-  > trace sampling a cost lever: turn `SamplingRatio` / `TracesPerSecond` freely, never this. Records
-  > emitted **before** #178 deploys may have gaps under load; how many is unknown.
+  > default — read off the 1.6.0 package, because the distro's docs do not state it — is
+  > `EnableTraceBasedLogsSampler = true`: a log record is exported only if its trace was sampled. All
+  > four audit record types (`VitallyToolCall`, `VitallyUpstreamCall`, `VitallyToolCallDenied`,
+  > `VitallyUpstreamDenied`) are logged inside the request's trace, and traces are rate-limited to
+  > **5 a second** by default — an adaptive sampler, so under sustained load above that rate a
+  > *proportion* of requests lost their records from `AppEvents`, silently. Only the console
+  > breadcrumb survived, and only from 2026-09-26 when the console export went live (#142); for the
+  > day before that, nothing persisted. `Program.cs` now sets it `false`, pinned by
+  > `LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp`.
+  >
+  > That makes trace sampling a cost lever that no longer touches the audit trail — but **mind how the
+  > lever works**: `TracesPerSecond` (default 5) **takes precedence** over `SamplingRatio` whenever both
+  > are set, so percentage sampling needs `TracesPerSecond = null` as well, or `SamplingRatio = 0.1F`
+  > silently does nothing. The `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables
+  > override both. Never turn *this* switch back on.
+  >
+  > Records emitted **before** #178 deploys may be missing individually under load — not as whole time
+  > bins, so a coverage check by bin cannot reveal it (see `ACCESS.md`). The gap is **measurable from
+  > 2026-09-26**: every tool call's breadcrumb, carrying its correlation id, has persisted to
+  > `ContainerAppConsoleLogs` since then, so a breadcrumb with no matching `VitallyToolCall` row in
+  > `AppEvents` is a dropped record. For 2026-09-25 to 2026-09-26 it is unknowable. Not yet measured.
+  >
+  > Verified by behaviour as well as by option (#178's PR): a probe pointing the exporter at a local
+  > listener, with trace sampling at 0%, received **0 of 5** in-request logs under the default and **5 of
+  > 5** with the switch off. No environment variable overrides it — `AzureMonitor__EnableTraceBasedLogsSampler`
+  > is not bound — and a sampled-out request's log carries no `sampleRate`, so `count()` over `AppEvents`
+  > stays an exact audit count however far trace sampling is reduced.
   >
   > The reversal is **conditional on access control**, which is therefore part of the design rather than an operational afterthought: the workspace carries **no** role assignments of its own and inherits from the subscription and management group. **Reviewed 2026-09-21 (#146)**, superseding the 2026-09-17 estimate of "5 users and 28 service principals", which counted a group and an external principal as users and counted assignments rather than principals. Actual: **4** named IT administrators, whose `Owner`/`Contributor` is **PIM-eligible rather than permanent**, plus **2** by-design break-glass accounts; **22** service principals with a read-capable role, of which ~13 are Microsoft platform automation and 8 are FISCAL-controlled (two Azure DevOps connections holding `Owner`); and **one external MSP holding `Owner`** through delegated administration. The review also found **4 orphaned principals** — deleted from the directory, permanently, with 14 live role assignments between them; **13 were removed on 2026-09-21** (80 → 67 effective assignments at the workspace), the 14th held because it sits at management-group scope. ⚠️ `Testing Dan Dan Dan`'s `Reader` was flagged and then **deliberately left in place** (dsearle, 2026-09-21) — do not "tidy" it. ⚠️ **Table-level RBAC cannot fence the audit table off** — Azure RBAC is allow-only, so it adds narrow readers and never subtracts from an inherited `*/read`; the design said otherwise until this review. The data is acceptable to store because it is restricted; if that stops being true, so does the policy.
   - **It records `oid`, not `sub`, and the difference is not cosmetic.** An Entra v2 `sub` is a *pairwise* identifier — unique per (user, application), and **not resolvable to a person by any Entra lookup**. Keying the audit trail on it gives you records that are consistent and unattributable, which defeats the purpose of keeping one. `oid` is the directory object id: a GUID, stable across every app in the tenant, resolvable with `az ad user show --id`, and carrying no more personal data than the pairwise value. Found by decoding a real staging token during the #108 validation, *before* the production flip could start writing such records.
