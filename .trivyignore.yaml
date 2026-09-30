@@ -11,7 +11,7 @@
 vulnerabilities:
   - id: CVE-2026-84782
     statement: >-
-      OpenSSL information disclosure (HIGH) in libssl3t64 3.0.13-0ubuntu3.15, inside the chiselled
+      OpenSSL information disclosure (HIGH) in libssl3t64 and openssl 3.0.13-0ubuntu3.15, in the chiselled
       base image mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled. Ubuntu has shipped the fix
       (3.0.13-0ubuntu3.16), but Microsoft had not rebuilt the image when this was found
       (2026-09-30), and a chiselled image has no package manager, so it cannot be patched in our
