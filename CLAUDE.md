@@ -1019,7 +1019,7 @@ with the rest of that record.)
 | Upstream call duration | `durationMs` on the `VitallyUpstreamCall` record (`AuditDurationMs` in `AppEvents`) | Which of a composite tool's upstream calls was slow, joined to the tool-call record by correlation id. Send to body read, 429 waits included |
 | 429 retries / exhaustion | `vitally.ratelimit.retries`, `vitally.ratelimit.exhausted` | How often the server exceeds Vitally's 1000 req/min |
 | Pager truncations | `vitally.autopager.truncations`, tag `resource` | Whether `Vitally:MaxAutoPageFetches` is set where users hit it |
-| Cache hit/miss | `vitally.cache.lookups`, tags `cache` = `api_key` / `group_membership` / `oidc_discovery`, `result` = `hit` / `miss` | Per *lookup*. A miss means the round-trip happened, whatever it then returned — a stale Graph serve after a failed call is a miss |
+| Cache hit/miss | `vitally.cache.lookups`, tags `cache` = `api_key` / `group_membership` / `oidc_discovery`, `result` = `hit` / `miss` | Per *lookup*. A miss means the cache did not answer, so an external lookup was required and attempted — counted before the call, so a pre-cancelled request or a credential failure is a miss with no network round-trip. A stale Graph serve after a failed call is a miss |
 | MCP spans | activity source `Experimental.ModelContextProtocol` | A span per request, tool calls included — sampled, and sanitised (see below) |
 
 Three caveats on reading those, each of which would otherwise send a query wrong:
