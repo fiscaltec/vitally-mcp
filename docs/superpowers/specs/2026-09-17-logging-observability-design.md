@@ -351,7 +351,7 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 > body, an exception message or the rest of the path. The Key Vault record is the deliberate
 > exception: it attaches Azure's exception, which carries its status and code but no secret or
 > customer data. See `ToolCallFailureLog` and the log-levels note in `CLAUDE.md`. The rate-limit
-> **counter** is phase 6 and not in that PR. The findings are kept as written, because they record
+> **counter** is phase 6, delivered by #94's second PR (2026-10-01). The findings are kept as written, because they record
 > why the records have the shape they do.
 
 - **The CallTool filter swallows errors.** `Program.cs` catches every surfaceable exception and
@@ -400,6 +400,13 @@ lines to grep.
 Note for whoever picks this up: the earlier "slow requests" investigation concluded model inference
 rather than the server. That was reasoned, not measured — because there is nothing to measure with.
 This work makes that conclusion checkable.
+
+> **Status (2026-10-01): delivered by #94's second PR.** Upstream durations on the
+> `VitallyUpstreamCall` record; the `VitallyMcp` meter (`vitally.ratelimit.retries` / `.exhausted`,
+> `vitally.autopager.truncations`, `vitally.cache.lookups`); the MCP SDK's source and meter registered;
+> traces at 10% head sampling. Two findings changed the plan: the SDK's activity source is
+> `Experimental.ModelContextProtocol`, not the name the earlier spec gave, and "errors at 100%" is not
+> achievable with head sampling. See *Metrics and tracing* in `CLAUDE.md`.
 
 ### Logging configuration — in code, not `appsettings.json`
 
@@ -757,7 +764,7 @@ was actually done, so the collision is left in place and flagged rather than tid
 | **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
 | 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | ✅ **done** 2026-09-25 — switched on and verified by reading `VitallyToolCall` rows back out of `AppEvents` on **both** targets |
 | 5 | failure logging | #94 | **ready** — 3 done |
-| 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done; reduced trace sampling depends on #178 |
+| 6 | performance: durations, counters, tracing | #94 | **done** (2026-10-01) — after #178, which made reduced trace sampling safe |
 | 7 | routing and retention per tier | #93 | **2b ✅ and 4 ✅** as of 2026-09-26 — remaining dependency is measured volume. Both categories land resource-specific, so per-table retention is available |
 | 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
 

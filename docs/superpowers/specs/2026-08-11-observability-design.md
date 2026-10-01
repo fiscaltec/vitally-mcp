@@ -61,6 +61,10 @@ repo was on when this was written. It has since moved to 2.2.0 — treat
 package before wiring anything to them**, since they were not re-checked after the bump:
 
 - ActivitySource **`ModelContextProtocol`**; Meter **`Experimental.ModelContextProtocol`**
+  - ⚠️ **Re-verified 2026-10-01 against SDK 2.2.0 (#94): the ActivitySource is
+    `Experimental.ModelContextProtocol` as well, not `ModelContextProtocol`.** The warning above was
+    warranted; registering the name given here would have captured nothing. `TelemetrySources` in the
+    code is the authority now.
 - Metrics: `mcp.server.operation.duration`, `mcp.server.session.duration` (and client equivalents)
 - Tags: `mcp.method.name`, `gen_ai.tool.name`, `rpc.response.status_code`,
   `mcp.protocol.version`, `mcp.session.id`, `mcp.resource.uri`

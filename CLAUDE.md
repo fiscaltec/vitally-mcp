@@ -906,7 +906,7 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 `AuditOptions` (singleton, bound from `Audit:` section):
 - `Enabled` (default `true`), `IncludeReads` (default **`true`** since 2026-09-17 — see below).
 - **`IncludeReads` defaults to true, and the default is the control.** Reads are 56 of the 93 tools, so a target that does not audit them has no meaningful trail — and `AuditLogger` is the only attribution mechanism, because the shared Vitally key means Vitally's own log cannot name a FISCAL user. It defaulted to `false` until 2026-09-17 and no deployed target ever overrode it, so no read had ever been recorded (#139). ⚠️ **It governs the per-upstream-call records only — `LogAction` — and deliberately not `LogToolCall`.** The tool-call record is emitted for every call whatever the verb, because it is what the acceptance criterion rests on; gating it would let a deployment silently stop recording that reads happened at all, which is #139's failure again. The lever exists over *volume*, and the volume is in the upstream records — `Get_organization_summary` makes four and the auto-pager can make ten, against one tool-call record. That decoupling is what makes auditing reads affordable. It stays configurable as the ingest-cost lever, but **do not re-solve this with a per-deployment environment variable**: a Container App recreate does not inherit them, so coverage would lapse silently — the same trap this file records for `Authorization__ReadOnly` on staging.
-- `AuditLogger` is invoked from **`VitallyService.SendAsync`** (same choke point): `LogAction` after each upstream response and `LogDenied` on an RBAC denial. Records the caller's identity, HTTP verb, resource path (query string stripped) and status code via structured logging. **The identity is resolved in a specific order and only the first step yields an Entra object id** — `CallerIdentity.TryGetObjectId` (the `oid` claim alone, since #156), then the raw `sub`, then `ClaimTypes.NameIdentifier`, then the literal `unknown`; an unauthenticated caller is `anonymous`. The fallbacks guard against an unexpected token shape rather than a supported path — an Entra token always carries `oid` — and a consistent-but-opaque key beats none. Read a record keyed on anything but a GUID as *"this token shape had no object id"*, not as a defect — so the named properties are *shaped* to become queryable dimensions — and **on production they are now genuinely queryable**, in `AppEvents`, since the 2026-09-25 switch-on (#147). Staging was switched on the same day and its records are in the same table, separated by `AppRoleName`. ⚠️ Staging is an **on-demand** app and the variable does **not** survive a recreate, so that describes the staging app that exists today, not any future one — a spin-up must set it alongside `Authorization__ReadOnly`. Records predating 2026-09-25 do not exist anywhere — nothing was ever persisted — so the trail begins at that date. **Never log upstream request/response *bodies* here — they can contain customer PII (traits, transcripts).** Note the boundary precisely, because the two rules meet at writes: what is excluded is the **HTTP payload** `VitallyService` exchanges with Vitally. **Tool arguments are in scope** under the policy below, including a create/update `jsonBody` — *"alice set these fields on this account"* is the audit record for a modification, and omitting it would lose the thing the trail exists to show. This is the attribution mechanism while a single shared Vitally key is in use.
+- `AuditLogger` is invoked from **`VitallyService.SendAsync`** (same choke point): `LogAction` after each upstream response and `LogDenied` on an RBAC denial. Records the caller's identity, HTTP verb, resource path (query string stripped), status code and duration (#94) via structured logging. **The identity is resolved in a specific order and only the first step yields an Entra object id** — `CallerIdentity.TryGetObjectId` (the `oid` claim alone, since #156), then the raw `sub`, then `ClaimTypes.NameIdentifier`, then the literal `unknown`; an unauthenticated caller is `anonymous`. The fallbacks guard against an unexpected token shape rather than a supported path — an Entra token always carries `oid` — and a consistent-but-opaque key beats none. Read a record keyed on anything but a GUID as *"this token shape had no object id"*, not as a defect — so the named properties are *shaped* to become queryable dimensions — and **on production they are now genuinely queryable**, in `AppEvents`, since the 2026-09-25 switch-on (#147). Staging was switched on the same day and its records are in the same table, separated by `AppRoleName`. ⚠️ Staging is an **on-demand** app and the variable does **not** survive a recreate, so that describes the staging app that exists today, not any future one — a spin-up must set it alongside `Authorization__ReadOnly`. Records predating 2026-09-25 do not exist anywhere — nothing was ever persisted — so the trail begins at that date. **Never log upstream request/response *bodies* here — they can contain customer PII (traits, transcripts).** Note the boundary precisely, because the two rules meet at writes: what is excluded is the **HTTP payload** `VitallyService` exchanges with Vitally. **Tool arguments are in scope** under the policy below, including a create/update `jsonBody` — *"alice set these fields on this account"* is the audit record for a modification, and omitting it would lose the thing the trail exists to show. This is the attribution mechanism while a single shared Vitally key is in use.
 
   > ⚠️ **The "keep personal data out of telemetry" rule was withdrawn on 2026-09-17** (decision: dsearle), because it left the trail unable to answer the question it exists for. The replacement is an outcome, not a field list: *the audit trail must show that **this user** called **this tool** and accessed, modified or deleted data for **these customers***. Tool arguments — including free-text search terms that may carry names or email addresses — are in scope. **Response bodies remain excluded**, and that is not the old rule returning: Vitally holds meeting transcripts and arbitrary traits, so logging bodies would put a second copy of the customer database into telemetry under weaker access control, which is a different thing from an audit trail.
   >
@@ -936,7 +936,8 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   > day before that, nothing persisted. `Program.cs` now sets it `false`, pinned by
   > `LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp`.
   >
-  > That makes trace sampling a cost lever that no longer touches the audit trail — but **mind how the
+  > That makes trace sampling a cost lever that no longer touches the audit trail — set to 10% by #94's
+  > phase 6, see *Metrics and tracing* under Architecture — but **mind how the
   > lever works**: `TracesPerSecond` (default 5) **takes precedence** over `SamplingRatio` whenever both
   > are set, so percentage sampling needs `TracesPerSecond = null` as well, or `SamplingRatio = 0.1F`
   > silently does nothing. The `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables
@@ -1001,6 +1002,52 @@ Behaviour:
 - **When retries are exhausted:** the 429 response is returned to the caller, which propagates as `HttpRequestException` via `EnsureSuccessStatusCode`.
 
 All thresholds are public mutable properties, so they can be tweaked in tests or future configuration without touching the handler internals.
+
+Each retry and each exhaustion is also **counted** (`vitally.ratelimit.retries` / `vitally.ratelimit.exhausted`, #94) — the log lines cannot be trended against the 1000 req/min budget, and the retry rate is the early warning.
+
+### Metrics and tracing (#94, phase 6)
+
+Everything here is exported only when `ApplicationInsights__ConnectionString` is set, like the audit records.
+
+| Signal | Name | What it answers |
+|---|---|---|
+| Upstream call duration | `durationMs` on the `VitallyUpstreamCall` record (`AuditDurationMs` in `AppEvents`) | Which of a composite tool's upstream calls was slow, joined to the tool-call record by correlation id. Send to body read, 429 waits included; `-1` means not measured, never `0` |
+| 429 retries / exhaustion | `vitally.ratelimit.retries`, `vitally.ratelimit.exhausted` | How close the server runs to Vitally's 1000 req/min |
+| Pager truncations | `vitally.autopager.truncations`, tag `resource` | Whether `Vitally:MaxAutoPageFetches` is set where users hit it |
+| Cache hit/miss | `vitally.cache.lookups`, tags `cache` = `api_key` / `group_membership` / `oidc_discovery`, `result` = `hit` / `miss` | Whether each cache earns its keep. A miss means the round-trip happened, whatever it then returned |
+| MCP spans + metrics | source and meter `Experimental.ModelContextProtocol` | A span per request, tool calls included, and the SDK's own per-operation counts and durations |
+
+Our counters live on one `Meter`, `VitallyMcp` (`VitallyMetrics`), created through `IMeterFactory`. Every consumer takes it as an **optional** constructor parameter, so a registration that never resolved would leave them all recording nothing while every unit test passed. `TheComposedHost_InjectsTheCounters_IntoTheComponentsThatRecordThem` exists for that.
+
+⚠️ **The MCP SDK's names are `Experimental.`-prefixed in 2.2.0 — the activity source too, not the bare
+`ModelContextProtocol` #94's issue gave.** A source registered under a name nothing publishes is accepted
+silently and captures nothing. `TheMcpSdk_PublishesTheSourcesWeRegister_AndNoSpanCarriesAToolArgument`
+fails if either name stops being published, so an SDK bump that drops the prefix shows up as a red test
+rather than as traces that quietly stop. The names live in `TelemetrySources`, shared by `Program.cs` and
+that test.
+
+⚠️ **Metric tags carry only values this code fixes.** A tag stores every distinct value it is given, so a
+caller-controlled one is a cardinality explosion and customer text in a metrics store. That is not
+hypothetical: the by-account list tools page `accounts/{accountId}/conversations`, so the pager's
+`resourceType` carries the caller's id. The truncation tag therefore uses the tool layer's fixed
+`defaultsKey`, checked against the same `KnownResourceTypes` allowlist the failure log uses.
+
+**Sampling: 10% head sampling of traces.** `SamplingRatio = 0.1F` **and** `TracesPerSecond = null` —
+`TracesPerSecond` (default 5) overrides the ratio whenever set, so the ratio alone does nothing. It is safe
+only because of #178: logs (the audit records among them) are exported regardless of trace sampling, and
+metrics are never sampled. "Errors at 100%" is **not** available from head sampling, which decides before
+the outcome is known; failures stay visible through the failure records and the counters, but a trace of a
+particular failure may not have been kept.
+
+**Spans carry no tool arguments**, and that is pinned. Arguments are permitted in the audit record, in
+`AppEvents` under its access control, but spans go to `AppRequests` / `AppDependencies` — a different store
+with its own retention. The composed test above passes a sentinel argument and asserts no span attribute or
+event carries it; its negative control (using the tool name, which a span *does* carry) fails, so the check
+is not vacuous. ⚠️ The caller-typed **path segment** gap in `AppDependencies` noted under the log levels
+still stands; this does not close it.
+
+The earlier "slow requests" diagnosis (model inference rather than the server) was reasoned rather than
+measured, because there was nothing to measure with. These are what make it checkable.
 
 **Vitally API Parameters:**
 - Pagination uses `from` parameter (not `cursor`) - pass the `next` value from previous response
@@ -1199,6 +1246,7 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 - `StaleEntitlementCompositionTests` — the serve-stale-on-Graph-failure path through a composed host, across an outage that starts, is survived and then outlasts its window; also pins that a token claim cannot authorise once the live check is on
 - `UpstreamOidcMetadataTests` / `UpstreamOidcStartupFailFastTests` — the OIDC-discovery resolver (all four endpoints, cache reuse, last-known-good on a failed refresh, rejection of an incomplete or malformed document) and the startup fail-fast wired into `Program.cs`
 - `FailureLoggingTests` — the #94 failure records: level by status band and exception kind, and that none of them carries a body, a query string, a caller-typed path segment, an exception message or an attached exception (the Key Vault record is the one that must attach it). The composed half is in `ToolCallAuditCompositionTests`: that the filter and `SendAsync` records of an upstream failure carry the audit record's correlation id, that an absorbed summary section is logged although the tool succeeds, that an unknown tool is logged as `unrecognised` at `Warning`, and that the SDK logs an unhandled tool exception itself, exactly once, with it attached
+- `PerformanceMetricsTests` (plus counter tests beside `VitallyRateLimitHandlerTests`, `GraphGroupPermissionResolverTests` and `UpstreamOidcMetadataTests`) — the #94 phase 6 counters and the upstream duration, observed through `MetricCapture`, which filters on the test's own `IMeterFactory` so parallel tests cannot count each other's measurements. The exporter-branch test in `LoggingFilterTests` pins the sampling and that each telemetry source is registered, by behaviour (a source with that name reports a listener); `ToolCallAuditCompositionTests` proves the SDK publishes those names and that no span carries a tool argument
 - `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
 
 **When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
