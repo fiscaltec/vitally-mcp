@@ -36,11 +36,13 @@ public class PerformanceMetricsTests
             secrets.Object,
             capture.Metrics);
 
+        // Three calls, not two: with two, a swap of hit and miss still yields one of each and passes.
+        await provider.GetApiKeyAsync();
         await provider.GetApiKeyAsync();
         await provider.GetApiKeyAsync();
 
         capture.Total("vitally.cache.lookups", ("cache", "api_key"), ("result", "miss")).Should().Be(1);
-        capture.Total("vitally.cache.lookups", ("cache", "api_key"), ("result", "hit")).Should().Be(1);
+        capture.Total("vitally.cache.lookups", ("cache", "api_key"), ("result", "hit")).Should().Be(2);
     }
 
     [Fact]
@@ -92,9 +94,11 @@ public class PerformanceMetricsTests
         await service.GetByCreatedRangeAsync("accounts/acctsentinel/conversations",
             "2026-01-01T00:00:00Z", null, null, defaultsKey: "conversations");
 
+        // The first line is the real check: it fails if the tag is the raw path. The total afterwards
+        // catches any OTHER tag value carrying the id, which the allowlist should make impossible.
         capture.Total("vitally.autopager.truncations", ("resource", "conversations")).Should().Be(1);
-        capture.Total("vitally.autopager.truncations", ("resource", "accounts/acctsentinel/conversations"))
-            .Should().Be(0, "the caller's id must never become a metric dimension");
+        capture.Total("vitally.autopager.truncations").Should().Be(1,
+            "exactly one truncation, tagged with the fixed resource kind and nothing else");
     }
 
     [Fact]
@@ -118,13 +122,27 @@ public class PerformanceMetricsTests
         var logger = new StateCapturingLogger<AuditLogger>();
         var audit = new AuditLogger(
             Options.Create(new AuditOptions { Enabled = true, IncludeReads = true }), logger);
-        using var client = TestHelpers.CreateMockHttpClient("""{"results":[]}""");
+        using var client = new HttpClient(new DelayingHandler(TimeSpan.FromMilliseconds(60)));
         var service = TestHelpers.BuildVitallyService(client, audit: audit);
 
         await service.GetResourcesAsync("organizations");
 
         var state = logger.States.Should().ContainSingle().Subject;
-        state.Should().Contain(kv => kv.Key == "AuditDurationMs" && kv.Value is long,
-            "the duration is recorded in whole milliseconds, like the tool-call record's");
+        var duration = state.Should().ContainSingle(kv => kv.Key == "AuditDurationMs").Subject.Value;
+        // A real measurement, not merely a long: the unmeasured sentinel -1 is a long too, so asserting
+        // the type alone passed with the duration never passed to LogAction at all.
+        duration.Should().BeOfType<long>().Which.Should().BeGreaterThanOrEqualTo(50,
+            "the upstream answered after 60 ms, and the record must say so");
+    }
+
+    /// <summary>Answers every request after a fixed delay, so a duration has something to measure.</summary>
+    private sealed class DelayingHandler(TimeSpan delay) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"results":[]}""") };
+        }
     }
 }

@@ -160,11 +160,13 @@ public class GraphGroupPermissionResolverTests : IDisposable
         var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
         var resolver = Build(handler, metrics: capture.Metrics);
 
+        // Three calls, not two: with two, a swap of hit and miss still yields one of each and passes.
+        await resolver.TryResolvePermissionsAsync(UserOid);
         await resolver.TryResolvePermissionsAsync(UserOid);
         await resolver.TryResolvePermissionsAsync(UserOid);
 
         capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "miss")).Should().Be(1);
-        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "hit")).Should().Be(1);
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "hit")).Should().Be(2);
     }
 
     [Fact]
@@ -266,6 +268,27 @@ public class GraphGroupPermissionResolverTests : IDisposable
 
         served!.Permissions.Should().BeEquivalentTo(["vitally:read", "vitally:write"],
             "a Graph outage must not revoke a user whose tier was known good two minutes earlier");
+    }
+
+    [Fact]
+    public async Task CountsAStaleServe_AsAMiss_NotAHit()
+    {
+        // The stale serve answers from the retained copy, but only AFTER asking Graph and failing — the
+        // cache did not spare the round-trip, so it is a miss. Counting it as a hit would make the hit
+        // rate look healthiest exactly when Graph is down.
+        using var capture = new MetricCapture();
+        var clock = new FakeClock(ClockStart);
+        var handler = new RecordingHandler(new HashSet<string> { EditorGroup });
+        var resolver = Build(handler, timeProvider: clock, metrics: capture.Metrics);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        clock.Advance(TimeSpan.FromSeconds(120));
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+        var served = await resolver.TryResolvePermissionsAsync(UserOid);
+
+        served!.ServedStale.Should().BeTrue("a precondition: this must be the stale path");
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "miss")).Should().Be(2);
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "hit")).Should().Be(0);
     }
 
     [Fact]

@@ -19,7 +19,18 @@ public static class TelemetrySources
     /// </remarks>
     public const string McpActivitySource = "Experimental.ModelContextProtocol";
 
-    /// <summary>The MCP SDK's meter: per-operation counts and duration histograms. Experimental in 2.x.</summary>
+    /// <summary>
+    /// The MCP SDK's meter — deliberately <b>NOT</b> registered. Kept here so a test can assert it stays
+    /// that way.
+    /// </summary>
+    /// <remarks>
+    /// Its <c>mcp.server.operation.duration</c> histogram carries <c>gen_ai.tool.name</c> as a dimension,
+    /// and a <c>tools/call</c> naming a tool that does not exist puts the invented name there: caller text,
+    /// unbounded cardinality, and — metrics being unsampled — every one recorded. A span processor can
+    /// rewrite a span's tags but not a metric's, and dropping the dimension with a view would lose the
+    /// per-tool breakdown that is its only advantage. Per-tool latency is already queryable, unsampled,
+    /// from <c>AuditDurationMs</c> on the <c>VitallyToolCall</c> record in <c>AppEvents</c>.
+    /// </remarks>
     public const string McpMeter = "Experimental.ModelContextProtocol";
 
     /// <summary>This server's own counters; see <see cref="VitallyMetrics"/>.</summary>

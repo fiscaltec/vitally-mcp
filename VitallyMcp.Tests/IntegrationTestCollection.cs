@@ -16,7 +16,9 @@ namespace VitallyMcp.Tests;
 /// that compose a host WITHOUT setting environment variables themselves:
 /// <see cref="OAuthProxyEndpointsTests"/>, <see cref="OAuthProxyPublicOriginTests"/>,
 /// <see cref="OAuthProxyResourceTerminationTests"/>, <see cref="OAuthTokenProxyForwardTests"/> and
-/// <see cref="UpstreamOidcStartupFailFastTests"/>.
+/// <see cref="UpstreamOidcStartupFailFastTests"/>. Plus <see cref="TelemetryRedactionTests"/>, which
+/// composes no host but creates spans on the MCP SDK's source name, which two tests here need nobody
+/// else listening to (#94).
 /// <para>
 /// ⚠️ <b>A class that only READS configuration needs to be here too</b>, which is the non-obvious
 /// half. Those five inject in-memory configuration and never touch the environment — but they omit

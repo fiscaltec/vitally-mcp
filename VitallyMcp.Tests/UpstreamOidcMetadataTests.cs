@@ -342,26 +342,28 @@ public sealed class UpstreamOidcMetadataTests : IDisposable
             .And.Message.Should().Contain("fragment");
     }
 
-    /// <summary>
-    /// Builds a resolver over a stub handler. Returns the cache too so a test can share it between
-    /// instances or expire it by hand.
-    /// </summary>
     [Fact]
     public async Task CountsAMiss_OnTheFetch_AndAHit_OnTheCachedRead()
     {
         // #94: one of the three cache hit/miss rates the issue names. A low hit rate here would mean
-        // the proxy is putting a round-trip to the identity provider in front of sign-ins.
+        // the proxy is putting a round-trip to the identity provider in front of sign-ins. Three
+        // calls, not two: with two, a swap of hit and miss still yields one of each and passes.
         using var capture = new MetricCapture();
         using var handler = new StubOidcDiscovery.StubHandler(StubOidcDiscovery.Document);
         var (resolver, _) = BuildResolver(handler, metrics: capture.Metrics);
 
         await resolver.GetAsync();
         await resolver.GetAsync();
+        await resolver.GetAsync();
 
         capture.Total("vitally.cache.lookups", ("cache", "oidc_discovery"), ("result", "miss")).Should().Be(1);
-        capture.Total("vitally.cache.lookups", ("cache", "oidc_discovery"), ("result", "hit")).Should().Be(1);
+        capture.Total("vitally.cache.lookups", ("cache", "oidc_discovery"), ("result", "hit")).Should().Be(2);
     }
 
+    /// <summary>
+    /// Builds a resolver over a stub handler. Returns the cache too so a test can share it between
+    /// instances or expire it by hand.
+    /// </summary>
     private (UpstreamOidcMetadata Resolver, IMemoryCache Cache) BuildResolver(
         HttpMessageHandler handler,
         IMemoryCache? cache = null,

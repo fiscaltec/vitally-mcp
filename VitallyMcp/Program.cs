@@ -173,18 +173,26 @@ if (exporterConfigured)
         // the audit records among them, are exported regardless, and metrics are never sampled.
         //
         // Head sampling decides at the root, before the outcome is known, so "errors at 100%" is not
-        // available from it. Failures stay fully visible through the #94 failure records and the
-        // counters; a trace of a particular failure may or may not have been kept.
+        // available from it. Failures stay visible, unsampled, through the #94 failure records; a trace
+        // of a particular failure may or may not have been kept.
         options.SamplingRatio = 0.1F;
         options.TracesPerSecond = null;
     });
 
-    // The MCP SDK's spans and metrics, and this server's counters (#94). The SDK's names are
+    // The MCP SDK's spans, sanitised, and this server's counters (#94). The SDK's source name is
     // Experimental.-prefixed in 2.2.0 — see TelemetrySources — and a name nothing publishes would be
-    // accepted silently, which is why a composed test proves each one is real.
+    // accepted silently, which is why a composed test proves it is real.
+    //
+    // ⚠️ The SDK's METER is deliberately not registered: its tool-name dimension carries invented
+    // names, unsampled, and a processor cannot rewrite metric tags. See TelemetrySources.McpMeter.
+    // SpanSanitisingProcessor strips caller text from the spans that ARE exported; it needs
+    // KnownToolNames, registered below, so it resolves from DI rather than being constructed here.
     builder.Services.AddOpenTelemetry()
-        .WithTracing(tracing => tracing.AddSource(TelemetrySources.McpActivitySource))
-        .WithMetrics(metrics => metrics.AddMeter(TelemetrySources.McpMeter, TelemetrySources.VitallyMeter));
+        .WithTracing(tracing => tracing
+            .AddSource(TelemetrySources.McpActivitySource)
+            .AddProcessor<SpanSanitisingProcessor>())
+        .WithMetrics(metrics => metrics.AddMeter(TelemetrySources.VitallyMeter));
+    builder.Services.AddSingleton<SpanSanitisingProcessor>();
 
     // UseAzureMonitor turns on automatic HttpClient dependency collection, and this server puts
     // free-text search terms into Vitally query strings — Search_users passes its term as

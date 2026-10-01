@@ -684,19 +684,35 @@ public class ToolCallAuditCompositionTests
         await harness.CallToolAsync("List_organizations", """{"nameContains":"Acme"}""");
 
         capture.Total("vitally.autopager.truncations", ("resource", "organizations")).Should().Be(1);
+
+        // A second consumer, registered differently: the Graph resolver is a typed HttpClient the
+        // harness re-registers, and this host runs the live group check, so it must have counted.
+        // The OIDC resolver, the API-key provider and the rate limiter are not reachable here (no
+        // proxy, the development key, and a 5 s retry fallback) and are covered by their unit tests.
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership")).Should().BeGreaterThan(0,
+            "the Graph resolver must receive the counters through the real wiring too");
     }
 
     [Fact]
-    public async Task TheMcpSdk_PublishesTheSourcesWeRegister_AndNoSpanCarriesAToolArgument()
+    public async Task TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText()
     {
-        // Two things, both about the SDK's telemetry that Program.cs registers with the exporter.
+        // About the SDK's spans, which Program.cs registers with the exporter:
         //
-        // 1. The names are real. A source registered under a name nothing publishes is accepted
-        //    silently and captures nothing, and the names come from the SDK rather than from us.
+        // 1. The source name is real. A source registered under a name nothing publishes is accepted
+        //    silently and captures nothing, and the name comes from the SDK rather than from us.
         //
-        // 2. The PII gate. Tool arguments are permitted in the AUDIT record (AppEvents, under its
-        //    access control), but spans go to AppRequests / AppDependencies, a different store with
-        //    its own retention. A search term in a span attribute would put customer data there.
+        // 2. The PII gate, run over REAL SDK spans through the processor Program.cs registers. Tool
+        //    arguments are permitted in the audit record (AppEvents, under its access control), but
+        //    spans go to AppRequests / AppDependencies — a different store, with its own retention.
+        //
+        // Three calls, each reaching the SDK's span by a different route: an argument on a successful
+        // call, an argument echoed back in a failed call's error text (StatusDescription), and an
+        // invented tool name (gen_ai.tool.name and the span name). The controls below assert that the
+        // caller text DID reach the raw spans, so the gate cannot pass vacuously.
+        //
+        // Scope, stated so this is not misread: it covers MCP SDK and ASP.NET Core server spans only.
+        // The harness stubs the PRIMARY handler, so no HttpClient dependency span is created here, and
+        // AppDependencies' caller-typed path segments remain the open gap CLAUDE.md records.
         const string sentinel = "argumentsentinelvalue";
         var activities = new List<System.Diagnostics.Activity>();
         using var activityListener = new System.Diagnostics.ActivityListener
@@ -708,35 +724,43 @@ public class ToolCallAuditCompositionTests
         };
         System.Diagnostics.ActivitySource.AddActivityListener(activityListener);
 
-        var meterNames = new HashSet<string>(StringComparer.Ordinal);
-        using var meterListener = new System.Diagnostics.Metrics.MeterListener
-        {
-            InstrumentPublished = (instrument, _) => { lock (meterNames) meterNames.Add(instrument.Meter.Name); },
-        };
-        meterListener.Start();
-
         using var harness = new Harness(TwoOrganisations);
         await harness.CallToolAsync("List_organizations", "{\"nameContains\":\"" + sentinel + "\"}");
+        await harness.CallToolAsync("List_notes", "{\"createdAfter\":\"" + sentinel + "\"}");
+        await harness.CallToolAsync("Tool_" + sentinel);
 
         List<System.Diagnostics.Activity> captured;
         lock (activities) captured = [.. activities];
+        var mcp = captured.Where(a => a.Source.Name == TelemetrySources.McpActivitySource).ToList();
 
-        captured.Select(a => a.Source.Name).Should().Contain(TelemetrySources.McpActivitySource,
-            "Program.cs registers this name; observed sources: "
+        mcp.Should().NotBeEmpty("Program.cs registers this source name; observed sources: "
             + string.Join(", ", captured.Select(a => a.Source.Name).Distinct()));
-        lock (meterNames)
+
+        // Controls: the scan must see real attributes, and the caller text must have reached them.
+        mcp.Should().Contain(a => Equals(a.GetTagItem(SpanSanitisingProcessor.ToolNameTag), "List_organizations"),
+            "a span carries the registered tool name, so the attribute scan below is not looking at nothing");
+        captured.Should().Contain(a => Carries(a.StatusDescription, sentinel),
+            "the failed call's error text reaches StatusDescription before sanitising — the leak this gates. "
+            + "Observed: " + string.Join(" | ", captured.Select(a =>
+                $"{a.Source.Name}:{a.DisplayName}:{a.Status}:'{a.StatusDescription}'")));
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.ToolNameTag), sentinel),
+            "the invented tool name reaches gen_ai.tool.name before sanitising");
+
+        var sanitiser = new SpanSanitisingProcessor(harness.Services.GetRequiredService<KnownToolNames>());
+        foreach (var activity in captured)
         {
-            meterNames.Should().Contain(TelemetrySources.McpMeter,
-                "Program.cs registers this meter name; published meters: " + string.Join(", ", meterNames));
+            sanitiser.OnEnd(activity);
         }
 
         foreach (var activity in captured)
         {
             activity.DisplayName.Should().NotContain(sentinel);
+            Carries(activity.StatusDescription, sentinel).Should().BeFalse(
+                $"span '{activity.DisplayName}' must not keep a failed call's error text");
             activity.TagObjects.Should().NotContain(t => Carries(t.Value, sentinel),
-                $"span '{activity.DisplayName}' must not carry a tool argument");
-            activity.Events.SelectMany(e => e.Tags).Should().NotContain(
-                t => Carries(t.Value, sentinel));
+                $"span '{activity.DisplayName}' must not carry caller text in an attribute");
+            activity.Events.SelectMany(e => e.Tags).Should().NotContain(t => Carries(t.Value, sentinel));
+            activity.Events.Should().NotContain(e => Carries(e.Name, sentinel));
         }
     }
 

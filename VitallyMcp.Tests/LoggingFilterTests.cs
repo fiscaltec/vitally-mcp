@@ -525,7 +525,17 @@ public class LoggingFilterTests
         // aimed at the wrong provider, or a PostConfigure that never ran would all leave the suite
         // green. This composes the host the way production will have it and asserts what must switch
         // on together: the breadcrumb flag, both logging filters, the registered tool names, the
-        // redaction processor, the OpenTelemetry logger provider and the sampling decoupling (#178).
+        // redaction processors, the OpenTelemetry logger provider, the sampling decoupling (#178),
+        // the sampling ratio and the telemetry sources (#94).
+        //
+        // ⚠️ The providers are disposed EXPLICITLY below, and that is not tidiness. Disposing the
+        // factory does not dispose the TracerProvider this host builds — observed 2026-10-01, sync and
+        // async alike, with no exception surfaced — so it stayed subscribed to the MCP source for the
+        // rest of the process and ran SpanSanitisingProcessor over every later test's spans. That made
+        // the composed PII test fail whenever it ran after this one. Why only some orderings exposed
+        // it was not established; the explicit disposal and the guard at the end are what fixed it.
+        TracerProvider? ownTracer = null;
+        OpenTelemetry.Metrics.MeterProvider? ownMeter = null;
         var previous = SnapshotAndClearConfiguration();
         foreach (var (key, value) in RequiredSettings)
         {
@@ -582,6 +592,7 @@ public class LoggingFilterTests
             // quietly passing — a test that cannot find what it is looking for must not report
             // success, which is the entire point of the finding that prompted it.
             var tracerProvider = services.GetRequiredService<TracerProvider>();
+            ownTracer = tracerProvider;
             ProcessorChainOf(tracerProvider).Should().Contain(p => p is QueryStringRedactingProcessor,
                 "the redaction processor must be attached to the pipeline, not merely registered in DI");
 
@@ -620,24 +631,47 @@ public class LoggingFilterTests
             // the OpenTelemetry providers subscribe a listener for each registered name, so a source or
             // meter with that name reports one. Not built yet when unregistered — resolving the
             // providers above is what starts them.
-            services.GetRequiredService<OpenTelemetry.Metrics.MeterProvider>();
+            ownMeter = services.GetRequiredService<OpenTelemetry.Metrics.MeterProvider>();
             using var mcpSource = new System.Diagnostics.ActivitySource(TelemetrySources.McpActivitySource);
             mcpSource.HasListeners().Should().BeTrue("the MCP SDK's spans must reach the exporter");
 
-            foreach (var meterName in new[] { TelemetrySources.McpMeter, TelemetrySources.VitallyMeter })
+            using (var vitallyMeter = new System.Diagnostics.Metrics.Meter(TelemetrySources.VitallyMeter))
             {
-                using var meter = new System.Diagnostics.Metrics.Meter(meterName);
-                var probe = meter.CreateCounter<long>("registration.probe");
-                probe.Enabled.Should().BeTrue($"meter '{meterName}' must be registered with the exporter");
+                vitallyMeter.CreateCounter<long>("registration.probe").Enabled.Should().BeTrue(
+                    "this server's counters must be registered with the exporter");
             }
+
+            // ...and the SDK's meter must NOT be: its tool-name dimension carries invented names,
+            // unsampled, and a processor cannot rewrite metric tags (see TelemetrySources.McpMeter).
+            // Fragile in one direction only: a future wildcard MeterListener elsewhere in this
+            // serialised collection would make this fail, never pass falsely.
+            using (var mcpMeter = new System.Diagnostics.Metrics.Meter(TelemetrySources.McpMeter))
+            {
+                mcpMeter.CreateCounter<long>("registration.probe").Enabled.Should().BeFalse(
+                    "the MCP SDK's meter would export caller-typed tool names as a metric dimension");
+            }
+
+            ProcessorChainOf(tracerProvider).Should().Contain(p => p is SpanSanitisingProcessor,
+                "the span sanitiser must be attached to the pipeline, not merely registered in DI");
         }
         finally
         {
             // Restore alone: ApplicationInsights__ is in the prefix list above, so the snapshot
             // covers it. Clearing it here as well would destroy an ambient value on a runner that
             // had one — the key was previously outside the snapshot, so it was not saved to put back.
+            // After the factory's own disposal (the `using` above), which does not reach these. See the
+            // warning at the top of this test.
+            ownTracer?.Dispose();
+            ownMeter?.Dispose();
             RestoreConfiguration(previous);
         }
+
+        // The guard that would have caught it: nothing may still be listening to the MCP source once
+        // this host is gone. Reliable only because every class that listens to that name is in the
+        // serialised IntegrationTestCollection, TelemetryRedactionTests included.
+        using var afterDispose = new System.Diagnostics.ActivitySource(TelemetrySources.McpActivitySource);
+        afterDispose.HasListeners().Should().BeFalse(
+            "this host's TracerProvider must not outlive the test and sanitise later tests' spans");
     }
 
     /// <summary>

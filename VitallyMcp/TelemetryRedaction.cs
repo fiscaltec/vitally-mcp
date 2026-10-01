@@ -74,3 +74,64 @@ public sealed class QueryStringRedactingProcessor : BaseProcessor<Activity>
         return string.Concat(url.AsSpan(0, separator), RedactionMarker);
     }
 }
+
+/// <summary>
+/// Removes caller-controlled text from spans before they are exported (#94, phase 6).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Spans go to <c>AppRequests</c> / <c>AppDependencies</c>, a different store from the audit records,
+/// with its own retention. Tool arguments are permitted in the audit record under its access control;
+/// they are not permitted here. Three things put them here otherwise, each found by a probe of SDK 2.2.0:
+/// </para>
+/// <list type="bullet">
+/// <item><b><see cref="Activity.StatusDescription"/></b>, on <i>every</i> span. On a failed tool call the
+/// MCP SDK copies the whole error text into it, and that text carries the caller's own input
+/// (<c>got 'alice@example.com'</c>) and Vitally's response body. The status code stays; the text goes.
+/// The Azure Monitor exporter in 1.6.0 does not read the field, so this is defence against a future
+/// exporter or distro version rather than a live leak.</item>
+/// <item><b><c>gen_ai.tool.name</c> and the span name</b> on MCP spans. A <c>tools/call</c> naming a tool
+/// that does not exist still produces a span carrying the invented name. Checked against
+/// <see cref="KnownToolNames"/>, failing closed to <c>unrecognised</c>, as the audit breadcrumb and the
+/// failure log already do.</item>
+/// <item><b><c>jsonrpc.request.id</c></b> on MCP spans, which is whatever the client chose to send.</item>
+/// </list>
+/// <para>
+/// ⚠️ A processor cannot rewrite <i>metric</i> tags, which is why the SDK's meter is not registered at all —
+/// its <c>gen_ai.tool.name</c> dimension carries invented names too, unsampled. See <c>TelemetrySources</c>.
+/// </para>
+/// </remarks>
+public sealed class SpanSanitisingProcessor(KnownToolNames knownTools) : BaseProcessor<Activity>
+{
+    public const string ToolNameTag = "gen_ai.tool.name";
+    public const string RequestIdTag = "jsonrpc.request.id";
+    public const string Unrecognised = "unrecognised";
+
+    public override void OnEnd(Activity activity)
+    {
+        if (!string.IsNullOrEmpty(activity.StatusDescription))
+        {
+            activity.SetStatus(activity.Status);
+        }
+
+        if (activity.Source.Name != TelemetrySources.McpActivitySource)
+        {
+            return;
+        }
+
+        if (activity.GetTagItem(RequestIdTag) is not null)
+        {
+            activity.SetTag(RequestIdTag, null);
+        }
+
+        if (activity.GetTagItem(ToolNameTag) is string toolName && !knownTools.IsRegistered(toolName))
+        {
+            activity.SetTag(ToolNameTag, Unrecognised);
+
+            // The SDK names a tool span "tools/call <name>". Rebuilt rather than string-replaced, so an
+            // invented name that happens to contain the method name cannot survive the rewrite.
+            var space = activity.DisplayName.IndexOf(' ');
+            activity.DisplayName = space < 0 ? Unrecognised : activity.DisplayName[..space] + " " + Unrecognised;
+        }
+    }
+}
