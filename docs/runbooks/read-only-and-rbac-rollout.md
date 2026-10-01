@@ -71,7 +71,7 @@ invocation as CLAUDE.md's staging spin-up check; keep the two asserting the same
 
 A `secretRef`-backed variable counts as set, which a `.value` query would get wrong — the script's
 header has why. And `ApplicationInsights__ConnectionString=set` means **configured, not exporting**: a
-stale string is non-empty and passes here while its sends fail and `Program.cs:176` suppresses the
+stale string is non-empty and passes here while its sends fail and the console filter on `VitallyMcp.AuditLogger` in `Program.cs` suppresses the
 console records, so only an `AppEvents` query proves ingestion — see
 `docs/runbooks/entra-cutover-staging-validation.md`. It reads every revision that can *serve*
 (active or traffic-bearing) rather than the desired template, which would report the new value while the previous writable

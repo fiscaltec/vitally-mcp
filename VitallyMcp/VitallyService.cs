@@ -307,7 +307,8 @@ public class VitallyService
                 _auditContext?.MarkPagerTruncated();
 
                 // Tagged with the defaults key, never resourceType: the by-account and by-organisation
-                // tools page `accounts/{accountId}/conversations`, so resourceType can carry the
+                // tools page `accounts/{accountId}/conversations` and
+                // `organizations/{organizationId}/conversations`, so resourceType can carry the
                 // caller's id, and a metric tag stores every distinct value it is given. Checked
                 // against the same allowlist the failure log uses, failing closed.
                 _metrics?.PagerTruncated(

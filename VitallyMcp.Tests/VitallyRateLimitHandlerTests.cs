@@ -108,8 +108,8 @@ public class VitallyRateLimitHandlerTests : IDisposable
     [Fact]
     public async Task Counts_EachRetry_AndNoExhaustion_WhenARetrySucceeds()
     {
-        // #94: "retries exhausted" was a log line, which cannot be trended against Vitally's
-        // 1000 req/min budget. A counter can.
+        // #94: "retries exhausted" was only a log line, text to parse; a counter is a pre-aggregated
+        // series of how often the server exceeds Vitally's 1000 req/min budget.
         using var capture = new MetricCapture();
         var (client, inner, _) = BuildClient(metrics: capture.Metrics);
         inner.Responses.Enqueue(TooManyRequests());

@@ -940,8 +940,11 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   > phase 6, see *Metrics and tracing* under Architecture — but **mind how the
   > lever works**: `TracesPerSecond` (default 5) **takes precedence** over `SamplingRatio` whenever both
   > are set, so percentage sampling needs `TracesPerSecond = null` as well, or `SamplingRatio = 0.1F`
-  > silently does nothing. The `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables
-  > override both. Never turn *this* switch back on.
+  > silently does nothing. ⚠️ **The `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment
+  > variables are not a runtime lever here**, whatever Microsoft's docs say: probed against distro 1.6.0 on
+  > 2026-10-01 (#94), `rate_limited`, `always_on` and `fixed_percentage` were each set as real process
+  > variables and the sampler stayed at the code's 10%. They were not honoured even with the code setting
+  > nothing. Change sampling in `Program.cs`. Never turn *this* switch back on.
   >
   > Records emitted **before** #178 deploys may be missing individually under load — not as whole time
   > bins, so a coverage check by bin cannot reveal it (see `ACCESS.md`). The gap is **measurable from
@@ -999,55 +1002,112 @@ Vitally's documented limit is **1000 requests / minute (sliding window)**. The h
 Behaviour:
 - **On HTTP 429 Too Many Requests:** waits and retries up to `MaxRetries` (default 3). Wait time is taken from `Retry-After` (preferred), then `X-RateLimit-Reset` (Unix seconds), falling back to `FallbackRetryDelay` (default 5s). The wait is capped at `MaxRetryDelay` (default 60s).
 - **On any non-429 response:** if `X-RateLimit-Remaining` is below `LowRemainingThreshold` (default 50), logs a warning via `ILogger` so callers can throttle themselves.
-- **When retries are exhausted:** the 429 response is returned to the caller, which propagates as `HttpRequestException` via `EnsureSuccessStatusCode`.
+- **When retries are exhausted:** the 429 response is returned to the caller, and `SendAsync` turns it into an `HttpRequestException` carrying Vitally's body, like any other non-2xx.
 
 All thresholds are public mutable properties, so they can be tweaked in tests or future configuration without touching the handler internals.
 
-Each retry and each exhaustion is also **counted** (`vitally.ratelimit.retries` / `vitally.ratelimit.exhausted`, #94) — the log lines cannot be trended against the 1000 req/min budget, and the retry rate is the early warning.
+Each retry and each exhaustion is also **counted** (`vitally.ratelimit.retries` / `vitally.ratelimit.exhausted`, #94). They fire only once the limit *has* been hit, so they say how often the server exceeds the 1000 req/min budget, not how close it runs — that is `X-RateLimit-Remaining`, which is still only logged. The advantage over the log lines is a pre-aggregated, dimensioned series rather than message text to parse.
 
 ### Metrics and tracing (#94, phase 6)
 
-Everything here is exported only when `ApplicationInsights__ConnectionString` is set, like the audit records.
+Exported to Application Insights only when `ApplicationInsights__ConnectionString` is set, like the audit
+records. (The upstream duration is part of the audit record, so without the exporter it goes to stdout
+with the rest of that record.)
 
 | Signal | Name | What it answers |
 |---|---|---|
-| Upstream call duration | `durationMs` on the `VitallyUpstreamCall` record (`AuditDurationMs` in `AppEvents`) | Which of a composite tool's upstream calls was slow, joined to the tool-call record by correlation id. Send to body read, 429 waits included; `-1` means not measured, never `0` |
-| 429 retries / exhaustion | `vitally.ratelimit.retries`, `vitally.ratelimit.exhausted` | How close the server runs to Vitally's 1000 req/min |
+| Upstream call duration | `durationMs` on the `VitallyUpstreamCall` record (`AuditDurationMs` in `AppEvents`) | Which of a composite tool's upstream calls was slow, joined to the tool-call record by correlation id. Send to body read, 429 waits included |
+| 429 retries / exhaustion | `vitally.ratelimit.retries`, `vitally.ratelimit.exhausted` | How often the server exceeds Vitally's 1000 req/min |
 | Pager truncations | `vitally.autopager.truncations`, tag `resource` | Whether `Vitally:MaxAutoPageFetches` is set where users hit it |
-| Cache hit/miss | `vitally.cache.lookups`, tags `cache` = `api_key` / `group_membership` / `oidc_discovery`, `result` = `hit` / `miss` | Whether each cache earns its keep. A miss means the round-trip happened, whatever it then returned |
-| MCP spans + metrics | source and meter `Experimental.ModelContextProtocol` | A span per request, tool calls included, and the SDK's own per-operation counts and durations |
+| Cache hit/miss | `vitally.cache.lookups`, tags `cache` = `api_key` / `group_membership` / `oidc_discovery`, `result` = `hit` / `miss` | Per *lookup*. A miss means the round-trip happened, whatever it then returned — a stale Graph serve after a failed call is a miss |
+| MCP spans | activity source `Experimental.ModelContextProtocol` | A span per request, tool calls included — sampled, and sanitised (see below) |
 
-Our counters live on one `Meter`, `VitallyMcp` (`VitallyMetrics`), created through `IMeterFactory`. Every consumer takes it as an **optional** constructor parameter, so a registration that never resolved would leave them all recording nothing while every unit test passed. `TheComposedHost_InjectsTheCounters_IntoTheComponentsThatRecordThem` exists for that.
+Three caveats on reading those, each of which would otherwise send a query wrong:
 
-⚠️ **The MCP SDK's names are `Experimental.`-prefixed in 2.2.0 — the activity source too, not the bare
+- **The duration is missing for exactly the slowest calls.** A call that throws — a timeout, DNS failure,
+  a refused connection — never reaches `LogAction`, so it has no `VitallyUpstreamCall` row at all; the
+  failure records are where those appear. It is also gated by `Audit:Enabled` / `Audit:IncludeReads`, so
+  turning reads off as the ingest-cost lever removes every GET's duration too. `AuditDurationMs` is the
+  same property name on `VitallyToolCall`, so filter on `Name`. `-1` means unmeasured and is unreachable
+  from `SendAsync`, which always passes the elapsed time.
+- **The `group_membership` hit rate counts lookups, and is inflated by design.** `ToolAuthorizer` does not
+  memoise, and SDK 2.2.0 runs at least three checks per `tools/call`, so a single cold call records one miss
+  and two hits; a `tools/list` checks every tool. Read it as "how often Graph was spared", never as "how
+  well `LiveGroupCacheSeconds` is tuned".
+- **The `oidc_discovery` hit rate looks healthy during a provider outage.** After a failed refresh the
+  last-known-good copy is re-cached for a minute, and reads in that minute are hits.
+
+Our counters live on one `Meter`, `VitallyMcp` (`VitallyMetrics`), created through `IMeterFactory`. Every
+consumer takes it as an **optional** constructor parameter, so a registration that never resolved would
+leave them recording nothing while every unit test passed.
+`TheComposedHost_InjectsTheCounters_IntoTheComponentsThatRecordThem` proves it through the real wiring for
+`VitallyService` and the Graph resolver; the OIDC resolver, the API-key provider and the rate limiter are
+not reachable from that harness and rely on their unit tests.
+
+⚠️ **The MCP SDK's activity source is `Experimental.ModelContextProtocol` in 2.2.0, not the bare
 `ModelContextProtocol` #94's issue gave.** A source registered under a name nothing publishes is accepted
-silently and captures nothing. `TheMcpSdk_PublishesTheSourcesWeRegister_AndNoSpanCarriesAToolArgument`
-fails if either name stops being published, so an SDK bump that drops the prefix shows up as a red test
-rather than as traces that quietly stop. The names live in `TelemetrySources`, shared by `Program.cs` and
-that test.
+silently and captures nothing. `TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText`
+fails if it stops being published, so an SDK bump that drops the prefix is a red test rather than traces
+that quietly stop. Names live in `TelemetrySources`, shared by `Program.cs` and that test.
+
+⚠️ **The SDK's meter (same name) is deliberately NOT registered.** Its `mcp.server.operation.duration`
+histogram has `gen_ai.tool.name` as a dimension, and a `tools/call` naming a tool that does not exist puts
+the invented name there — caller text, unbounded cardinality, every one recorded, because metrics are never
+sampled. A span processor cannot rewrite metric tags. Per-tool latency is already queryable, unsampled, from
+`AuditDurationMs` on `VitallyToolCall`. The exporter test pins it as unregistered, so re-adding it is a red
+test; if per-method failure rates are wanted for #159, register it behind a view that drops
+`gen_ai.tool.name` rather than as-is.
 
 ⚠️ **Metric tags carry only values this code fixes.** A tag stores every distinct value it is given, so a
 caller-controlled one is a cardinality explosion and customer text in a metrics store. That is not
-hypothetical: the by-account list tools page `accounts/{accountId}/conversations`, so the pager's
-`resourceType` carries the caller's id. The truncation tag therefore uses the tool layer's fixed
-`defaultsKey`, checked against the same `KnownResourceTypes` allowlist the failure log uses.
+hypothetical: the by-account and by-organisation list tools page `accounts/{accountId}/conversations` and
+`organizations/{organizationId}/conversations`, so the pager's `resourceType` carries the caller's id. The
+truncation tag therefore uses the tool layer's fixed `defaultsKey`, checked against the same
+`KnownResourceTypes` allowlist the failure log uses.
 
 **Sampling: 10% head sampling of traces.** `SamplingRatio = 0.1F` **and** `TracesPerSecond = null` —
 `TracesPerSecond` (default 5) overrides the ratio whenever set, so the ratio alone does nothing. It is safe
 only because of #178: logs (the audit records among them) are exported regardless of trace sampling, and
-metrics are never sampled. "Errors at 100%" is **not** available from head sampling, which decides before
-the outcome is known; failures stay visible through the failure records and the counters, but a trace of a
-particular failure may not have been kept.
+metrics are never sampled. Two consequences for anyone querying:
 
-**Spans carry no tool arguments**, and that is pinned. Arguments are permitted in the audit record, in
-`AppEvents` under its access control, but spans go to `AppRequests` / `AppDependencies` — a different store
-with its own retention. The composed test above passes a sentinel argument and asserts no span attribute or
-event carries it; its negative control (using the tool name, which a span *does* carry) fails, so the check
-is not vacuous. ⚠️ The caller-typed **path segment** gap in `AppDependencies` noted under the log levels
-still stands; this does not close it.
+- **Count sampled tables with `sum(ItemCount)`, not `count()`.** `AppRequests` and `AppDependencies` rows
+  each stand for about ten. `AppEvents` / `AppTraces` are logs and stay exact, so `count()` is right there.
+- **"Errors at 100%" is not available.** Head sampling decides before the outcome is known, so a trace of a
+  particular failure may not have been kept. Failures stay visible, unsampled, through the #94 failure
+  records — not through the counters, which count rate-limit exhaustion and nothing else that fails.
 
-The earlier "slow requests" diagnosis (model inference rather than the server) was reasoned rather than
-measured, because there was nothing to measure with. These are what make it checkable.
+**Spans are sanitised before export — `SpanSanitisingProcessor`**, because they go to `AppRequests` /
+`AppDependencies`, a different store from the audit records with its own retention, where tool arguments
+are not permitted. A probe of SDK 2.2.0 found caller text reaching spans by three routes, and the processor
+closes each:
+
+| Route | What the SDK does | The processor |
+|---|---|---|
+| `StatusDescription`, any span | copies a failed tool call's whole error text there — the caller's input (`got 'alice@example.com'`) and Vitally's response body | clears it; the status code stays |
+| `gen_ai.tool.name` and the span name, MCP spans | records an invented tool name verbatim | rewrites it to `unrecognised` unless it is in `KnownToolNames` |
+| `jsonrpc.request.id`, MCP spans | records whatever id the client sent | drops it |
+
+The Azure Monitor exporter in 1.6.0 does not appear to read `StatusDescription` (inferred from its
+metadata, not observed), so that row is defence against a future exporter rather than a known live leak.
+`TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText` runs the processor over real
+SDK spans from a successful call, a failing call and an unknown tool, and carries its own controls: that the
+caller text did reach the raw spans, and that a span carries `gen_ai.tool.name` at all — so it cannot pass
+by scanning nothing. ⚠️ **Its scope is MCP SDK and ASP.NET Core server spans.** The harness stubs the
+primary HTTP handler, so no `HttpClient` dependency span exists there, and the caller-typed **path segment**
+gap in `AppDependencies` noted under the log levels still stands.
+
+⚠️ **The exporter test disposes its `TracerProvider` and `MeterProvider` explicitly**, because disposing
+the `WebApplicationFactory` does not (observed 2026-10-01, sync and async alike, with no exception). The
+leaked provider stayed subscribed to the MCP source and ran `SpanSanitisingProcessor` over later tests'
+spans, which failed the PII test whenever it ran afterwards. A post-dispose guard in that test catches a
+recurrence, and `TelemetryRedactionTests` is in the serialised collection so the guard cannot flake. Why
+only some test orderings exposed it was not established.
+
+**What this adds to the earlier "slow requests" diagnosis.** That diagnosis *was* measured — about 5 s
+per `/mcp` call from the `Request finished` lines, against about 70 s of model time per tool turn — but
+only as whole-request times, and #143's `Microsoft.AspNetCore.Hosting` filter has since suppressed those
+lines. These signals restore the request-level view (sampled spans) and add what was never available: the
+breakdown of a slow call into its upstream calls.
 
 **Vitally API Parameters:**
 - Pagination uses `from` parameter (not `cursor`) - pass the `next` value from previous response
@@ -1246,7 +1306,7 @@ dotnet test VitallyMcp.sln -c Debug --filter-class "*MeetingsToolsTests"
 - `StaleEntitlementCompositionTests` — the serve-stale-on-Graph-failure path through a composed host, across an outage that starts, is survived and then outlasts its window; also pins that a token claim cannot authorise once the live check is on
 - `UpstreamOidcMetadataTests` / `UpstreamOidcStartupFailFastTests` — the OIDC-discovery resolver (all four endpoints, cache reuse, last-known-good on a failed refresh, rejection of an incomplete or malformed document) and the startup fail-fast wired into `Program.cs`
 - `FailureLoggingTests` — the #94 failure records: level by status band and exception kind, and that none of them carries a body, a query string, a caller-typed path segment, an exception message or an attached exception (the Key Vault record is the one that must attach it). The composed half is in `ToolCallAuditCompositionTests`: that the filter and `SendAsync` records of an upstream failure carry the audit record's correlation id, that an absorbed summary section is logged although the tool succeeds, that an unknown tool is logged as `unrecognised` at `Warning`, and that the SDK logs an unhandled tool exception itself, exactly once, with it attached
-- `PerformanceMetricsTests` (plus counter tests beside `VitallyRateLimitHandlerTests`, `GraphGroupPermissionResolverTests` and `UpstreamOidcMetadataTests`) — the #94 phase 6 counters and the upstream duration, observed through `MetricCapture`, which filters on the test's own `IMeterFactory` so parallel tests cannot count each other's measurements. The exporter-branch test in `LoggingFilterTests` pins the sampling and that each telemetry source is registered, by behaviour (a source with that name reports a listener); `ToolCallAuditCompositionTests` proves the SDK publishes those names and that no span carries a tool argument
+- `PerformanceMetricsTests` (plus counter tests beside `VitallyRateLimitHandlerTests`, `GraphGroupPermissionResolverTests` and `UpstreamOidcMetadataTests`) — the #94 phase 6 counters and the upstream duration, observed through `MetricCapture`, which filters on the test's own `IMeterFactory` so parallel tests cannot count each other's measurements. The exporter-branch test in `LoggingFilterTests` pins the sampling, that our meter and the SDK's source are registered and the SDK's meter is not (by behaviour: a source or meter with that name reports a listener), that `SpanSanitisingProcessor` is in the chain, and that its providers do not outlive it; `TelemetryRedactionTests` unit-tests the sanitiser, and `ToolCallAuditCompositionTests` runs it over real SDK spans, with controls
 - `Tools/*ToolsTests` — one test class per `Tools/*Tools.cs`, covering every public `[McpServerTool]` method (list/get/create/update/delete plus sub-resources)
 
 **When adding a new tool method:** add a matching test in the appropriate `*ToolsTests.cs` file. Use `TestHelpers.BuildVitallyService(httpClient)` — it builds a `VitallyService` with a stub `VitallyApiKeyProvider` that returns a fixed test API key (no Key Vault required).
@@ -1488,7 +1548,7 @@ Two details:
   production's `OAuth__SharedClientSecret`, which is defined that way). The script handles it; an
   inline query would not.
 - `ApplicationInsights__ConnectionString=set` means **configured, not exporting**. A stale or wrong connection string is
-  non-empty and passes here, while its sends fail and `Program.cs:176` suppresses the console records
+  non-empty and passes here, while its sends fail and the console filter on `VitallyMcp.AuditLogger` in `Program.cs` suppresses the console records
   — so the records would exist nowhere and this check would still say pass. Only an `AppEvents` query
   proves ingestion; `docs/runbooks/entra-cutover-staging-validation.md` has it.
 

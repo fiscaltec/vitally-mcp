@@ -42,10 +42,11 @@ public static class TelemetrySources
 /// </summary>
 /// <remarks>
 /// <para>
-/// Metrics rather than log lines, because these are questions about <i>rates</i>: how close the server
-/// runs to Vitally's 1000 requests a minute, how often the auto-pager gives up, and whether each cache
-/// is earning its keep. A log line cannot be trended or alerted on; a counter is a dimension. And
-/// metrics are never sampled, so these stay exact however far trace sampling is reduced.
+/// Metrics rather than log lines, because these are questions about <i>rates</i>: how often the server
+/// exceeds Vitally's 1000 requests a minute, how often the auto-pager gives up, and how often each cache
+/// spares a round-trip. A counter is pre-aggregated and carries dimensions, where a log line is message
+/// text to parse. And metrics are never sampled, so these stay exact however far trace sampling is
+/// reduced. (The cache rate counts lookups, not requests — see the caveats in CLAUDE.md.)
 /// </para>
 /// <para>
 /// ⚠️ <b>Tags carry only values this code fixes</b> — a cache name, a hit/miss, a resource type the

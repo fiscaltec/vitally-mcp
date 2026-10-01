@@ -195,7 +195,7 @@ ID_RESOURCE=$(az identity show -g "$RG" -n "$ID" --query id -o tsv)
 APPI_CS=$(az monitor app-insights component show -a vitally-prod-appi-uksouth -g "$RG" --query connectionString -o tsv)
 # Assert it resolved. `set -e` does NOT catch this: az exits 0 with empty output when the query path
 # stops resolving, the create below would then pass an empty setting, and the application treats
-# empty as unset (Program.cs:134 uses IsNullOrWhiteSpace) — so the app comes up healthy with its audit
+# empty as unset (Program.cs's exporterConfigured check uses IsNullOrWhiteSpace) — so the app comes up healthy with its audit
 # records on stdout and nothing says so.
 [ -n "$APPI_CS" ] || { echo "ABORT — could not read the Application Insights connection string"; return 1 2>/dev/null || exit 1; }
 

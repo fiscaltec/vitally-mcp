@@ -299,7 +299,7 @@ inline copies drifted fail-open (#166, fixed by #167).
    predates `v4.6.0` (`sha-410e851`), deploy before reading anything into either answer.
 3. **`PASS` is not `exporting`, and the gap is not academic.** A non-empty value only proves the
    exporter *branch* was selected. A stale or wrong connection string is non-empty, so it passes while
-   `Program.cs:176` suppresses the console records and the exporter's sends fail — the records then
+   the console filter on `VitallyMcp.AuditLogger` in `Program.cs` suppresses the console records and the exporter's sends fail — the records then
    exist nowhere, and this check would have told you everything was fine. **Only the `AppEvents` query
    below establishes ingestion.** Treat `PASS` as a precondition for reading `AppEvents`, never as a
    substitute for it.

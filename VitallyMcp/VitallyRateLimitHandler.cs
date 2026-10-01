@@ -30,8 +30,9 @@ public class VitallyRateLimitHandler : DelegatingHandler
         _metrics = metrics;
     }
 
-    // Counted as well as logged (#94): a log line cannot be trended against Vitally's 1000 req/min
-    // budget, and the retry rate is the early warning that the server is running close to it.
+    // Counted as well as logged (#94): a counter is a pre-aggregated series rather than text to parse.
+    // It fires only once the limit HAS been hit, so it says how often the server exceeds the 1000
+    // req/min budget; how close it runs is X-RateLimit-Remaining, which is only logged.
     private readonly VitallyMetrics? _metrics;
 
     protected override async Task<HttpResponseMessage> SendAsync(
