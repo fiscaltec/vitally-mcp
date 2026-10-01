@@ -93,11 +93,17 @@ public sealed class VitallyMetrics
 
     public void RateLimitExhausted() => _rateLimitExhausted.Add(1);
 
-    /// <param name="resourceType">The resource type the tool layer passed — a fixed string, never caller input.</param>
+    /// <summary>Counts a server-side filtered call that stopped at the page cap.</summary>
+    /// <param name="resourceType">
+    /// The fixed resource kind — the tool layer's defaults key, already checked against the allowlist
+    /// by the caller. Never the paged path, which can carry the caller's id.
+    /// </param>
     public void PagerTruncated(string resourceType) =>
         _pagerTruncations.Add(1, new KeyValuePair<string, object?>("resource", resourceType));
 
+    /// <summary>Counts one cache lookup, as a hit (the round-trip was spared) or a miss.</summary>
     /// <param name="cache">One of <c>api_key</c>, <c>group_membership</c>, <c>oidc_discovery</c>.</param>
+    /// <param name="hit">Whether the cache answered without the round-trip.</param>
     public void CacheLookup(string cache, bool hit) =>
         _cacheLookups.Add(1,
             new KeyValuePair<string, object?>("cache", cache),

@@ -59,13 +59,17 @@ public class VitallyRateLimitHandler : DelegatingHandler
             }
 
             var delay = GetRetryDelay(response);
-            _metrics?.RateLimitRetry();
             _logger?.LogWarning(
                 "Vitally rate limited (429); retrying in {DelayMs}ms (attempt {Attempt}/{MaxRetries}).",
                 delay.TotalMilliseconds, attempt + 1, MaxRetries);
 
             response.Dispose();
             await Task.Delay(delay, cancellationToken);
+
+            // Counted only once the backoff has completed and the retry is actually about to be sent: a
+            // timeout or a cancelled caller during the wait sends nothing, and would otherwise overstate
+            // how often the budget was exceeded (Copilot on #182).
+            _metrics?.RateLimitRetry();
         }
     }
 

@@ -171,12 +171,10 @@ public sealed class SpanSanitisingProcessor(KnownToolNames knownTools) : BasePro
             activity.SetTag(ToolNameTag, tool);
         }
 
-        foreach (var key in activity.TagObjects.Select(t => t.Key).ToList())
+        // Materialised first: SetTag mutates the collection being enumerated.
+        foreach (var key in activity.TagObjects.Select(t => t.Key).Where(k => !AllowedMcpTags.Contains(k)).ToList())
         {
-            if (!AllowedMcpTags.Contains(key))
-            {
-                activity.SetTag(key, null);
-            }
+            activity.SetTag(key, null);
         }
 
         // Rebuilt from the cleaned values, never patched: the original carries whatever target the

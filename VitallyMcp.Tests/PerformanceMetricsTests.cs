@@ -14,9 +14,9 @@ namespace VitallyMcp.Tests;
 /// cache counters are tested beside their components; these are the ones without a natural home.
 /// </summary>
 /// <remarks>
-/// The earlier "slow requests" diagnosis concluded model inference rather than the server, and that
-/// was reasoned rather than measured because there was nothing to measure with. These are what make
-/// that conclusion checkable.
+/// The earlier "slow requests" diagnosis measured whole-request times (about 5 s per call, against about
+/// 70 s of model time per tool turn). What it could not see was an unsampled breakdown of a slow call
+/// into its upstream calls, which the duration here provides.
 /// </remarks>
 public class PerformanceMetricsTests
 {

@@ -123,6 +123,22 @@ public class VitallyRateLimitHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task DoesNotCountARetry_ThatIsCancelledDuringTheBackoff()
+    {
+        // A timeout or a cancelled caller during the wait means no retry request is ever sent, so
+        // counting it would overstate how often the budget was exceeded (Copilot on #182).
+        using var capture = new MetricCapture();
+        var (client, inner, _) = BuildClient(h => h.FallbackRetryDelay = TimeSpan.FromSeconds(30), capture.Metrics);
+        inner.Responses.Enqueue(TooManyRequests());
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = () => client.GetAsync("http://example.test/x", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        capture.Total("vitally.ratelimit.retries").Should().Be(0);
+    }
+
+    [Fact]
     public async Task Counts_Exhaustion_WhenEveryRetryIsRateLimited()
     {
         using var capture = new MetricCapture();
