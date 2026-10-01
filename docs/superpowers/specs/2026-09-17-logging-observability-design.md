@@ -386,6 +386,14 @@ Nothing exists. Add, in order of value:
 3. **Tracing** — retain the superseded spec's reasoning: metrics can say `Get_organization_summary`
    has a slow p95 but not which of its four upstream calls dominated.
 
+   ⚠️ **Reducing trace sampling was unsafe until #178** (2026-09-30). The distro dropped every log
+   record whose trace was not sampled, audit records included, so 10% sampling would have lost about
+   90% of the trail. #178 decouples them; land it first. Two further constraints, both verified:
+   `TracesPerSecond` (default 5) **overrides** `SamplingRatio`, so percentage sampling also needs
+   `TracesPerSecond = null`; and "errors at 100%" **cannot** be had from head sampling, which decides
+   before the outcome is known. Failures stay fully visible through the #94 failure records and the
+   metrics, which are never sampled.
+
 Prefer `System.Diagnostics.Metrics` / OpenTelemetry over ad-hoc logging so these are dimensions, not
 lines to grep.
 
@@ -749,7 +757,7 @@ was actually done, so the collision is left in place and flagged rather than tid
 | **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
 | 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | ✅ **done** 2026-09-25 — switched on and verified by reading `VitallyToolCall` rows back out of `AppEvents` on **both** targets |
 | 5 | failure logging | #94 | **ready** — 3 done |
-| 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done |
+| 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done; reduced trace sampling depends on #178 |
 | 7 | routing and retention per tier | #93 | **2b ✅ and 4 ✅** as of 2026-09-26 — remaining dependency is measured volume. Both categories land resource-specific, so per-table retention is available |
 | 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
 

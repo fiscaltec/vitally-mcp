@@ -523,8 +523,9 @@ public class LoggingFilterTests
         // Everything else about the exporter is tested against a hand-built AuditLogger or a host
         // with no connection string, so a broken or missing UseAzureMonitor registration, a filter
         // aimed at the wrong provider, or a PostConfigure that never ran would all leave the suite
-        // green. This composes the host the way production will have it and asserts the three things
-        // that must switch on together.
+        // green. This composes the host the way production will have it and asserts what must switch
+        // on together: the breadcrumb flag, both logging filters, the registered tool names, the
+        // redaction processor, the OpenTelemetry logger provider and the sampling decoupling (#178).
         var previous = SnapshotAndClearConfiguration();
         foreach (var (key, value) in RequiredSettings)
         {
@@ -588,6 +589,26 @@ public class LoggingFilterTests
                 .Contain(p => p is OpenTelemetryLoggerProvider,
                     "without the exporter's provider the records have nowhere to go, and the filters "
                     + "aimed at it are aimed at nothing");
+
+            // #178: the audit trail must not depend on trace sampling. The distro's own default —
+            // verified from the 1.6.0 package, since its .NET docs do not state it — is
+            // EnableTraceBasedLogsSampler=true: a log record is exported only if its trace was
+            // sampled. Audit records are logged inside the request's trace, and traces are
+            // rate-limited to 5 a second by default, so under load the trail lost records silently.
+            //
+            // Asserted HERE rather than in a test of its own, and that is not tidiness: a second
+            // exporter-configured host that resolved only these options hung whichever test ran next
+            // in this serialised collection, reproducibly, taking every later member with it
+            // (2026-09-30; three runs stalled at test 622 of 723 — see #178's PR). One exporter host, fully built and then disposed, is the shape known to
+            // behave. Composed rather than hand-built because the failure mode is Program.cs's
+            // callback not setting it, which only the real composition can show.
+            var monitorOptions = services
+                .GetRequiredService<IOptionsMonitor<Azure.Monitor.OpenTelemetry.AspNetCore.AzureMonitorOptions>>()
+                .Get(Options.DefaultName);
+            monitorOptions.ConnectionString.Should().NotBeNullOrEmpty(
+                "a precondition: these must be the options Program.cs's callback configured");
+            monitorOptions.EnableTraceBasedLogsSampler.Should().BeFalse(
+                "an audit record must be exported whether or not its request's trace was sampled");
         }
         finally
         {

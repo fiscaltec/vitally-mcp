@@ -816,7 +816,8 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
 > carries Vitally's body, Azure's Key Vault error, or a summary's per-section isolation. Do not add
 > `when (ex is not OperationCanceledException)` to those guards: the caller cancelling is decided
 > on the caller's token inside `ToolCallFailureLog`, so a cancellation reaching a guard came from the
-> sink (Copilot on #177).
+> sink (Copilot on #177). Like the audit records, they are exported whether or not the request's
+> trace was sampled (#178).
 >
 > The **Key Vault record is the deliberate exception**: it attaches the exception, because Azure's
 > error carries its status and code — the difference between a missing role and an unreachable vault
@@ -923,6 +924,40 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   > ⚠️ **`TierServedStale` is tri-state, and `unknown` is not a synonym for `False`.** Since #161 the resolver reports it: `IGroupPermissionResolver` returns a `ResolvedPermissions` record carrying the permissions, `ServedStale` and `Age` in **one** value — a separate "was the last one stale?" query was rejected because it invites the two to be read at different moments. `ToolAuthorizer` passes `ServedStale` straight through, so on the live path the record reads `True` (served from the retained copy after a Graph failure) or `False` (Graph confirmed it, on this call or within `LiveGroupCacheSeconds`). `unknown` remains for the claim path and for a call admitted with RBAC bypassed (`Authorization:Enabled=false` or `OAuth:NoAuth` — the local-dev mode, where the tier reads `unresolved` too), and must stay that way. A call *denied* before any tier resolved never produces this record at all — the SDK checkpoint refuses it and only `LogToolCallDenied` is written. The rule: recording `false` where nothing checked would assert the tier was fresh — a weaker claim dressed as a stronger one, which is the opposite of what the field is for. `RecordResolvedTier`'s `servedStale` parameter is **required**, not defaulted, so a new call site has to say which it is. Null from the resolver still means **deny**. `ToolCallAuditCompositionTests` walks a caller through an outage to prove `False` → `True` → denied through the composed host, and separately splits one call's first check (fresh) from its later ones (stale) to prove the record carries the **first admitting** check's staleness. ⚠️ There are more later checks than the code suggests: **SDK 2.2.0 evaluates the `[Authorize]` policy twice per `tools/call`** (`ConfigureCallToolFilter`, then `ConfigureOrdinaryCallToolFilter`) before the `SendAsync` backstop runs, so during a Graph outage one simple tool call makes at least three Graph attempts and logs three stale warnings — observed by stack trace on 2026-09-29, and pinned by that test's request count. `ResolvedPermissions` is built only through `Confirmed`/`Retained`, so no return site writes `false` by reflex. ⚠️ **Production records written before #161 deployed all read `unknown`** — the field existed and nothing reported it — so they cannot say whether a tier was stale. `Age` is on the result but **not** in the audit record; the resolver's warning line carries it.
   >
   > **Routing is built, and switched on by configuration.** Every audit record carries the `microsoft.custom_event.name` attribute, which the Azure Monitor OpenTelemetry exporter uses to write it to **`AppEvents`** rather than `AppTraces`; `Program.cs` registers the exporter and suppresses the whole `VitallyMcp.AuditLogger` category from the console **only when `ApplicationInsights__ConnectionString` is set** — **set on both targets on 2026-09-25** (production revision 39, staging revision 17), each verified by reading rows back out of `AppEvents`. ⚠️ Staging is an **on-demand** app and the variable does **not** survive a recreate, so that describes the staging app that exists today, not any future one — a spin-up must set it alongside `Authorization__ReadOnly`. ⚠️ **#142's console export is ungated on production as of that flip**, because the console stream is now customer-data-free: a breadcrumb stays there carrying the object id, tool name, outcome and correlation id and nothing else, since OpenTelemetry export is asynchronous and a lost export cannot be detected in-process. Design: `docs/superpowers/specs/2026-09-17-logging-observability-design.md`.
+  >
+  > ⚠️ **The audit trail does not depend on trace sampling, and must not start to (#178).** The distro's
+  > default — read off the 1.6.0 package, because the distro's docs do not state it — is
+  > `EnableTraceBasedLogsSampler = true`: a log record is exported only if its trace was sampled. All
+  > four audit record types (`VitallyToolCall`, `VitallyUpstreamCall`, `VitallyToolCallDenied`,
+  > `VitallyUpstreamDenied`) are logged inside the request's trace, and traces are rate-limited to
+  > **5 a second** by default — an adaptive sampler, so under sustained load above that rate a
+  > *proportion* of requests lost their records from `AppEvents`, silently. Only the console
+  > breadcrumb survived, and only from 2026-09-26 when the console export went live (#142); for the
+  > day before that, nothing persisted. `Program.cs` now sets it `false`, pinned by
+  > `LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp`.
+  >
+  > That makes trace sampling a cost lever that no longer touches the audit trail — but **mind how the
+  > lever works**: `TracesPerSecond` (default 5) **takes precedence** over `SamplingRatio` whenever both
+  > are set, so percentage sampling needs `TracesPerSecond = null` as well, or `SamplingRatio = 0.1F`
+  > silently does nothing. The `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables
+  > override both. Never turn *this* switch back on.
+  >
+  > Records emitted **before** #178 deploys may be missing individually under load — not as whole time
+  > bins, so a coverage check by bin cannot reveal it (see `ACCESS.md`). The gap is **measurable from
+  > 2026-09-26**: every tool call's breadcrumb, carrying its correlation id, has persisted to
+  > `ContainerAppConsoleLogs` since then, so a breadcrumb with no matching `VitallyToolCall` row in
+  > `AppEvents` is a dropped record. For 2026-09-25 to 2026-09-26 it is unknowable. Not yet measured.
+  >
+  > Verified by behaviour as well as by option (#178's PR): a probe pointing the exporter at a local
+  > listener, with trace sampling at 0%, received **0 of 5** in-request logs under the default and **5 of
+  > 5** with the switch off. No environment variable overrides it, in either direction — probed for
+  > both `AzureMonitor__EnableTraceBasedLogsSampler` and `AzureMonitorExporter__EnableTraceBasedLogsSampler`
+  > (the downstream exporter's key, which Copilot on #181 believed was bound after the distro copies its
+  > options): with the code at `false` and that key `true`, 20 of 20 in-request logs were still exported;
+  > with the code at its default and that key `false`, 0 of 20 were. So no `PostConfigure` of the
+  > exporter options is needed, and adding one would guard a path that does not exist. Re-probe on any
+  > distro version bump. A sampled-out request's log carries no `sampleRate`, so `count()` over `AppEvents`
+  > stays an exact audit count however far trace sampling is reduced.
   >
   > The reversal is **conditional on access control**, which is therefore part of the design rather than an operational afterthought: the workspace carries **no** role assignments of its own and inherits from the subscription and management group. **Reviewed 2026-09-21 (#146)**, superseding the 2026-09-17 estimate of "5 users and 28 service principals", which counted a group and an external principal as users and counted assignments rather than principals. Actual: **4** named IT administrators, whose `Owner`/`Contributor` is **PIM-eligible rather than permanent**, plus **2** by-design break-glass accounts; **22** service principals with a read-capable role, of which ~13 are Microsoft platform automation and 8 are FISCAL-controlled (two Azure DevOps connections holding `Owner`); and **one external MSP holding `Owner`** through delegated administration. The review also found **4 orphaned principals** — deleted from the directory, permanently, with 14 live role assignments between them; **13 were removed on 2026-09-21** (80 → 67 effective assignments at the workspace), the 14th held because it sits at management-group scope. ⚠️ `Testing Dan Dan Dan`'s `Reader` was flagged and then **deliberately left in place** (dsearle, 2026-09-21) — do not "tidy" it. ⚠️ **Table-level RBAC cannot fence the audit table off** — Azure RBAC is allow-only, so it adds narrow readers and never subtracts from an inherited `*/read`; the design said otherwise until this review. The data is acceptable to store because it is restricted; if that stops being true, so does the policy.
   - **It records `oid`, not `sub`, and the difference is not cosmetic.** An Entra v2 `sub` is a *pairwise* identifier — unique per (user, application), and **not resolvable to a person by any Entra lookup**. Keying the audit trail on it gives you records that are consistent and unattributable, which defeats the purpose of keeping one. `oid` is the directory object id: a GUID, stable across every app in the tenant, resolvable with `az ad user show --id`, and carrying no more personal data than the pairwise value. Found by decoding a real staging token during the #108 validation, *before* the production flip could start writing such records.
