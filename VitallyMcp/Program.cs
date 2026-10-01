@@ -166,7 +166,25 @@ if (exporterConfigured)
         // over SamplingRatio: percentage sampling needs TracesPerSecond = null too.) Pinned by
         // LoggingFilterTests.WithAConnectionStringConfigured_TheExporterBranchIsActuallyWiredUp.
         options.EnableTraceBasedLogsSampler = false;
+
+        // 10% head sampling of traces (#94, phase 6). BOTH lines are needed: TracesPerSecond (default
+        // 5) takes precedence over SamplingRatio whenever it is set, so the ratio alone would be
+        // silently ignored. Safe only because of EnableTraceBasedLogsSampler = false above — logs,
+        // the audit records among them, are exported regardless, and metrics are never sampled.
+        //
+        // Head sampling decides at the root, before the outcome is known, so "errors at 100%" is not
+        // available from it. Failures stay fully visible through the #94 failure records and the
+        // counters; a trace of a particular failure may or may not have been kept.
+        options.SamplingRatio = 0.1F;
+        options.TracesPerSecond = null;
     });
+
+    // The MCP SDK's spans and metrics, and this server's counters (#94). The SDK's names are
+    // Experimental.-prefixed in 2.2.0 — see TelemetrySources — and a name nothing publishes would be
+    // accepted silently, which is why a composed test proves each one is real.
+    builder.Services.AddOpenTelemetry()
+        .WithTracing(tracing => tracing.AddSource(TelemetrySources.McpActivitySource))
+        .WithMetrics(metrics => metrics.AddMeter(TelemetrySources.McpMeter, TelemetrySources.VitallyMeter));
 
     // UseAzureMonitor turns on automatic HttpClient dependency collection, and this server puts
     // free-text search terms into Vitally query strings — Search_users passes its term as
@@ -229,6 +247,11 @@ if (!string.IsNullOrWhiteSpace(vitallySection["KeyVaultUri"]))
         return new SecretClient(new Uri(opts.KeyVaultUri!), sp.GetRequiredService<Azure.Core.TokenCredential>());
     });
 }
+
+// The server's own counters (#94). Singleton because a Meter lives for the process; IMeterFactory,
+// which the host registers, owns its lifetime. Every consumer takes it as an optional constructor
+// parameter, so this registration is what turns the counters on.
+builder.Services.AddSingleton<VitallyMetrics>();
 
 builder.Services.AddScoped<VitallyApiKeyProvider>();
 builder.Services.AddScoped<ToolAuthorizer>();

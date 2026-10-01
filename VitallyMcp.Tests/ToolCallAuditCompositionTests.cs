@@ -151,6 +151,9 @@ public class ToolCallAuditCompositionTests
         /// <summary>The exception attached to each SDK record, index-aligned with <see cref="SdkRecords"/>.</summary>
         public IReadOnlyList<Exception?> SdkExceptions => _sdk.Exceptions;
 
+        /// <summary>The composed host's services — for resolving what the real wiring produced.</summary>
+        public IServiceProvider Services => _factory.Services;
+
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
 
         /// <summary>Records from the tool-call failure log (#94).</summary>
@@ -665,4 +668,80 @@ public class ToolCallAuditCompositionTests
 
         harness.FailureRecords.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task TheComposedHost_InjectsTheCounters_IntoTheComponentsThatRecordThem()
+    {
+        // #94. VitallyMetrics reaches every consumer as an OPTIONAL constructor parameter, so a
+        // registration that never resolved would leave each one with null and record nothing — and
+        // every unit test, which injects it by hand, would still pass. Asserted through the real
+        // wiring: a pager that never runs out of pages must be counted as truncated.
+        using var harness = new Harness(
+            """{"results":[{"id":"org-1","name":"Acme"}],"next":"more"}""");
+        using var capture = new MetricCapture(
+            harness.Services.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>());
+
+        await harness.CallToolAsync("List_organizations", """{"nameContains":"Acme"}""");
+
+        capture.Total("vitally.autopager.truncations", ("resource", "organizations")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TheMcpSdk_PublishesTheSourcesWeRegister_AndNoSpanCarriesAToolArgument()
+    {
+        // Two things, both about the SDK's telemetry that Program.cs registers with the exporter.
+        //
+        // 1. The names are real. A source registered under a name nothing publishes is accepted
+        //    silently and captures nothing, and the names come from the SDK rather than from us.
+        //
+        // 2. The PII gate. Tool arguments are permitted in the AUDIT record (AppEvents, under its
+        //    access control), but spans go to AppRequests / AppDependencies, a different store with
+        //    its own retention. A search term in a span attribute would put customer data there.
+        const string sentinel = "argumentsentinelvalue";
+        var activities = new List<System.Diagnostics.Activity>();
+        using var activityListener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a => { lock (activities) activities.Add(a); },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(activityListener);
+
+        var meterNames = new HashSet<string>(StringComparer.Ordinal);
+        using var meterListener = new System.Diagnostics.Metrics.MeterListener
+        {
+            InstrumentPublished = (instrument, _) => { lock (meterNames) meterNames.Add(instrument.Meter.Name); },
+        };
+        meterListener.Start();
+
+        using var harness = new Harness(TwoOrganisations);
+        await harness.CallToolAsync("List_organizations", "{\"nameContains\":\"" + sentinel + "\"}");
+
+        List<System.Diagnostics.Activity> captured;
+        lock (activities) captured = [.. activities];
+
+        captured.Select(a => a.Source.Name).Should().Contain(TelemetrySources.McpActivitySource,
+            "Program.cs registers this name; observed sources: "
+            + string.Join(", ", captured.Select(a => a.Source.Name).Distinct()));
+        lock (meterNames)
+        {
+            meterNames.Should().Contain(TelemetrySources.McpMeter,
+                "Program.cs registers this meter name; published meters: " + string.Join(", ", meterNames));
+        }
+
+        foreach (var activity in captured)
+        {
+            activity.DisplayName.Should().NotContain(sentinel);
+            activity.TagObjects.Should().NotContain(t => Carries(t.Value, sentinel),
+                $"span '{activity.DisplayName}' must not carry a tool argument");
+            activity.Events.SelectMany(e => e.Tags).Should().NotContain(
+                t => Carries(t.Value, sentinel));
+        }
+    }
+
+    // A method rather than an inline `?.`: FluentAssertions compiles these predicates as expression
+    // trees, which cannot contain a null-propagating operator.
+    private static bool Carries(object? value, string sentinel) =>
+        value is not null && (value.ToString() ?? "").Contains(sentinel, StringComparison.Ordinal);
 }

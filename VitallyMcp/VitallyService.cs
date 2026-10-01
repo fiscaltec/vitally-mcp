@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +17,7 @@ public class VitallyService
     private readonly AuditLogger _audit;
     private readonly ToolCallAuditContext? _auditContext;
     private readonly ILogger<VitallyService> _logger;
+    private readonly VitallyMetrics? _metrics;
     private readonly string _baseUrl;
 
     // Resource-specific default fields to return when no fields are specified
@@ -46,7 +48,7 @@ public class VitallyService
 
     private static readonly string[] FallbackDefaultFields = ["id", "createdAt", "updatedAt"];
 
-    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null, ILogger<VitallyService>? logger = null)
+    public VitallyService(HttpClient httpClient, IOptions<VitallyServerOptions> options, VitallyApiKeyProvider apiKeyProvider, ToolAuthorizer authorizer, AuditLogger audit, ToolCallAuditContext? auditContext = null, ILogger<VitallyService>? logger = null, VitallyMetrics? metrics = null)
     {
         _httpClient = httpClient;
         _options = options.Value;
@@ -55,6 +57,7 @@ public class VitallyService
         _audit = audit;
         _auditContext = auditContext;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<VitallyService>.Instance;
+        _metrics = metrics;
         _baseUrl = _options.BaseUrl;
     }
 
@@ -86,10 +89,16 @@ public class VitallyService
         // Dispose the HttpResponseMessage as soon as we've extracted the body — every Vitally
         // call ends up reading the full body as a string anyway, so there's no benefit to
         // leaking the response to callers (and several callers previously failed to dispose).
+        //
+        // Timed from send to body read (#94), so the upstream record carries the duration that lets a
+        // slow composite tool be decomposed into its calls. That includes any 429 waits inside the
+        // rate-limit handler, deliberately: they are part of what the caller waited for.
+        var started = Stopwatch.GetTimestamp();
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        var elapsed = Stopwatch.GetElapsedTime(started);
 
-        _audit.LogAction(method, url, (int)response.StatusCode, _auditContext?.CorrelationId);
+        _audit.LogAction(method, url, (int)response.StatusCode, _auditContext?.CorrelationId, elapsed);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -296,6 +305,13 @@ public class VitallyService
                 // envelope exposes only `next`, so once the cap is hit the matching total cannot be
                 // known without the unbounded paging the cap exists to prevent.
                 _auditContext?.MarkPagerTruncated();
+
+                // Tagged with the defaults key, never resourceType: the by-account and by-organisation
+                // tools page `accounts/{accountId}/conversations`, so resourceType can carry the
+                // caller's id, and a metric tag stores every distinct value it is given. Checked
+                // against the same allowlist the failure log uses, failing closed.
+                _metrics?.PagerTruncated(
+                    KnownResourceTypes.Contains(defaultsKey) ? defaultsKey : "(unrecognised)");
                 break;
             }
         }

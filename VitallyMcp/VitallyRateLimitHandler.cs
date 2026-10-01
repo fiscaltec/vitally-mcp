@@ -20,11 +20,19 @@ public class VitallyRateLimitHandler : DelegatingHandler
     private readonly ILogger<VitallyRateLimitHandler>? _logger;
     private readonly TimeProvider _timeProvider;
 
-    public VitallyRateLimitHandler(ILogger<VitallyRateLimitHandler>? logger = null, TimeProvider? timeProvider = null)
+    public VitallyRateLimitHandler(
+        ILogger<VitallyRateLimitHandler>? logger = null,
+        TimeProvider? timeProvider = null,
+        VitallyMetrics? metrics = null)
     {
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _metrics = metrics;
     }
+
+    // Counted as well as logged (#94): a log line cannot be trended against Vitally's 1000 req/min
+    // budget, and the retry rate is the early warning that the server is running close to it.
+    private readonly VitallyMetrics? _metrics;
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -42,6 +50,7 @@ public class VitallyRateLimitHandler : DelegatingHandler
 
             if (attempt >= MaxRetries)
             {
+                _metrics?.RateLimitExhausted();
                 _logger?.LogWarning(
                     "Vitally rate limit exceeded ({StatusCode}); {MaxRetries} retries exhausted, returning 429 to caller.",
                     (int)response.StatusCode, MaxRetries);
@@ -49,6 +58,7 @@ public class VitallyRateLimitHandler : DelegatingHandler
             }
 
             var delay = GetRetryDelay(response);
+            _metrics?.RateLimitRetry();
             _logger?.LogWarning(
                 "Vitally rate limited (429); retrying in {DelayMs}ms (attempt {Attempt}/{MaxRetries}).",
                 delay.TotalMilliseconds, attempt + 1, MaxRetries);

@@ -119,7 +119,14 @@ public class AuditLogger
     }
 
     /// <summary>Records a completed action (after the upstream response, success or failure).</summary>
-    public void LogAction(HttpMethod method, string url, int statusCode, string? correlationId = null)
+    /// <param name="duration">
+    /// How long the upstream call took, request sent to body read (#94). Written as whole
+    /// milliseconds, matching the tool-call record, so a slow tool can be decomposed into its upstream
+    /// calls by correlation id. <c>-1</c> when not measured — never <c>0</c>, which would claim a
+    /// measurement that was not taken.
+    /// </param>
+    public void LogAction(HttpMethod method, string url, int statusCode, string? correlationId = null,
+        TimeSpan? duration = null)
     {
         if (!_options.Enabled)
         {
@@ -132,8 +139,9 @@ public class AuditLogger
 
         Emit(() => _logger.LogInformation(
             "Vitally audit: {AuditUserId} {HttpMethod} {VitallyResource} -> {StatusCode} "
-            + "correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
-            ResolveUserId(), method.Method, ResourcePath(url), statusCode, correlationId ?? "none",
+            + "durationMs={AuditDurationMs} correlation={AuditCorrelationId} event={microsoft.custom_event.name}",
+            ResolveUserId(), method.Method, ResourcePath(url), statusCode,
+            duration is { } d ? (long)d.TotalMilliseconds : -1L, correlationId ?? "none",
             UpstreamCallEventName));
 
         // No resource path here: that is the field carrying the customer's record id.

@@ -127,7 +127,8 @@ public class GraphGroupPermissionResolverTests : IDisposable
         IMemoryCache? cache = null,
         TimeProvider? timeProvider = null,
         ILogger<GraphGroupPermissionResolver>? logger = null,
-        int staleSeconds = 3600)
+        int staleSeconds = 3600,
+        VitallyMetrics? metrics = null)
     {
         var options = new ToolAuthorizationOptions
         {
@@ -146,7 +147,24 @@ public class GraphGroupPermissionResolverTests : IDisposable
             cache ?? new MemoryCache(new MemoryCacheOptions()),
             Options.Create(options),
             logger ?? NullLogger<GraphGroupPermissionResolver>.Instance,
-            timeProvider);
+            timeProvider,
+            metrics);
+    }
+
+    [Fact]
+    public async Task CountsAMiss_WhenItAsksGraph_AndAHit_InsideTheFreshWindow()
+    {
+        // #94: the group-membership cache is what keeps Graph off the hot path, and its hit rate is
+        // the number that says whether LiveGroupCacheSeconds is set sensibly.
+        using var capture = new MetricCapture();
+        var handler = new RecordingHandler(new HashSet<string> { ReaderGroup });
+        var resolver = Build(handler, metrics: capture.Metrics);
+
+        await resolver.TryResolvePermissionsAsync(UserOid);
+        await resolver.TryResolvePermissionsAsync(UserOid);
+
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "miss")).Should().Be(1);
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership"), ("result", "hit")).Should().Be(1);
     }
 
     [Fact]

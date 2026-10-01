@@ -609,6 +609,27 @@ public class LoggingFilterTests
                 "a precondition: these must be the options Program.cs's callback configured");
             monitorOptions.EnableTraceBasedLogsSampler.Should().BeFalse(
                 "an audit record must be exported whether or not its request's trace was sampled");
+
+            // #94 phase 6: 10% head sampling. BOTH settings, because TracesPerSecond (default 5)
+            // takes precedence over SamplingRatio whenever it is set — a SamplingRatio alone would be
+            // silently ignored. Safe only because of the line above: metrics and logs are unaffected.
+            monitorOptions.SamplingRatio.Should().Be(0.1F);
+            monitorOptions.TracesPerSecond.Should().BeNull("or the ratio above is silently ignored");
+
+            // ...and the sources are actually registered with the providers. Asserted by behaviour:
+            // the OpenTelemetry providers subscribe a listener for each registered name, so a source or
+            // meter with that name reports one. Not built yet when unregistered — resolving the
+            // providers above is what starts them.
+            services.GetRequiredService<OpenTelemetry.Metrics.MeterProvider>();
+            using var mcpSource = new System.Diagnostics.ActivitySource(TelemetrySources.McpActivitySource);
+            mcpSource.HasListeners().Should().BeTrue("the MCP SDK's spans must reach the exporter");
+
+            foreach (var meterName in new[] { TelemetrySources.McpMeter, TelemetrySources.VitallyMeter })
+            {
+                using var meter = new System.Diagnostics.Metrics.Meter(meterName);
+                var probe = meter.CreateCounter<long>("registration.probe");
+                probe.Enabled.Should().BeTrue($"meter '{meterName}' must be registered with the exporter");
+            }
         }
         finally
         {
