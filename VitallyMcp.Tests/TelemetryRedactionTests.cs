@@ -129,6 +129,61 @@ public class TelemetryRedactionTests
     }
 
     [Fact]
+    public void Sanitiser_ReplacesAnUnknownMethodName_InTheTagAndTheSpanName()
+    {
+        // A JSON-RPC method the SDK does not define still produces a span, named after the method and
+        // tagged with it — caller text, by a route that has nothing to do with tools.
+        var (source, listener) = StartSource(TelemetrySources.McpActivitySource);
+        using var _source = source;
+        using var _listener = listener;
+        using var activity = source.StartActivity("alice@example.com")!;
+        activity.SetTag("mcp.method.name", "alice@example.com");
+
+        new SpanSanitisingProcessor(Known).OnEnd(activity);
+
+        activity.GetTagItem("mcp.method.name").Should().Be("unrecognised");
+        activity.DisplayName.Should().Be("unrecognised");
+    }
+
+    [Fact]
+    public void Sanitiser_KeepsAKnownMethod_AndDropsTheCallerPartOfItsSpanName()
+    {
+        // prompts/get names its span "prompts/get <prompt name>" — the prompt name is the caller's. The
+        // span name is rebuilt from the cleaned method, so only a registered TOOL name is ever appended.
+        var (source, listener) = StartSource(TelemetrySources.McpActivitySource);
+        using var _source = source;
+        using var _listener = listener;
+        using var activity = source.StartActivity("prompts/get alice@example.com")!;
+        activity.SetTag("mcp.method.name", "prompts/get");
+        activity.SetTag("gen_ai.prompt.name", "alice@example.com");
+
+        new SpanSanitisingProcessor(Known).OnEnd(activity);
+
+        activity.GetTagItem("mcp.method.name").Should().Be("prompts/get");
+        activity.DisplayName.Should().Be("prompts/get");
+    }
+
+    [Fact]
+    public void Sanitiser_DropsEveryMcpTagNotOnTheAllowlist()
+    {
+        // Allowlist, not blocklist: the SDK sets mcp.resource.uri and gen_ai.prompt.name from the
+        // caller's request, and a future SDK version could add another such tag. Anything unknown goes.
+        var (source, listener) = StartSource(TelemetrySources.McpActivitySource);
+        using var _source = source;
+        using var _listener = listener;
+        using var activity = source.StartActivity("resources/read")!;
+        activity.SetTag("mcp.method.name", "resources/read");
+        activity.SetTag("mcp.resource.uri", "https://alice@example.com/x");
+        activity.SetTag("gen_ai.prompt.name", "alice@example.com");
+        activity.SetTag("some.future.tag", "alice@example.com");
+        activity.SetTag("error.type", "tool_error");
+
+        new SpanSanitisingProcessor(Known).OnEnd(activity);
+
+        activity.TagObjects.Select(t => t.Key).Should().BeEquivalentTo(["mcp.method.name", "error.type"]);
+    }
+
+    [Fact]
     public void Sanitiser_DropsTheCallerChosenRequestId()
     {
         // The JSON-RPC id is whatever the client sent, and it is on every MCP span.

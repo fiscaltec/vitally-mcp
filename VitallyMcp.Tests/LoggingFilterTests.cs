@@ -643,16 +643,32 @@ public class LoggingFilterTests
 
             // ...and the SDK's meter must NOT be: its tool-name dimension carries invented names,
             // unsampled, and a processor cannot rewrite metric tags (see TelemetrySources.McpMeter).
-            // Fragile in one direction only: a future wildcard MeterListener elsewhere in this
-            // serialised collection would make this fail, never pass falsely.
+            // Fragile in one direction only: a future wildcard MeterListener anywhere in the process
+            // running at the same time — in this collection or outside it — would make this fail, never
+            // pass falsely. MetricCapture filters on its own factory's scope, so it is safe.
             using (var mcpMeter = new System.Diagnostics.Metrics.Meter(TelemetrySources.McpMeter))
             {
                 mcpMeter.CreateCounter<long>("registration.probe").Enabled.Should().BeFalse(
                     "the MCP SDK's meter would export caller-typed tool names as a metric dimension");
             }
 
-            ProcessorChainOf(tracerProvider).Should().Contain(p => p is SpanSanitisingProcessor,
+            var chain = ProcessorChainOf(tracerProvider);
+            chain.Should().Contain(p => p is SpanSanitisingProcessor,
                 "the span sanitiser must be attached to the pipeline, not merely registered in DI");
+
+            // ...and ahead of everything that reads a span's content. OpenTelemetry runs processors in
+            // the order they were added; today the distro appends Live Metrics and the batch exporter
+            // after all user configuration, but that is an implementation detail of the distro, not a
+            // contract — a bump, or the registration moving, could put the exporter first, and the
+            // spans would leave unsanitised with every other test still green.
+            int IndexOf(Func<object, bool> match) => chain.Select((p, i) => (p, i)).First(x => match(x.p)).i;
+            var firstReader = Math.Min(
+                IndexOf(p => p.GetType().Name.Contains("LiveMetrics", StringComparison.Ordinal)),
+                IndexOf(p => p.GetType().Name.Contains("ExportProcessor", StringComparison.Ordinal)));
+            IndexOf(p => p is SpanSanitisingProcessor).Should().BeLessThan(firstReader,
+                "spans must be sanitised before Live Metrics or the exporter sees them");
+            IndexOf(p => p is QueryStringRedactingProcessor).Should().BeLessThan(firstReader,
+                "query strings must be redacted before Live Metrics or the exporter sees them");
         }
         finally
         {

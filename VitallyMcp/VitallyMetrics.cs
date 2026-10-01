@@ -3,10 +3,11 @@ using System.Diagnostics.Metrics;
 namespace VitallyMcp;
 
 /// <summary>
-/// The telemetry sources registered with the Azure Monitor exporter (#94, phase 6). One place, so the
-/// registration in <c>Program.cs</c> and the composed test that proves each name is real read the
-/// same strings — a source registered under a name nothing publishes is accepted silently and simply
-/// captures nothing.
+/// The telemetry source and meter names this server deals with (#94, phase 6) — two registered with the
+/// Azure Monitor exporter, and one (<see cref="McpMeter"/>) deliberately not. One place, so
+/// <c>Program.cs</c> and the tests read the same strings: a name nothing publishes is accepted silently
+/// and captures nothing. The composed test proves <see cref="McpActivitySource"/> is real; the exporter
+/// test pins which are registered.
 /// </summary>
 public static class TelemetrySources
 {
@@ -27,9 +28,10 @@ public static class TelemetrySources
     /// Its <c>mcp.server.operation.duration</c> histogram carries <c>gen_ai.tool.name</c> as a dimension,
     /// and a <c>tools/call</c> naming a tool that does not exist puts the invented name there: caller text,
     /// unbounded cardinality, and — metrics being unsampled — every one recorded. A span processor can
-    /// rewrite a span's tags but not a metric's, and dropping the dimension with a view would lose the
-    /// per-tool breakdown that is its only advantage. Per-tool latency is already queryable, unsampled,
-    /// from <c>AuditDurationMs</c> on the <c>VitallyToolCall</c> record in <c>AppEvents</c>.
+    /// rewrite a span's tags but not a metric's. Per-tool latency is already queryable, unsampled, from
+    /// <c>AuditDurationMs</c> on the <c>VitallyToolCall</c> record in <c>AppEvents</c>. If per-method
+    /// failure rates are ever wanted, register it behind a view that drops <c>gen_ai.tool.name</c>,
+    /// never as-is — see CLAUDE.md.
     /// </remarks>
     public const string McpMeter = "Experimental.ModelContextProtocol";
 

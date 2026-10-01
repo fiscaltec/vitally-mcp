@@ -237,6 +237,11 @@ attribute reduced to its path, matching `AuditLogger.ResourcePath()`. Enforced b
 asserts a known-sensitive value (an email passed to `Search_users`) never appears in any emitted
 telemetry attribute. This test is the gate on the whole phase.
 
+> ⚠️ **As built (#162, #94):** the query string is redacted by `QueryStringRedactingProcessor` (tested
+> directly), and MCP and request spans are sanitised by `SpanSanitisingProcessor`. No test covers
+> `HttpClient` dependency spans end to end, and their caller-typed **path segments** are not redacted —
+> see the log-levels note in `CLAUDE.md`.
+
 ### Coverage gaps to close
 
 - **Tool name on success.** `LogAction` records the Vitally verb and path but not the MCP tool that

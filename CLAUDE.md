@@ -944,7 +944,7 @@ Two details of that fallback are easy to get wrong and are pinned by tests:
   > variables are not a runtime lever here**, whatever Microsoft's docs say: probed against distro 1.6.0 on
   > 2026-10-01 (#94), `rate_limited`, `always_on` and `fixed_percentage` were each set as real process
   > variables and the sampler stayed at the code's 10%. They were not honoured even with the code setting
-  > nothing. Change sampling in `Program.cs`. Never turn *this* switch back on.
+  > nothing. Change sampling in `Program.cs`. Never turn `EnableTraceBasedLogsSampler` back on.
   >
   > Records emitted **before** #178 deploys may be missing individually under load — not as whole time
   > bins, so a coverage check by bin cannot reveal it (see `ACCESS.md`). The gap is **measurable from
@@ -1024,9 +1024,10 @@ with the rest of that record.)
 
 Three caveats on reading those, each of which would otherwise send a query wrong:
 
-- **The duration is missing for exactly the slowest calls.** A call that throws — a timeout, DNS failure,
-  a refused connection — never reaches `LogAction`, so it has no `VitallyUpstreamCall` row at all; the
-  failure records are where those appear. It is also gated by `Audit:Enabled` / `Audit:IncludeReads`, so
+- **The duration is missing for calls that throw.** A timeout, DNS failure or refused connection never
+  reaches `LogAction`, so it has no `VitallyUpstreamCall` row at all — and timeouts are the slowest calls
+  there are; the failure records are where those appear. It also starts *after* the API key is resolved,
+  so a cold Key Vault fetch shows in the tool-call duration and in no upstream one. It is also gated by `Audit:Enabled` / `Audit:IncludeReads`, so
   turning reads off as the ingest-cost lever removes every GET's duration too. `AuditDurationMs` is the
   same property name on `VitallyToolCall`, so filter on `Name`. `-1` means unmeasured and is unreachable
   from `SendAsync`, which always passes the elapsed time.
@@ -1055,8 +1056,9 @@ histogram has `gen_ai.tool.name` as a dimension, and a `tools/call` naming a too
 the invented name there — caller text, unbounded cardinality, every one recorded, because metrics are never
 sampled. A span processor cannot rewrite metric tags. Per-tool latency is already queryable, unsampled, from
 `AuditDurationMs` on `VitallyToolCall`. The exporter test pins it as unregistered, so re-adding it is a red
-test; if per-method failure rates are wanted for #159, register it behind a view that drops
-`gen_ai.tool.name` rather than as-is.
+test. If #159 wants per-*method* failure rates (`mcp.method.name`, `error.type`), the way to get them is a
+view that drops `gen_ai.tool.name` — which keeps those dimensions and loses only the per-tool split that
+`AuditDurationMs` already provides. Never register it as-is.
 
 ⚠️ **Metric tags carry only values this code fixes.** A tag stores every distinct value it is given, so a
 caller-controlled one is a cardinality explosion and customer text in a metrics store. That is not
@@ -1077,37 +1079,54 @@ metrics are never sampled. Two consequences for anyone querying:
   records — not through the counters, which count rate-limit exhaustion and nothing else that fails.
 
 **Spans are sanitised before export — `SpanSanitisingProcessor`**, because they go to `AppRequests` /
-`AppDependencies`, a different store from the audit records with its own retention, where tool arguments
-are not permitted. A probe of SDK 2.2.0 found caller text reaching spans by three routes, and the processor
-closes each:
+`AppDependencies` — different tables from the audit records, with their own retention, where tool
+arguments are not permitted. (Same workspace: table-level RBAC cannot fence them apart, as recorded under
+`AuditOptions`.) Probes of SDK 2.2.0 found caller text reaching spans by seven routes — the first review
+found three and its re-run four more — which is why the MCP branch is **allowlist-based** rather than a list
+of known leaks:
 
-| Route | What the SDK does | The processor |
+| Where | What the SDK does | The processor |
 |---|---|---|
 | `StatusDescription`, any span | copies a failed tool call's whole error text there — the caller's input (`got 'alice@example.com'`) and Vitally's response body | clears it; the status code stays |
-| `gen_ai.tool.name` and the span name, MCP spans | records an invented tool name verbatim | rewrites it to `unrecognised` unless it is in `KnownToolNames` |
-| `jsonrpc.request.id`, MCP spans | records whatever id the client sent | drops it |
+| `mcp.method.name`, MCP spans | records whatever method the caller named, including unknown methods and notifications | keeps it only if the SDK defines it (read from its own `RequestMethods` / `NotificationMethods` constants), else `unrecognised` |
+| `gen_ai.tool.name`, MCP spans | records an invented tool name verbatim | keeps it only if it is in `KnownToolNames`, else `unrecognised` |
+| every other MCP tag | `jsonrpc.request.id`, `mcp.resource.uri`, `gen_ai.prompt.name` all carry caller values | dropped unless on `SpanSanitisingProcessor.AllowedMcpTags`, so a future SDK tag is dropped by default |
+| the span name, MCP spans | `<method>` or `<method> <target>`, the target being the caller's tool, prompt or resource | **rebuilt** from the cleaned method and tool — never patched |
 
 The Azure Monitor exporter in 1.6.0 does not appear to read `StatusDescription` (inferred from its
 metadata, not observed), so that row is defence against a future exporter rather than a known live leak.
-`TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText` runs the processor over real
-SDK spans from a successful call, a failing call and an unknown tool, and carries its own controls: that the
-caller text did reach the raw spans, and that a span carries `gen_ai.tool.name` at all — so it cannot pass
-by scanning nothing. ⚠️ **Its scope is MCP SDK and ASP.NET Core server spans.** The harness stubs the
+
+**Order is pinned too.** OpenTelemetry runs processors in the order they were added. Today the distro
+appends Live Metrics and the batch exporter after all user configuration, so a processor added in a second
+`AddOpenTelemetry()` call runs first — but that is a distro implementation detail, and the exporter test now
+asserts both `SpanSanitisingProcessor` and `QueryStringRedactingProcessor` precede them. (Mutating in
+`OnEnd` is race-free: the batch processor only enqueues there.)
+
+`TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText` runs the processor by hand over
+real SDK spans from a successful call (the baseline), a failing call, an unknown tool, an unknown method, an
+unknown notification, `prompts/get` and `resources/read`. Its controls show the sentinel reached the raw span
+by each of those six routes, and that a span carries `gen_ai.tool.name` at all, so it cannot pass by
+scanning nothing; disabling the tag allowlist fails it. `jsonrpc.request.id` is unit-tested only, because the
+harness sends a constant id. ⚠️ **Its scope is MCP SDK and ASP.NET Core server spans.** The harness stubs the
 primary HTTP handler, so no `HttpClient` dependency span exists there, and the caller-typed **path segment**
 gap in `AppDependencies` noted under the log levels still stands.
 
-⚠️ **The exporter test disposes its `TracerProvider` and `MeterProvider` explicitly**, because disposing
-the `WebApplicationFactory` does not (observed 2026-10-01, sync and async alike, with no exception). The
-leaked provider stayed subscribed to the MCP source and ran `SpanSanitisingProcessor` over later tests'
-spans, which failed the PII test whenever it ran afterwards. A post-dispose guard in that test catches a
-recurrence, and `TelemetryRedactionTests` is in the serialised collection so the guard cannot flake. Why
-only some test orderings exposed it was not established.
+⚠️ **The exporter test disposes its `TracerProvider` and `MeterProvider` explicitly**, because inside the
+test suite disposing the `WebApplicationFactory` does not (observed 2026-10-01, sync and async alike, with
+no exception). A standalone process showed the factory's disposal *does* dispose the provider, so the cause
+depends on the suite context and was not established — do not generalise it. The leaked provider stayed
+subscribed to the MCP source and ran `SpanSanitisingProcessor` over later tests' spans, which failed the PII
+test whenever it ran afterwards. A post-dispose guard in that test catches a recurrence (removing the explicit
+disposal fails it), and `TelemetryRedactionTests` is in the serialised collection so the guard cannot flake.
 
 **What this adds to the earlier "slow requests" diagnosis.** That diagnosis *was* measured — about 5 s
-per `/mcp` call from the `Request finished` lines, against about 70 s of model time per tool turn — but
-only as whole-request times, and #143's `Microsoft.AspNetCore.Hosting` filter has since suppressed those
-lines. These signals restore the request-level view (sampled spans) and add what was never available: the
-breakdown of a slow call into its upstream calls.
+per `/mcp` call from the `Request finished` lines, against about 70 s of model time per tool turn — and
+#143's `Microsoft.AspNetCore.Hosting.Diagnostics` filter has since suppressed those lines. Request
+(`AppRequests`) and dependency (`AppDependencies`) spans have been exported since #147, so a sampled
+per-upstream breakdown already existed by joining on `operation_Id`. What phase 6 adds is that breakdown
+**unsampled**, as `AuditDurationMs` joined by correlation id, plus the MCP SDK's own spans. ⚠️ It also
+**reduced** span coverage: the default 5 traces a second kept roughly every trace at this server's volume,
+and 10% keeps one in ten — a deliberate cost trade, made safe for the audit trail by #178.
 
 **Vitally API Parameters:**
 - Pagination uses `from` parameter (not `cursor`) - pass the `next` value from previous response

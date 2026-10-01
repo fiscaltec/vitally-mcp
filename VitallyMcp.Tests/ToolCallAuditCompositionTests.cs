@@ -262,6 +262,24 @@ public class ToolCallAuditCompositionTests
             return Unwrap(await response.Content.ReadAsStringAsync());
         }
 
+        /// <summary>
+        /// Any JSON-RPC message on the legacy path — an unknown method, a notification (no id), a
+        /// prompt or resource request — for the tests that need the SDK to see requests no tool call makes.
+        /// </summary>
+        public async Task SendRawAsync(string method, string paramsJson, bool notification = false)
+        {
+            using var client = _factory.CreateClient();
+            var id = notification ? "" : "\"id\":1,";
+            var body = "{\"jsonrpc\":\"2.0\"," + id + "\"method\":\"" + method + "\",\"params\":" + paramsJson + "}";
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            using var response = await client.SendAsync(request);
+            await response.Content.ReadAsStringAsync();
+        }
+
         public async Task<string> CallToolAsync(string toolName, string argumentsJson = "{}")
         {
             using var client = _factory.CreateClient();
@@ -701,14 +719,16 @@ public class ToolCallAuditCompositionTests
         // 1. The source name is real. A source registered under a name nothing publishes is accepted
         //    silently and captures nothing, and the name comes from the SDK rather than from us.
         //
-        // 2. The PII gate, run over REAL SDK spans through the processor Program.cs registers. Tool
+        // 2. The PII gate: the processor type Program.cs registers, run BY HAND over real SDK spans
+        //    (its position in the exported pipeline is pinned separately, in the exporter test). Tool
         //    arguments are permitted in the audit record (AppEvents, under its access control), but
-        //    spans go to AppRequests / AppDependencies — a different store, with its own retention.
+        //    spans go to AppRequests / AppDependencies — different tables, with their own retention.
         //
-        // Three calls, each reaching the SDK's span by a different route: an argument on a successful
-        // call, an argument echoed back in a failed call's error text (StatusDescription), and an
-        // invented tool name (gen_ai.tool.name and the span name). The controls below assert that the
-        // caller text DID reach the raw spans, so the gate cannot pass vacuously.
+        // Each call reaches the SDK's span by a different route: an argument echoed in a failed call's
+        // error text (StatusDescription), an invented tool name, an unknown method, an unknown
+        // notification, a prompt name and a resource uri. The successful call is there as a baseline
+        // that must stay clean. The controls below assert that the caller text DID reach the raw spans
+        // by each route, so the gate cannot pass vacuously.
         //
         // Scope, stated so this is not misread: it covers MCP SDK and ASP.NET Core server spans only.
         // The harness stubs the PRIMARY handler, so no HttpClient dependency span is created here, and
@@ -729,6 +749,13 @@ public class ToolCallAuditCompositionTests
         await harness.CallToolAsync("List_notes", "{\"createdAfter\":\"" + sentinel + "\"}");
         await harness.CallToolAsync("Tool_" + sentinel);
 
+        // The routes the re-review probe found, none of which involves a tool: an unknown method, an
+        // unknown notification, and the prompt and resource requests whose target the SDK records.
+        await harness.SendRawAsync("Method_" + sentinel, "{}");
+        await harness.SendRawAsync("notifications/" + sentinel, "{}", notification: true);
+        await harness.SendRawAsync("prompts/get", "{\"name\":\"" + sentinel + "\"}");
+        await harness.SendRawAsync("resources/read", "{\"uri\":\"https://" + sentinel + "/x\"}");
+
         List<System.Diagnostics.Activity> captured;
         lock (activities) captured = [.. activities];
         var mcp = captured.Where(a => a.Source.Name == TelemetrySources.McpActivitySource).ToList();
@@ -745,6 +772,14 @@ public class ToolCallAuditCompositionTests
                 $"{a.Source.Name}:{a.DisplayName}:{a.Status}:'{a.StatusDescription}'")));
         mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.ToolNameTag), sentinel),
             "the invented tool name reaches gen_ai.tool.name before sanitising");
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.MethodTag), "Method_" + sentinel),
+            "the unknown method reaches mcp.method.name before sanitising");
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.MethodTag), "notifications/" + sentinel),
+            "the unknown notification reaches mcp.method.name before sanitising");
+        mcp.Should().Contain(a => a.DisplayName.Contains("prompts/get", StringComparison.Ordinal) && Carries(a.DisplayName, sentinel),
+            "the prompt name reaches the span name before sanitising");
+        mcp.Should().Contain(a => a.TagObjects.Any(t => t.Key == "mcp.resource.uri" && Carries(t.Value, sentinel)),
+            "the resource uri reaches a tag before sanitising");
 
         var sanitiser = new SpanSanitisingProcessor(harness.Services.GetRequiredService<KnownToolNames>());
         foreach (var activity in captured)
