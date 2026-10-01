@@ -122,8 +122,9 @@ public class AuditLogger
     /// <param name="duration">
     /// How long the upstream call took, request sent to body read (#94). Written as whole
     /// milliseconds, matching the tool-call record, so a slow tool can be decomposed into its upstream
-    /// calls by correlation id. <c>-1</c> when not measured — never <c>0</c>, which would claim a
-    /// measurement that was not taken.
+    /// calls by correlation id. Truncated to whole milliseconds, so a sub-millisecond call records
+    /// <c>0</c> — a real measurement. Only <c>-1</c> means not measured; an unmeasured call is never
+    /// written as <c>0</c>, which would claim a measurement that was not taken.
     /// </param>
     public void LogAction(HttpMethod method, string url, int statusCode, string? correlationId = null,
         TimeSpan? duration = null)

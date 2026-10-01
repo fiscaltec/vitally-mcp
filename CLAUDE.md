@@ -1029,7 +1029,8 @@ Three caveats on reading those, each of which would otherwise send a query wrong
   there are; the failure records are where those appear. It also starts *after* the API key is resolved,
   so a cold Key Vault fetch shows in the tool-call duration and in no upstream one. It is also gated by `Audit:Enabled` / `Audit:IncludeReads`, so
   turning reads off as the ingest-cost lever removes every GET's duration too. `AuditDurationMs` is the
-  same property name on `VitallyToolCall`, so filter on `Name`. `-1` means unmeasured and is unreachable
+  same property name on `VitallyToolCall`, so filter on `Name`. Values are truncated to whole
+  milliseconds, so `0` is a real sub-millisecond measurement; `-1` means unmeasured and is unreachable
   from `SendAsync`, which always passes the elapsed time.
 - **The `group_membership` hit rate counts lookups, and is inflated by design.** `ToolAuthorizer` does not
   memoise, and SDK 2.2.0 runs at least three checks per `tools/call`, so a single cold call records one miss
