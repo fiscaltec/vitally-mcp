@@ -48,7 +48,8 @@ public sealed class UpstreamOidcMetadata(
     IHttpClientFactory httpClientFactory,
     IOptions<OAuthOptions> options,
     IMemoryCache cache,
-    ILogger<UpstreamOidcMetadata> logger)
+    ILogger<UpstreamOidcMetadata> logger,
+    VitallyMetrics? metrics = null)
 {
     /// <summary>Named <see cref="HttpClient"/> used for the discovery fetch, registered in Program.cs.</summary>
     public const string HttpClientName = "upstream-oidc-discovery";
@@ -94,8 +95,13 @@ public sealed class UpstreamOidcMetadata(
     {
         if (cache.TryGetValue<UpstreamOidcEndpoints>(CacheKey, out var cached) && cached is not null)
         {
+            metrics?.CacheLookup("oidc_discovery", hit: true);
             return cached;
         }
+
+        // A miss whether the fetch then succeeds or falls back to the last-known-good copy: the cache
+        // did not spare the round-trip to the identity provider either way.
+        metrics?.CacheLookup("oidc_discovery", hit: false);
 
         var discoveryUrl = DiscoveryUrl(options.Value.Authority);
 

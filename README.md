@@ -215,7 +215,7 @@ Full per-tool descriptions are auto-generated from the `[McpServerTool]` attribu
   | Record | Emitted at | Carries |
   |---|---|---|
   | **Tool call** | a call-tool filter, once per *executed* `tools/call` | object id, tool name, **the arguments**, the ids of the records touched, counts, outcome, duration, permission tier, correlation id |
-  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code, correlation id |
+  | Action | `VitallyService.SendAsync`, after each upstream response | object id, HTTP verb, resource path (query string stripped), status code, duration, correlation id |
   | Service denial | `SendAsync`, on an RBAC refusal | object id, HTTP verb, resource path — no status, the call never happened |
   | Tier denial | the SDK `[Authorize]` checkpoint, *before* `SendAsync` runs | object id, tool name, required permission — no verb or path, no upstream call was attempted |
 

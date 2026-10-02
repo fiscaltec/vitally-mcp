@@ -74,11 +74,12 @@ public class VitallyRateLimitHandlerTests : IDisposable
     }
 
     private (HttpClient client, QueueingHandler inner, Mock<ILogger<VitallyRateLimitHandler>> logger) BuildClient(
-        Action<VitallyRateLimitHandler>? configure = null)
+        Action<VitallyRateLimitHandler>? configure = null,
+        VitallyMetrics? metrics = null)
     {
         var inner = new QueueingHandler();
         var logger = new Mock<ILogger<VitallyRateLimitHandler>>();
-        var handler = new VitallyRateLimitHandler(logger.Object)
+        var handler = new VitallyRateLimitHandler(logger.Object, metrics: metrics)
         {
             InnerHandler = inner,
             // Use tiny fallback so tests are fast even when 429 has no Retry-After.
@@ -102,6 +103,56 @@ public class VitallyRateLimitHandlerTests : IDisposable
         }
         _clients.Clear();
         GC.SuppressFinalize(this);
+    }
+
+    [Fact]
+    public async Task Counts_EachRetry_AndNoExhaustion_WhenARetrySucceeds()
+    {
+        // #94: "retries exhausted" was only a log line, text to parse; a counter is a pre-aggregated
+        // series of how often the server exceeds Vitally's 1000 req/min budget.
+        using var capture = new MetricCapture();
+        var (client, inner, _) = BuildClient(metrics: capture.Metrics);
+        inner.Responses.Enqueue(TooManyRequests());
+        inner.Responses.Enqueue(TooManyRequests());
+        inner.Responses.Enqueue(Ok());
+
+        using var response = await client.GetAsync("http://example.test/x");
+
+        capture.Total("vitally.ratelimit.retries").Should().Be(2);
+        capture.Total("vitally.ratelimit.exhausted").Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DoesNotCountARetry_ThatIsCancelledDuringTheBackoff()
+    {
+        // A timeout or a cancelled caller during the wait means no retry request is ever sent, so
+        // counting it would overstate how often the budget was exceeded (Copilot on #182).
+        using var capture = new MetricCapture();
+        var (client, inner, _) = BuildClient(h => h.FallbackRetryDelay = TimeSpan.FromSeconds(30), capture.Metrics);
+        inner.Responses.Enqueue(TooManyRequests());
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = () => client.GetAsync("http://example.test/x", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        capture.Total("vitally.ratelimit.retries").Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Counts_Exhaustion_WhenEveryRetryIsRateLimited()
+    {
+        using var capture = new MetricCapture();
+        var (client, inner, _) = BuildClient(h => h.MaxRetries = 2, capture.Metrics);
+        for (var i = 0; i < 3; i++)
+        {
+            inner.Responses.Enqueue(TooManyRequests());
+        }
+
+        using var response = await client.GetAsync("http://example.test/x");
+
+        response.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        capture.Total("vitally.ratelimit.retries").Should().Be(2);
+        capture.Total("vitally.ratelimit.exhausted").Should().Be(1);
     }
 
     [Fact]

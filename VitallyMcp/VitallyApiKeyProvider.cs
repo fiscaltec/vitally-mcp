@@ -23,13 +23,17 @@ public class VitallyApiKeyProvider
         IOptions<VitallyServerOptions> options,
         IMemoryCache cache,
         ILogger<VitallyApiKeyProvider> logger,
-        SecretClient? secretClient = null)
+        SecretClient? secretClient = null,
+        VitallyMetrics? metrics = null)
     {
         _options = options.Value;
         _cache = cache;
         _logger = logger;
         _secretClient = secretClient;
+        _metrics = metrics;
     }
+
+    private readonly VitallyMetrics? _metrics;
 
     public async Task<string> GetApiKeyAsync(CancellationToken cancellationToken = default)
     {
@@ -46,10 +50,15 @@ public class VitallyApiKeyProvider
         var secretRef = _options.DefaultSecretRef;
         var cacheKey = $"vitally-api-key::{secretRef}";
 
+        // Counted only on this Key Vault path (#94). The development key above involves no cache, so
+        // counting it would inflate the hit rate with lookups that never happened.
         if (_cache.TryGetValue<string>(cacheKey, out var cached) && cached is not null)
         {
+            _metrics?.CacheLookup("api_key", hit: true);
             return cached;
         }
+
+        _metrics?.CacheLookup("api_key", hit: false);
 
         LogBestEffort(() => _logger.LogDebug("Fetching Vitally API key from Key Vault (secret: {SecretRef})", secretRef));
         // Logged here because nothing else can say why (#94). Every tool call depends on this key, so

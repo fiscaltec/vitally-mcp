@@ -73,9 +73,9 @@ proceeding, and verify afterwards by signing in.
 
 `application_insights_connection_string` (added 2026-09-25, #147) has the same shape and a worse
 payload. Omitting it is safe — no default, so Terraform stops. A **placeholder** is the hazard, and
-it costs more than the export: `Program.cs:134` tests the value with `IsNullOrWhiteSpace`, so any
+it costs more than the export: `Program.cs`'s `exporterConfigured` check tests the value with `IsNullOrWhiteSpace`, so any
 non-empty string makes `exporterConfigured` true, which registers the exporter (whose sends then fail)
-**and** the console suppression at `Program.cs:176`. The records are taken off stdout and cannot be
+**and** the console filter on `VitallyMcp.AuditLogger` in `Program.cs`. The records are taken off stdout and cannot be
 delivered — no audit trail anywhere, reported by nothing, since a failed export cannot be detected
 in-process. That is why it has no default and no line in `terraform.tfvars.example`.
 

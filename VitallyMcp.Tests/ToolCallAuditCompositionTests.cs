@@ -151,6 +151,9 @@ public class ToolCallAuditCompositionTests
         /// <summary>The exception attached to each SDK record, index-aligned with <see cref="SdkRecords"/>.</summary>
         public IReadOnlyList<Exception?> SdkExceptions => _sdk.Exceptions;
 
+        /// <summary>The composed host's services — for resolving what the real wiring produced.</summary>
+        public IServiceProvider Services => _factory.Services;
+
         public IReadOnlyList<(LogLevel Level, string Message)> AuditRecords => _audit.Entries;
 
         /// <summary>Records from the tool-call failure log (#94).</summary>
@@ -257,6 +260,24 @@ public class ToolCallAuditCompositionTests
 
             using var response = await client.SendAsync(request);
             return Unwrap(await response.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>
+        /// Any JSON-RPC message on the legacy path — an unknown method, a notification (no id), a
+        /// prompt or resource request — for the tests that need the SDK to see requests no tool call makes.
+        /// </summary>
+        public async Task SendRawAsync(string method, string paramsJson, bool notification = false)
+        {
+            using var client = _factory.CreateClient();
+            var id = notification ? "" : "\"id\":1,";
+            var body = "{\"jsonrpc\":\"2.0\"," + id + "\"method\":\"" + method + "\",\"params\":" + paramsJson + "}";
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            using var response = await client.SendAsync(request);
+            await response.Content.ReadAsStringAsync();
         }
 
         public async Task<string> CallToolAsync(string toolName, string argumentsJson = "{}")
@@ -665,4 +686,121 @@ public class ToolCallAuditCompositionTests
 
         harness.FailureRecords.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task TheComposedHost_InjectsTheCounters_IntoTheComponentsThatRecordThem()
+    {
+        // #94. VitallyMetrics reaches every consumer as an OPTIONAL constructor parameter, so a
+        // registration that never resolved would leave each one with null and record nothing — and
+        // every unit test, which injects it by hand, would still pass. Asserted through the real
+        // wiring: a pager that never runs out of pages must be counted as truncated.
+        using var harness = new Harness(
+            """{"results":[{"id":"org-1","name":"Acme"}],"next":"more"}""");
+        using var capture = new MetricCapture(
+            harness.Services.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>());
+
+        await harness.CallToolAsync("List_organizations", """{"nameContains":"Acme"}""");
+
+        capture.Total("vitally.autopager.truncations", ("resource", "organizations")).Should().Be(1);
+
+        // A second consumer, registered differently: the Graph resolver is a typed HttpClient the
+        // harness re-registers, and this host runs the live group check, so it must have counted.
+        // The OIDC resolver, the API-key provider and the rate limiter are not reachable here (no
+        // proxy, the development key, and a 5 s retry fallback) and are covered by their unit tests.
+        capture.Total("vitally.cache.lookups", ("cache", "group_membership")).Should().BeGreaterThan(0,
+            "the Graph resolver must receive the counters through the real wiring too");
+    }
+
+    [Fact]
+    public async Task TheMcpSdk_PublishesTheSourceWeRegister_AndNoSanitisedSpanCarriesCallerText()
+    {
+        // About the SDK's spans, which Program.cs registers with the exporter:
+        //
+        // 1. The source name is real. A source registered under a name nothing publishes is accepted
+        //    silently and captures nothing, and the name comes from the SDK rather than from us.
+        //
+        // 2. The PII gate: the processor type Program.cs registers, run BY HAND over real SDK spans
+        //    (its position in the exported pipeline is pinned separately, in the exporter test). Tool
+        //    arguments are permitted in the audit record (AppEvents, under its access control), but
+        //    spans go to AppRequests / AppDependencies — different tables, with their own retention.
+        //
+        // Each call reaches the SDK's span by a different route: an argument echoed in a failed call's
+        // error text (StatusDescription), an invented tool name, an unknown method, an unknown
+        // notification, a prompt name and a resource uri. The successful call is there as a baseline
+        // that must stay clean. The controls below assert that the caller text DID reach the raw spans
+        // by each route, so the gate cannot pass vacuously.
+        //
+        // Scope, stated so this is not misread: it covers MCP SDK and ASP.NET Core server spans only.
+        // The harness stubs the PRIMARY handler, so no HttpClient dependency span is created here, and
+        // AppDependencies' caller-typed path segments remain the open gap CLAUDE.md records.
+        const string sentinel = "argumentsentinelvalue";
+        var activities = new List<System.Diagnostics.Activity>();
+        using var activityListener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = _ => true,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a => { lock (activities) activities.Add(a); },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(activityListener);
+
+        using var harness = new Harness(TwoOrganisations);
+        await harness.CallToolAsync("List_organizations", "{\"nameContains\":\"" + sentinel + "\"}");
+        await harness.CallToolAsync("List_notes", "{\"createdAfter\":\"" + sentinel + "\"}");
+        await harness.CallToolAsync("Tool_" + sentinel);
+
+        // The routes the re-review probe found, none of which involves a tool: an unknown method, an
+        // unknown notification, and the prompt and resource requests whose target the SDK records.
+        await harness.SendRawAsync("Method_" + sentinel, "{}");
+        await harness.SendRawAsync("notifications/" + sentinel, "{}", notification: true);
+        await harness.SendRawAsync("prompts/get", "{\"name\":\"" + sentinel + "\"}");
+        await harness.SendRawAsync("resources/read", "{\"uri\":\"https://" + sentinel + "/x\"}");
+
+        List<System.Diagnostics.Activity> captured;
+        lock (activities) captured = [.. activities];
+        var mcp = captured.Where(a => a.Source.Name == TelemetrySources.McpActivitySource).ToList();
+
+        mcp.Should().NotBeEmpty("Program.cs registers this source name; observed sources: "
+            + string.Join(", ", captured.Select(a => a.Source.Name).Distinct()));
+
+        // Controls: the scan must see real attributes, and the caller text must have reached them.
+        mcp.Should().Contain(a => Equals(a.GetTagItem(SpanSanitisingProcessor.ToolNameTag), "List_organizations"),
+            "a span carries the registered tool name, so the attribute scan below is not looking at nothing");
+        captured.Should().Contain(a => Carries(a.StatusDescription, sentinel),
+            "the failed call's error text reaches StatusDescription before sanitising — the leak this gates. "
+            + "Observed: " + string.Join(" | ", captured.Select(a =>
+                $"{a.Source.Name}:{a.DisplayName}:{a.Status}:'{a.StatusDescription}'")));
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.ToolNameTag), sentinel),
+            "the invented tool name reaches gen_ai.tool.name before sanitising");
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.MethodTag), "Method_" + sentinel),
+            "the unknown method reaches mcp.method.name before sanitising");
+        mcp.Should().Contain(a => Carries(a.GetTagItem(SpanSanitisingProcessor.MethodTag), "notifications/" + sentinel),
+            "the unknown notification reaches mcp.method.name before sanitising");
+        mcp.Should().Contain(a => a.DisplayName.Contains("prompts/get", StringComparison.Ordinal) && Carries(a.DisplayName, sentinel),
+            "the prompt name reaches the span name before sanitising");
+        mcp.Should().Contain(a => a.TagObjects.Any(t => t.Key == "mcp.resource.uri" && Carries(t.Value, sentinel)),
+            "the resource uri reaches a tag before sanitising");
+
+        var sanitiser = new SpanSanitisingProcessor(harness.Services.GetRequiredService<KnownToolNames>());
+        foreach (var activity in captured)
+        {
+            sanitiser.OnEnd(activity);
+        }
+
+        foreach (var activity in captured)
+        {
+            activity.DisplayName.Should().NotContain(sentinel);
+            Carries(activity.StatusDescription, sentinel).Should().BeFalse(
+                $"span '{activity.DisplayName}' must not keep a failed call's error text");
+            activity.TagObjects.Should().NotContain(t => Carries(t.Value, sentinel),
+                $"span '{activity.DisplayName}' must not carry caller text in an attribute");
+            activity.Events.SelectMany(e => e.Tags).Should().NotContain(t => Carries(t.Value, sentinel));
+            activity.Events.Should().NotContain(e => Carries(e.Name, sentinel));
+        }
+    }
+
+    // A method rather than an inline `?.`: FluentAssertions compiles these predicates as expression
+    // trees, which cannot contain a null-propagating operator.
+    private static bool Carries(object? value, string sentinel) =>
+        value is not null && (value.ToString() ?? "").Contains(sentinel, StringComparison.Ordinal);
 }

@@ -61,6 +61,10 @@ repo was on when this was written. It has since moved to 2.2.0 — treat
 package before wiring anything to them**, since they were not re-checked after the bump:
 
 - ActivitySource **`ModelContextProtocol`**; Meter **`Experimental.ModelContextProtocol`**
+  - ⚠️ **Re-verified 2026-10-01 against SDK 2.2.0 (#94): the ActivitySource is
+    `Experimental.ModelContextProtocol` as well, not `ModelContextProtocol`.** The warning above was
+    warranted; registering the name given here would have captured nothing. `TelemetrySources` in the
+    code is the authority now.
 - Metrics: `mcp.server.operation.duration`, `mcp.server.session.duration` (and client equivalents)
 - Tags: `mcp.method.name`, `gen_ai.tool.name`, `rpc.response.status_code`,
   `mcp.protocol.version`, `mcp.session.id`, `mcp.resource.uri`
@@ -224,10 +228,19 @@ Register OpenTelemetry, subscribing to the SDK's `ModelContextProtocol` Activity
 `Experimental.ModelContextProtocol` meter, plus HttpClient and ASP.NET Core instrumentation, exported
 to the existing App Insights component.
 
+> ⚠️ **Superseded by what #94 built (2026-10-01).** The ActivitySource is
+> `Experimental.ModelContextProtocol`, and the SDK's meter is deliberately **not** registered — its
+> `gen_ai.tool.name` dimension carries caller-invented tool names. See *Metrics and tracing* in `CLAUDE.md`.
+
 **With redaction applied at registration**, as a hard requirement: `url.full` and any URL-bearing
 attribute reduced to its path, matching `AuditLogger.ResourcePath()`. Enforced by a test that
 asserts a known-sensitive value (an email passed to `Search_users`) never appears in any emitted
 telemetry attribute. This test is the gate on the whole phase.
+
+> ⚠️ **As built (#162, #94):** the query string is redacted by `QueryStringRedactingProcessor` (tested
+> directly), and MCP and request spans are sanitised by `SpanSanitisingProcessor`. No test covers
+> `HttpClient` dependency spans end to end, and their caller-typed **path segments** are not redacted —
+> see the log-levels note in `CLAUDE.md`.
 
 ### Coverage gaps to close
 
@@ -246,7 +259,9 @@ telemetry attribute. This test is the gate on the whole phase.
 
 ### Tracing
 
-Enabled at **10% head sampling, with errors sampled at 100%**. Justification: metrics can report that
+Enabled at **10% head sampling, with errors sampled at 100%** (⚠️ the second half is not achievable
+with head sampling, which decides before the outcome is known — #94 shipped 10% head sampling alone).
+Justification: metrics can report that
 `Get_organization_summary` has a slow p95 but cannot say *which* of its four upstream calls
 dominated, and the auto-pager can make up to ten. Traces decompose fan-out latency, which aggregates
 structurally cannot. Since redaction is mandatory regardless, the marginal cost is ingest on sampled

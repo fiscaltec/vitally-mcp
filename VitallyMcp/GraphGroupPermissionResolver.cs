@@ -53,7 +53,8 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         IMemoryCache cache,
         IOptions<ToolAuthorizationOptions> options,
         ILogger<GraphGroupPermissionResolver> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        VitallyMetrics? metrics = null)
     {
         _httpClient = httpClient;
         _credential = credential;
@@ -61,7 +62,10 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
         _options = options.Value;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _metrics = metrics;
     }
+
+    private readonly VitallyMetrics? _metrics;
 
     /// <summary>A successful lookup plus when it was resolved, so its age drives both windows.</summary>
     private sealed record CachedPermissions(IReadOnlySet<string> Permissions, DateTimeOffset ResolvedAt);
@@ -90,6 +94,7 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             // through here labelled Confirmed — recording out-of-date data as checked, and stretching
             // the fresh window past a revocation. Pinned by
             // ReportsServedStale_OnEveryCall_ThroughAnOutage_NotOnlyTheFirst.
+            _metrics?.CacheLookup("group_membership", hit: true);
             return ResolvedPermissions.Confirmed(lastKnownGood.Permissions, now - lastKnownGood.ResolvedAt);
         }
 
@@ -105,6 +110,11 @@ public class GraphGroupPermissionResolver : IGroupPermissionResolver
             // call site resolving permissions outside ToolAuthorizer.
             return null;
         }
+
+        // A miss is "had to ask Graph", whatever Graph then answers. A stale serve after a failed
+        // call is still a miss here: the cache did not spare the round-trip, and the stale serve has
+        // its own warning line.
+        _metrics?.CacheLookup("group_membership", hit: false);
 
         try
         {

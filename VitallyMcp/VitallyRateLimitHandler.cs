@@ -20,11 +20,20 @@ public class VitallyRateLimitHandler : DelegatingHandler
     private readonly ILogger<VitallyRateLimitHandler>? _logger;
     private readonly TimeProvider _timeProvider;
 
-    public VitallyRateLimitHandler(ILogger<VitallyRateLimitHandler>? logger = null, TimeProvider? timeProvider = null)
+    public VitallyRateLimitHandler(
+        ILogger<VitallyRateLimitHandler>? logger = null,
+        TimeProvider? timeProvider = null,
+        VitallyMetrics? metrics = null)
     {
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _metrics = metrics;
     }
+
+    // Counted as well as logged (#94): a counter is a pre-aggregated series rather than text to parse.
+    // It fires only once the limit HAS been hit, so it says how often the server exceeds the 1000
+    // req/min budget; how close it runs is X-RateLimit-Remaining, which is only logged.
+    private readonly VitallyMetrics? _metrics;
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -42,6 +51,7 @@ public class VitallyRateLimitHandler : DelegatingHandler
 
             if (attempt >= MaxRetries)
             {
+                _metrics?.RateLimitExhausted();
                 _logger?.LogWarning(
                     "Vitally rate limit exceeded ({StatusCode}); {MaxRetries} retries exhausted, returning 429 to caller.",
                     (int)response.StatusCode, MaxRetries);
@@ -55,6 +65,11 @@ public class VitallyRateLimitHandler : DelegatingHandler
 
             response.Dispose();
             await Task.Delay(delay, cancellationToken);
+
+            // Counted only once the backoff has completed and the retry is actually about to be sent: a
+            // timeout or a cancelled caller during the wait sends nothing, and would otherwise overstate
+            // how often the budget was exceeded (Copilot on #182).
+            _metrics?.RateLimitRetry();
         }
     }
 

@@ -351,7 +351,7 @@ if volume ever forces a cut, this is the tier to cut — the reverse of the earl
 > body, an exception message or the rest of the path. The Key Vault record is the deliberate
 > exception: it attaches Azure's exception, which carries its status and code but no secret or
 > customer data. See `ToolCallFailureLog` and the log-levels note in `CLAUDE.md`. The rate-limit
-> **counter** is phase 6 and not in that PR. The findings are kept as written, because they record
+> **counter** is phase 6, delivered by #94's second PR (2026-10-01). The findings are kept as written, because they record
 > why the records have the shape they do.
 
 - **The CallTool filter swallows errors.** `Program.cs` catches every surfaceable exception and
@@ -391,15 +391,26 @@ Nothing exists. Add, in order of value:
    90% of the trail. #178 decouples them; land it first. Two further constraints, both verified:
    `TracesPerSecond` (default 5) **overrides** `SamplingRatio`, so percentage sampling also needs
    `TracesPerSecond = null`; and "errors at 100%" **cannot** be had from head sampling, which decides
-   before the outcome is known. Failures stay fully visible through the #94 failure records and the
-   metrics, which are never sampled.
+   before the outcome is known. Failures stay visible, unsampled, through the #94 failure records; the
+   counters cover rate-limit exhaustion but no other failure.
 
 Prefer `System.Diagnostics.Metrics` / OpenTelemetry over ad-hoc logging so these are dimensions, not
 lines to grep.
 
 Note for whoever picks this up: the earlier "slow requests" investigation concluded model inference
-rather than the server. That was reasoned, not measured — because there is nothing to measure with.
-This work makes that conclusion checkable.
+rather than the server. ⚠️ **Corrected 2026-10-01:** this note originally said that was "reasoned, not
+measured". It was measured — about 5 s per `/mcp` call from the `Request finished` lines, against about
+70 s of model time per tool turn. What was missing was an unsampled per-upstream-call breakdown, which
+this work adds.
+
+> **Status (2026-10-01): delivered by #94's second PR.** Upstream durations on the
+> `VitallyUpstreamCall` record; the `VitallyMcp` meter (`vitally.ratelimit.retries` / `.exhausted`,
+> `vitally.autopager.truncations`, `vitally.cache.lookups`); the MCP SDK's activity source registered,
+> with `SpanSanitisingProcessor` stripping caller text, and its meter deliberately not; traces at 10%
+> head sampling. Three findings changed the plan: the SDK's activity source is
+> `Experimental.ModelContextProtocol`, not the name the earlier spec gave; its meter would export
+> caller-invented tool names, so it is not registered; and "errors at 100%" is not achievable with head
+> sampling. See *Metrics and tracing* in `CLAUDE.md`.
 
 ### Logging configuration — in code, not `appsettings.json`
 
@@ -628,6 +639,7 @@ The map, so a future incident does not start with "where would that even be":
 | **Audit trail** | `AppEvents` | App Insights SDK, in-process | **yes** — arguments and record ids | long, deliberate |
 | Failures, warnings | `AppTraces` | App Insights SDK | incidental only | medium |
 | Upstream call detail | `AppDependencies` | SDK auto-collection, **sanitised** | ids in paths | medium |
+| Request and MCP spans | `AppRequests` | ASP.NET Core + MCP SDK spans, 10% sampled, `SpanSanitisingProcessor` (#94) | no, once sanitised | medium |
 | Performance counters | `AppMetrics` | `Meter` via SDK | no | short |
 | Container stdout / **app failed to start** | `ContainerAppConsoleLogs` | CAE diagnostic setting (#142) | should not — #143 | short |
 | Platform events, scaling | `ContainerAppSystemLogs` | CAE diagnostic setting | no | short |
@@ -756,10 +768,10 @@ was actually done, so the collision is left in place and flagged rather than tid
 | **2b** | add **`ContainerAppConsoleLogs`** to that setting | #142 | ✅ **done** 2026-09-26 — all-time: production 1,510 rows / **152 breadcrumbs / zero** full audit records; staging 1,911 / 2 / zero. Staging's 2 are one call at enabling time, so its assurance rests on the direct console sample instead. Lands in the resource-specific table, so per-table retention is available to #93. ⚠️ NOT per-target and that outlives the enabling: the setting is on the CAE both apps share, so a staging spin-up without `ApplicationInsights__ConnectionString` exports that app's unsuppressed records |
 | **3a** | access review — a gate rather than a task | #146 | ✅ **done** 2026-09-21 — see the summary below and *Who can read this* |
 | 4 | audit tiers: tool-call record, arguments, returned ids, result count, correlation id, **effective permission tier**, **MCP client** | #147 | ✅ **done** 2026-09-25 — switched on and verified by reading `VitallyToolCall` rows back out of `AppEvents` on **both** targets |
-| 5 | failure logging | #94 | **ready** — 3 done |
-| 6 | performance: durations, counters, tracing | #94 | **ready** — 3 done; reduced trace sampling depends on #178 |
+| 5 | failure logging | #94 | **done** — merged in #177 (2026-09-29) |
+| 6 | performance: durations, counters, tracing | #94 | **built in #94's second PR; not yet verified in Azure** — after #178, which made reduced trace sampling safe. Verified means `AuditDurationMs`, `AppMetrics` rows for the `VitallyMcp` meter and sampled spans read back, as phase 4 was |
 | 7 | routing and retention per tier | #93 | **2b ✅ and 4 ✅** as of 2026-09-26 — remaining dependency is measured volume. Both categories land resource-specific, so per-table retention is available |
-| 8 | dashboards and alerts | #159 | blocked on 4, 5, 6 |
+| 8 | dashboards and alerts | #159 | unblocked once phase 6 is verified in Azure — build against the *Metrics and tracing* section of `CLAUDE.md`, and count sampled tables with `sum(ItemCount)` |
 
 **3a in one line:** humans pass — 4 named IT administrators with elevated access PIM-gated, plus 2
 by-design break-glass accounts. The residual is machine-side: 8 FISCAL-controlled service principals
