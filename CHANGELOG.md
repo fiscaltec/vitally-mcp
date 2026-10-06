@@ -8,6 +8,17 @@ All notable changes to this project are documented here. Format based on
 
 ### Changed
 
+- **Documented the claude.ai connector rename to "FISCAL Vitally MCP"** (from
+  "Vitally MCP", 2026-10-07), made so it can be told apart from Vitally's own
+  official connector (listed as "Vitally"), which was enabled in the FISCAL
+  workspace alongside it. `ACCESS.md` gains a comparison of the two and the
+  Claude Code tool-prefix change (`mcp__claude_ai_Vitally_MCP__*` ->
+  `mcp__claude_ai_FISCAL_Vitally_MCP__*`); `ACCESS.md`, `README.md` and
+  `CLAUDE.md` now point Claude Desktop/claude.ai users at the existing
+  organisation connector rather than "Add custom connector", and suggest
+  `fiscal-vitally` as the standalone Claude Code server name. Docs only - the
+  server, endpoint, Entra app and tiers are unchanged.
+
 - **Migrated the test suite from VSTest to Microsoft.Testing.Platform** to take
   `xunit.v3` `3.2.2` -> `4.0.0`, which drops VSTest support entirely: under the
   .NET 10 SDK its targets fail the build rather than falling back. A `global.json`

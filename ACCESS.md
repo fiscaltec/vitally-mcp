@@ -12,20 +12,48 @@ https://vitally.fiscaltec.com/mcp
 
 On first use the client opens a Microsoft sign-in. After signing in, the server calls Vitally on your behalf using a service key it holds — you never handle a Vitally API key. (Both production and staging go to Entra directly — production since 2026-09-16. You sign in with your normal Microsoft account.)
 
-**Claude Code** — run:
+**Claude Desktop & claude.ai** — the server is already published to the FISCAL Claude workspace as
+the organisation connector **FISCAL Vitally MCP**, so there is no URL to paste: Customize →
+Connectors (Desktop: Settings → Connectors) → **FISCAL Vitally MCP** → Connect. Connecting once
+also makes it available in Claude Code.
+
+**Claude Code on its own** — run:
 
 ```bash
-claude mcp add --transport http vitally https://vitally.fiscaltec.com/mcp
+claude mcp add --transport http fiscal-vitally https://vitally.fiscaltec.com/mcp
 ```
 
-Then trigger any MCP use (e.g. `/mcp`) and Claude Code opens the Microsoft sign-in on first connect. To remove it later: `claude mcp remove vitally`.
+Then trigger any MCP use (e.g. `/mcp`) and Claude Code opens the Microsoft sign-in on first connect. To remove it later: `claude mcp remove fiscal-vitally`. Entries added earlier under the name `vitally` still work unchanged — don't add a second one.
 
 **Other clients:**
 
 | Client | How to connect |
 |---|---|
-| Claude Desktop | Settings → Connectors → Add custom connector → paste `https://vitally.fiscaltec.com/mcp` |
 | VS Code / Cursor / other | Add an MCP server entry pointing at the URL; the client handles sign-in |
+
+### Not the same as Vitally's official connector
+
+Since 2026-10-07 the FISCAL workspace also offers Vitally's own connector, listed simply as
+**Vitally** in the Claude Connector Directory. The organisation connector for *this* server was
+renamed from **Vitally MCP** to **FISCAL Vitally MCP** on the same date so the two can be told apart.
+They are separate services:
+
+| | FISCAL Vitally MCP (this server) | Vitally (official) |
+|---|---|---|
+| Sign-in | Microsoft Entra (FISCAL account) | Vitally account |
+| What you can do | Your `sg-vitally-*` tier (below) | Your permissions and Access Groups in Vitally |
+| Audit trail | Our Log Analytics (`AppEvents`) | Not in our audit trail |
+
+Nothing on this page — the sign-in gate, the tiers, read-only mode, revocation — applies to the
+official connector. Users may use whichever suits their work, but should not enable both in the same
+conversation: the tool sets overlap and the model may call the wrong one.
+
+**Claude Code tool names.** Claude Code derives tool names from the connector or server name, so
+the rename moved claude.ai-connector users from `mcp__claude_ai_Vitally_MCP__*` to
+`mcp__claude_ai_FISCAL_Vitally_MCP__*`. Permission allowlists, hook matchers, skills and `CLAUDE.md`
+files that name the old prefix need updating — stale allowlist entries show up as permission prompts
+returning for Vitally tools. Locally added servers keep their own prefix (`mcp__vitally__*` or
+`mcp__fiscal-vitally__*`) and were unaffected.
 
 ### "It connected, but there are no tools"
 
@@ -72,7 +100,7 @@ Group object IDs (for IT reference):
 Tiers are granted to whole teams by **nesting a department group** inside the relevant
 `sg-vitally-*` group, rather than adding people one by one. **Entra is the source of truth and this
 table is a copy** — read it as indicative and verify there, because it has been stale before (it
-omitted two reader departments between July and September 2026). As of 2026-09-15:
+omitted two reader departments between July and September 2026). As of 2026-10-05 (re-verified against Entra):
 
 | Tier | Departments |
 |---|---|
@@ -102,7 +130,7 @@ regardless of any `sg-vitally-*` membership.
 So access requires **both**: your department assigned to the sign-in app above, **and** membership
 of an `sg-vitally-*` group (permission tier). The assigned departments can be verified live in
 Entra → Enterprise applications → **Vitally MCP** → Users and groups, which is the authority — the IT
-helpdesk article *Vitally MCP – access & administration (IT)* is a copy and has been wrong before.
+helpdesk article *FISCAL Vitally MCP – access & administration (IT)* is a copy and has been wrong before.
 
 > **Direct assignment only (important).** The app requires assignment
 > (`appRoleAssignmentRequired = true`), and Entra honours only **direct** members of an
