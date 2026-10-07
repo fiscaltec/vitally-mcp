@@ -33,12 +33,13 @@ Then trigger any MCP use (e.g. `/mcp`) and Claude Code opens the Microsoft sign-
 
 ### Not the same as Vitally's official connector
 
-Since 2026-10-07 the FISCAL workspace also offers Vitally's own connector, listed simply as
-**Vitally** in the Claude Connector Directory. The organisation connector for *this* server was
-renamed from **Vitally MCP** to **FISCAL Vitally MCP** on the same date so the two can be told apart.
-They are separate services:
+Since 2026-10-07 the FISCAL workspace also offers Vitally's own connector from the Claude Connector
+Directory. The organisation connector for *this* server was renamed from **Vitally MCP** to
+**FISCAL Vitally MCP** on the same date — and the official connector turned out to be listed as
+**Vitally MCP** too, a display name set by Vitally that the workspace cannot change. So the old name
+now means the *official* connector. They are separate services:
 
-| | FISCAL Vitally MCP (this server) | Vitally (official) |
+| | FISCAL Vitally MCP (this server) | Vitally MCP (official) |
 |---|---|---|
 | Sign-in | Microsoft Entra (FISCAL account) | Vitally account |
 | What you can do | Your `sg-vitally-*` tier (below) | Your permissions and Access Groups in Vitally |
@@ -54,6 +55,16 @@ the rename moved claude.ai-connector users from `mcp__claude_ai_Vitally_MCP__*` 
 files that name the old prefix need updating — stale allowlist entries show up as permission prompts
 returning for Vitally tools. Locally added servers keep their own prefix (`mcp__vitally__*` or
 `mcp__fiscal-vitally__*`) and were unaffected.
+
+⚠️ **The old prefix now belongs to the official connector.** Its tools surface as
+`mcp__claude_ai_Vitally_MCP__*` with lower-case names (`search_accounts`, `create_note`,
+`create_task`, `create_custom_object`, …). A stale wildcard allow entry
+`mcp__claude_ai_Vitally_MCP__*` written for this server therefore **auto-approves the official
+connector's write tools** — the failure is silent, not a returning prompt. Such entries must be
+deleted, not left in place; re-add only the official-connector tools a user actually wants.
+
+Note also that the Entra enterprise application gating sign-in to *this* server (below) is named
+**Vitally MCP** — unrelated to the official Claude connector despite the shared name.
 
 ### "It connected, but there are no tools"
 

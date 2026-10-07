@@ -30,7 +30,7 @@ The first time you connect, your client will redirect you to a Microsoft sign-in
 
 ### Claude Desktop
 
-FISCAL users: the server is already published to the FISCAL Claude workspace as the organisation connector **FISCAL Vitally MCP** — Customize → Connectors → **FISCAL Vitally MCP** → Connect. (It is distinct from Vitally's own official connector, listed as **Vitally**; see [ACCESS.md](ACCESS.md#not-the-same-as-vitallys-official-connector).)
+FISCAL users: the server is already published to the FISCAL Claude workspace as the organisation connector **FISCAL Vitally MCP** — Customize → Connectors → **FISCAL Vitally MCP** → Connect. (It is distinct from Vitally's own official connector, which is listed as **Vitally MCP** — the name this server's connector used before 2026-10-07; see [ACCESS.md](ACCESS.md#not-the-same-as-vitallys-official-connector).)
 
 Elsewhere: Settings → Connectors → Add custom connector → paste the URL above. Approve the Microsoft sign-in popup.
 

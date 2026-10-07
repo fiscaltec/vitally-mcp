@@ -8,6 +8,15 @@ All notable changes to this project are documented here. Format based on
 
 ### Changed
 
+- **Corrected the official connector's name to "Vitally MCP"** (not "Vitally",
+  as documented in the rename entry below). Vitally's directory connector uses
+  the display name this server's connector had before 2026-10-07, and the
+  workspace cannot rename it, so it now owns the `mcp__claude_ai_Vitally_MCP__*`
+  tool prefix. `ACCESS.md` warns that stale wildcard allow entries for that
+  prefix silently auto-approve the official connector's write tools and must be
+  deleted, and disambiguates the identically named Entra sign-in app.
+  `README.md` and `CLAUDE.md` updated to match. Docs only.
+
 - **Documented the claude.ai connector rename to "FISCAL Vitally MCP"** (from
   "Vitally MCP", 2026-10-07), made so it can be told apart from Vitally's own
   official connector (listed as "Vitally"), which was enabled in the FISCAL
