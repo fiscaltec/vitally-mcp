@@ -565,10 +565,26 @@ public class VitallyService
         }
     }
 
+    /// <summary>
+    /// Request body for a Vitally write, with <c>Content-Type</c> set to exactly <c>application/json</c>.
+    /// </summary>
+    /// <remarks>
+    /// Vitally rejects any other value with a 400 before it reads the body, including
+    /// <c>application/json; charset=utf-8</c>, which is what the
+    /// <c>StringContent(string, Encoding, string)</c> overload sends (#202). The body is still
+    /// encoded as UTF-8; only the header's charset parameter is dropped. JSON is UTF-8 by
+    /// definition (RFC 8259 §8.1), so nothing is lost.
+    /// </remarks>
+    private static StringContent JsonBody(string jsonBody)
+    {
+        var content = new StringContent(jsonBody, Encoding.UTF8);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        return content;
+    }
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{resourceType}";
-        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+        var content = JsonBody(jsonBody);
 
         return await SendAsync(HttpMethod.Post, url, content);
     }
@@ -576,7 +592,7 @@ public class VitallyService
     public async Task<string> UpdateResourceAsync(string resourceType, string id, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{resourceType}/{id}";
-        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+        var content = JsonBody(jsonBody);
 
         return await SendAsync(HttpMethod.Put, url, content);
     }
@@ -644,7 +660,7 @@ public class VitallyService
     public async Task<string> PostRawAsync(string path, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{path}";
-        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+        var content = JsonBody(jsonBody);
 
         return await SendAsync(HttpMethod.Post, url, content);
     }
