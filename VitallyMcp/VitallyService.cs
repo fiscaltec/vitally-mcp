@@ -581,6 +581,7 @@ public class VitallyService
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         return content;
     }
+
     public async Task<string> CreateResourceAsync(string resourceType, string jsonBody)
     {
         var url = $"{_baseUrl}/resources/{resourceType}";
