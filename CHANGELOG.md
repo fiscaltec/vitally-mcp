@@ -6,6 +6,19 @@ All notable changes to this project are documented here. Format based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every write to Vitally failed with HTTP 400** (#202). `CreateResourceAsync`,
+  `UpdateResourceAsync` and `PostRawAsync` sent `Content-Type: application/json;
+  charset=utf-8`, and Vitally rejects anything other than exactly
+  `application/json` (`{"error":"Expected header Content-Type to be
+  'application/json'"}`) before reading the body. So every `Create_*` and
+  `Update_*` tool, and meeting-participant adds, failed. Production AppEvents
+  show no successful write in the whole retained window (from 2026-09-25).
+  Bodies are still UTF-8 encoded; only the header's charset parameter is
+  dropped. Reads were unaffected. The tests now assert the full header, because
+  the old `MediaType` check ignored the charset parameter.
+
 ### Changed
 
 - **Corrected the official connector's name to "Vitally MCP"** (not "Vitally",

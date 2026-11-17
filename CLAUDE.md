@@ -995,6 +995,8 @@ Raw pass-through methods (no field filtering — for endpoints whose response sh
 - `PostRawAsync(path, jsonBody)`
 - `DeleteRawAsync(path)`
 
+⚠️ **Write bodies must carry `Content-Type: application/json` exactly, with no `charset` parameter.** Vitally answers anything else with a 400 before it reads the body. Build them with the private `JsonBody` helper, not `new StringContent(json, Encoding.UTF8, "application/json")`, because that overload appends `; charset=utf-8`. That overload broke every write tool, unnoticed, until #202. Tests must assert `ContentType.ToString()`; `MediaType` ignores the parameter.
+
 ### Rate-Limit Handler (VitallyRateLimitHandler.cs)
 
 Vitally's documented limit is **1000 requests / minute (sliding window)**. The handler is a `DelegatingHandler` registered via `AddHttpMessageHandler<VitallyRateLimitHandler>()` in `Program.cs`, so all HTTP calls made by `VitallyService` go through it transparently.

@@ -541,13 +541,57 @@ public class VitallyServiceTests
         // Act
         await service.CreateResourceAsync("notes", """{"subject":"Hello"}""");
 
-        // Assert
+        // Assert - the WHOLE header, not just MediaType: Vitally rejects
+        // "application/json; charset=utf-8" with a 400 before reading the body (#202),
+        // and MediaType ignores the charset parameter, so it cannot catch that.
         handler.Protected().Verify(
             "SendAsync",
             Times.Once(),
             ItExpr.Is<HttpRequestMessage>(req =>
-                req.Content!.Headers.ContentType!.MediaType == "application/json"),
+                req.Content!.Headers.ContentType!.ToString() == "application/json"),
             ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task UpdateResourceAsync_ShouldSendExactJsonContentType()
+    {
+        // Arrange
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"id":"x"}""");
+        var service = CreateService(client);
+
+        // Act
+        await service.UpdateResourceAsync("organizations", "org-1", """{"traits":{"a":"b"}}""");
+
+        // Assert - no charset parameter (#202)
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(req =>
+                req.Method == HttpMethod.Put
+                && req.Content!.Headers.ContentType!.ToString() == "application/json"),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CreateResourceAsync_ShouldSendBodyAsUtf8()
+    {
+        // Dropping the charset parameter must not change the encoding: non-ASCII note text
+        // has to arrive as UTF-8 bytes.
+        var (client, handler) = TestHelpers.CreateMockHttpClientWithHandler("""{"id":"x"}""");
+        var service = CreateService(client);
+        const string json = """{"note":"Café – £600"}""";
+        byte[]? sent = null;
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>(async (req, ct) =>
+            {
+                sent = await req.Content!.ReadAsByteArrayAsync(ct);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"id":"x"}""") };
+            });
+
+        await service.CreateResourceAsync("notes", json);
+
+        sent.Should().Equal(System.Text.Encoding.UTF8.GetBytes(json));
     }
 
     [Fact]
@@ -772,7 +816,7 @@ public class VitallyServiceTests
             ItExpr.Is<HttpRequestMessage>(req =>
                 req.Method == HttpMethod.Post
                 && req.RequestUri!.AbsolutePath == "/resources/meetings/meet-1/participants"
-                && req.Content!.Headers.ContentType!.MediaType == "application/json"),
+                && req.Content!.Headers.ContentType!.ToString() == "application/json"),
             ItExpr.IsAny<CancellationToken>());
 
         result.Should().Be(responseJson);
