@@ -21,6 +21,15 @@ All notable changes to this project are documented here. Format based on
 
 ### Changed
 
+- **Documented Claude Code's move to ID-based connector tool names.** Claude
+  Code now names claude.ai connector tools `mcp__<connector-id>__*` rather than
+  `mcp__claude_ai_<Name>__*`, so both `mcp__claude_ai_Vitally_MCP__*` and
+  `mcp__claude_ai_FISCAL_Vitally_MCP__*` match nothing and stale allow entries
+  show up as returning permission prompts. `ACCESS.md` explains the change, how
+  to record the new names, and how to tell the two connectors apart by tool
+  name, and says to delete old wildcards rather than translate them;
+  `CLAUDE.md` updated to match. Docs only.
+
 - **Corrected the official connector's name to "Vitally MCP"** (not "Vitally",
   as documented in the rename entry below). Vitally's directory connector uses
   the display name this server's connector had before 2026-10-07, and the
