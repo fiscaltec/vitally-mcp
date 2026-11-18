@@ -49,19 +49,24 @@ Nothing on this page — the sign-in gate, the tiers, read-only mode, revocation
 official connector. Users may use whichever suits their work, but should not enable both in the same
 conversation: the tool sets overlap and the model may call the wrong one.
 
-**Claude Code tool names.** Claude Code derives tool names from the connector or server name, so
-the rename moved claude.ai-connector users from `mcp__claude_ai_Vitally_MCP__*` to
-`mcp__claude_ai_FISCAL_Vitally_MCP__*`. Permission allowlists, hook matchers, skills and `CLAUDE.md`
-files that name the old prefix need updating — stale allowlist entries show up as permission prompts
-returning for Vitally tools. Locally added servers keep their own prefix (`mcp__vitally__*` or
-`mcp__fiscal-vitally__*`) and were unaffected.
+**Claude Code tool names.** Claude Code now names claude.ai connector tools by the connector's ID
+rather than its display name: `mcp__<connector-id>__<tool>`, where the ID is a GUID. Since around
+20 October 2026 this has replaced the name-based prefixes (`mcp__claude_ai_Vitally_MCP__*`, and
+`mcp__claude_ai_FISCAL_Vitally_MCP__*` after the rename), so permission allowlists, hook matchers,
+skills and `CLAUDE.md` files that name either old prefix no longer match anything — stale entries
+show up as permission prompts returning for every connector tool. The easiest way to record the exact
+new name is to answer a prompt with "Yes, and don't ask again". Locally added servers keep their own
+prefix (`mcp__vitally__*` or `mcp__fiscal-vitally__*`) and are unaffected.
 
-⚠️ **The old prefix now belongs to the official connector.** Its tools surface as
-`mcp__claude_ai_Vitally_MCP__*` with lower-case names (`search_accounts`, `create_note`,
-`create_task`, `create_custom_object`, …). A stale wildcard allow entry
-`mcp__claude_ai_Vitally_MCP__*` written for this server therefore **auto-approves the official
-connector's write tools** — the failure is silent, not a returning prompt. Such entries must be
-deleted, not left in place; re-add only the official-connector tools a user actually wants.
+The two connectors' tools can still be told apart by name: this server's are capitalised
+(`List_organizations`, `Get_account`, …), the official connector's are lower-case
+(`search_accounts`, `create_note`, `create_task`, …).
+
+⚠️ **Check which connector an ID belongs to before allowing it.** A wildcard on the official
+connector's ID auto-approves its write tools, and the failure is silent, not a returning prompt.
+Delete any leftover `mcp__claude_ai_Vitally_MCP__*` wildcard rather than translating it: between the
+2026-10-07 rename and the move to ID-based names it pointed at the official connector, so copying it
+across risks repeating that mistake. Re-add only the tools a user actually wants.
 
 Note also that the Entra enterprise application gating sign-in to *this* server (below) is named
 **Vitally MCP** — unrelated to the official Claude connector despite the shared name.
