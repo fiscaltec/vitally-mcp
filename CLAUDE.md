@@ -101,8 +101,8 @@ FISCAL employees point their MCP client at `https://vitally.fiscaltec.com/mcp`. 
 
 | Client | How to connect |
 |---|---|
-| Claude Desktop / claude.ai | Already published to the FISCAL workspace as the organisation connector **FISCAL Vitally MCP** (renamed from *Vitally MCP* on 2026-10-07, when Vitally's official connector was enabled alongside it — that one is listed as **Vitally MCP** and now owns the old `mcp__claude_ai_Vitally_MCP__*` tool prefix, so stale wildcard allow entries auto-approve its write tools; see ACCESS.md) — Connectors → FISCAL Vitally MCP → Connect |
-| Claude Code | Inherits the claude.ai connector (tools `mcp__claude_ai_FISCAL_Vitally_MCP__*`), or standalone: `claude mcp add --transport http fiscal-vitally https://vitally.fiscaltec.com/mcp` (older entries named `vitally` still work) |
+| Claude Desktop / claude.ai | Already published to the FISCAL workspace as the organisation connector **FISCAL Vitally MCP** (renamed from *Vitally MCP* on 2026-10-07, when Vitally's official connector was enabled alongside it — that one is listed as **Vitally MCP**; see ACCESS.md) — Connectors → FISCAL Vitally MCP → Connect |
+| Claude Code | Inherits the claude.ai connector (tools are named by connector ID, `mcp__<connector-id>__*`; see ACCESS.md), or standalone: `claude mcp add --transport http fiscal-vitally https://vitally.fiscaltec.com/mcp` (older entries named `vitally` still work) |
 | VS Code / Cursor / other | Add an MCP server entry pointing at the URL; client handles OAuth |
 
 To update: nothing for end users. The server is the source of truth; new deploys ship automatically.
